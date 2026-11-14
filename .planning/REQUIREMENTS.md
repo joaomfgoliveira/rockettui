@@ -87,11 +87,34 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| NAV-01 | Phase 1 | Pending |
+| NAV-02 | Phase 1 | Pending |
+| NAV-03 | Phase 1 | Pending |
+| NAV-04 | Phase 1 | Pending |
+| CONF-01 | Phase 2 | Pending |
+| CONF-02 | Phase 2 | Pending |
+| CONF-03 | Phase 2 | Pending |
+| CONF-04 | Phase 2 | Pending |
+| CONF-05 | Phase 2 | Pending |
+| CONF-06 | Phase 2 | Pending |
+| CONF-07 | Phase 2 | Pending |
+| AUTH-01 | Phase 3 | Pending |
+| AUTH-02 | Phase 3 | Pending |
+| AUTH-03 | Phase 3 | Pending |
+| ROOM-01 | Phase 3 | Pending |
+| ROOM-02 | Phase 3 | Pending |
+| ROOM-03 | Phase 3 | Pending |
+| MSG-01 | Phase 3 | Pending |
+| DLVR-01 | Phase 3 | Pending |
+| MSG-02 | Phase 4 | Pending |
+| MSG-03 | Phase 5 | Pending |
+| MSG-04 | Phase 5 | Pending |
+| DLVR-02 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22 ⚠️
+- Mapped to phases: 22
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-11-14*
