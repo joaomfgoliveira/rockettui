@@ -51,3 +51,18 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
 pub fn default_keymap() -> Keymap {
     Keymap::from_bindings(&default_bindings()).expect("built-in keymap parses")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_keymap_parses() {
+        let rows = default_bindings();
+        let keymap = Keymap::from_bindings(&rows).expect("default bindings parse");
+        for (mode, notation, action) in &rows {
+            let chords = parse_keys(notation).unwrap();
+            assert!(keymap.lookup(*mode, &chords) == Some(action), "{notation}");
+        }
+    }
+}

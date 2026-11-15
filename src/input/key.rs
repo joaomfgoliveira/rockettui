@@ -120,3 +120,66 @@ fn parse_angle(token: &str) -> Result<Chord, ParseError> {
     };
     Ok(Chord { code, mods })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chord(code: KeyCode, mods: KeyModifiers) -> Chord {
+        Chord { code, mods }
+    }
+
+    fn ev(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn normalize_cases() {
+        assert!(
+            normalize(ev(KeyCode::Char('G'), KeyModifiers::SHIFT))
+                == chord(KeyCode::Char('G'), KeyModifiers::NONE)
+        );
+        assert!(
+            normalize(ev(KeyCode::Char('D'), KeyModifiers::CONTROL))
+                == chord(KeyCode::Char('d'), KeyModifiers::CONTROL)
+        );
+        assert!(
+            normalize(ev(KeyCode::BackTab, KeyModifiers::NONE))
+                == chord(KeyCode::Tab, KeyModifiers::SHIFT)
+        );
+    }
+
+    #[test]
+    fn parse_keys_notation() {
+        assert_eq!(parse_keys("gg").unwrap().len(), 2);
+        assert!(
+            parse_keys("<C-w>h").unwrap()
+                == vec![
+                    chord(KeyCode::Char('w'), KeyModifiers::CONTROL),
+                    chord(KeyCode::Char('h'), KeyModifiers::NONE),
+                ]
+        );
+        assert!(parse_keys("<lt>").unwrap() == vec![chord(KeyCode::Char('<'), KeyModifiers::NONE)]);
+        assert!(parse_keys("<S-Tab>").unwrap() == vec![chord(KeyCode::Tab, KeyModifiers::SHIFT)]);
+        assert!(parse_keys("<A-CR>").unwrap() == vec![chord(KeyCode::Enter, KeyModifiers::ALT)]);
+        assert!(parse_keys("<M-x>").unwrap() == vec![chord(KeyCode::Char('x'), KeyModifiers::ALT)]);
+        for one in ["<Space>", "<Up>", "<PageDown>"] {
+            assert_eq!(parse_keys(one).unwrap().len(), 1, "{one}");
+        }
+        assert!(parse_keys("<esc>").unwrap() == parse_keys("<Esc>").unwrap());
+    }
+
+    #[test]
+    fn parse_keys_errors() {
+        assert_eq!(parse_keys("<C-d").err(), Some(ParseError::UnclosedAngle(0)));
+        assert!(matches!(
+            parse_keys("<Bogus>"),
+            Err(ParseError::UnknownKey(_))
+        ));
+        assert!(matches!(
+            parse_keys("<Q-x>"),
+            Err(ParseError::UnknownModifier(_))
+        ));
+        assert_eq!(parse_keys("").err(), Some(ParseError::Empty));
+    }
+}
