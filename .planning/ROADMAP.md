@@ -30,11 +30,11 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
   3. Current mode is visible and user can switch between Normal, Insert and Command
   4. User quits with `:q`
 **UI hint**: yes
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 01-01-PLAN.md — Walking skeleton, headless core: cargo crate (all audited crates), Action/App/reducer, Vim-notation keymap data, fake data seam with the D-13 dataset, j/k sidebar, `:q` command (wave 1)
+- [x] 01-01-PLAN.md — Walking skeleton, headless core: cargo crate (all audited crates), Action/App/reducer, Vim-notation keymap data, fake data seam with the D-13 dataset, j/k sidebar, `:q` command (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 01-02-PLAN.md — Walking skeleton, binary: view and layout, terminal lifecycle, input task, run loop (seed applied before the first draw), pty smoke, sanitizer, tiny sizes and panic restore (wave 2)
@@ -113,7 +113,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Modal TUI Shell | 0/6 | Not started | - |
+| 1. Modal TUI Shell | 1/6 | In Progress | - |
 | 2. Configuration System | 0/TBD | Not started | - |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |
