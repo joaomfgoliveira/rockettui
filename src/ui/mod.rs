@@ -6,6 +6,7 @@ pub mod messages;
 pub mod sanitize;
 pub mod sidebar;
 pub mod status;
+pub mod wrap;
 
 use crate::app::App;
 use ratatui::Frame;
