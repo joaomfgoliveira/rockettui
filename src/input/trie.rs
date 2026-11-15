@@ -47,12 +47,35 @@ impl<A> Trie<A> {
 
     /// Bind `seq` to `value`. An empty sequence is ignored; re-inserting a sequence replaces its
     /// value, which is what Phase 2 keymap overrides rely on.
-    pub fn insert(&mut self, _seq: &[Chord], _value: A) {}
+    pub fn insert(&mut self, seq: &[Chord], value: A) {
+        if seq.is_empty() {
+            return;
+        }
+        let mut node = &mut self.root;
+        for chord in seq {
+            node = node.children.entry(*chord).or_insert_with(Node::new);
+        }
+        node.value = Some(value);
+    }
 
     /// Resolve `seq`; an empty sequence resolves to [`Lookup::None`].
-    pub fn lookup(&self, _seq: &[Chord]) -> Lookup<'_, A> {
-        let _ = &self.root;
-        Lookup::None
+    pub fn lookup(&self, seq: &[Chord]) -> Lookup<'_, A> {
+        if seq.is_empty() {
+            return Lookup::None;
+        }
+        let mut node = &self.root;
+        for chord in seq {
+            match node.children.get(chord) {
+                Some(next) => node = next,
+                None => return Lookup::None,
+            }
+        }
+        match (&node.value, node.children.is_empty()) {
+            (Some(value), true) => Lookup::Exact(value),
+            (Some(value), false) => Lookup::ExactAndPrefix(value),
+            (None, false) => Lookup::Prefix,
+            (None, true) => Lookup::None,
+        }
     }
 }
 

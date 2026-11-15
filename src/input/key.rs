@@ -157,8 +157,46 @@ fn parse_angle(token: &str) -> Result<Chord, ParseError> {
 }
 
 /// Print chords in Vim notation: the canonical inverse of [`parse_keys`].
-pub fn format_keys(_chords: &[Chord]) -> String {
-    String::new()
+pub fn format_keys(chords: &[Chord]) -> String {
+    chords.iter().map(format_chord).collect()
+}
+
+fn format_chord(chord: &Chord) -> String {
+    let named = match chord.code {
+        KeyCode::Char(' ') => Some("Space"),
+        KeyCode::Char('<') => Some("lt"),
+        KeyCode::Enter => Some("CR"),
+        KeyCode::Esc => Some("Esc"),
+        KeyCode::Tab => Some("Tab"),
+        KeyCode::Backspace => Some("BS"),
+        KeyCode::Delete => Some("Del"),
+        KeyCode::Up => Some("Up"),
+        KeyCode::Down => Some("Down"),
+        KeyCode::Left => Some("Left"),
+        KeyCode::Right => Some("Right"),
+        KeyCode::Home => Some("Home"),
+        KeyCode::End => Some("End"),
+        KeyCode::PageUp => Some("PageUp"),
+        KeyCode::PageDown => Some("PageDown"),
+        _ => None,
+    };
+    let mut prefix = String::new();
+    if chord.mods.contains(KeyModifiers::CONTROL) {
+        prefix.push_str("C-");
+    }
+    if chord.mods.contains(KeyModifiers::ALT) {
+        prefix.push_str("A-");
+    }
+    if chord.mods.contains(KeyModifiers::SHIFT) {
+        prefix.push_str("S-");
+    }
+    match (named, chord.code) {
+        (Some(name), _) => format!("<{prefix}{name}>"),
+        (None, KeyCode::Char(c)) if prefix.is_empty() => c.to_string(),
+        (None, KeyCode::Char(c)) => format!("<{prefix}{c}>"),
+        // Keys the notation has no name for (function keys, media keys) never come from a keymap row.
+        (None, other) => format!("<{prefix}{other:?}>"),
+    }
 }
 
 #[cfg(test)]

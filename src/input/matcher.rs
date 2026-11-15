@@ -5,8 +5,9 @@
 
 use crate::action::Action;
 use crate::app::Mode;
-use crate::input::key::Chord;
-use crate::input::trie::Trie;
+use crate::input::key::{Chord, format_keys};
+use crate::input::trie::{Lookup, Trie};
+use crossterm::event::{KeyCode, KeyModifiers};
 use std::fmt;
 
 /// Largest count the matcher will ever report (`99999999999j` is `9999j`).
@@ -42,6 +43,12 @@ impl fmt::Debug for Outcome {
     }
 }
 
+/// Esc with no modifiers or Ctrl-c: the chords that cancel pending state in every mode.
+fn is_reset_chord(chord: Chord) -> bool {
+    (chord.code == KeyCode::Esc && chord.mods.is_empty())
+        || (chord.code == KeyCode::Char('c') && chord.mods == KeyModifiers::CONTROL)
+}
+
 /// Pending chords and count between keys.
 #[derive(Default)]
 pub struct Matcher {
@@ -64,13 +71,83 @@ impl fmt::Debug for Matcher {
 
 impl Matcher {
     /// Feed one normalized chord.
-    pub fn feed(&mut self, _trie: &Trie<Action>, _mode: Mode, _chord: Chord) -> Outcome {
-        Outcome::NoMatch
+    pub fn feed(&mut self, trie: &Trie<Action>, mode: Mode, chord: Chord) -> Outcome {
+        // D-17: Esc and Ctrl-c reset first. They are the one place the matcher names keys itself;
+        // what they fire afterwards still comes from the keymap rows.
+        if is_reset_chord(chord) {
+            self.reset();
+            return match trie.lookup(&[chord]) {
+                Lookup::Exact(action) | Lookup::ExactAndPrefix(action) => Outcome::Fire {
+                    action: action.clone(),
+                    count: None,
+                },
+                _ => Outcome::Cancelled,
+            };
+        }
+        if mode == Mode::Normal
+            && self.pending.is_empty()
+            && chord.mods.is_empty()
+            && let KeyCode::Char(c) = chord.code
+            && let Some(digit) = c.to_digit(10)
+            && (digit != 0 || self.count.is_some())
+        {
+            let next = self
+                .count
+                .unwrap_or(0)
+                .saturating_mul(10)
+                .saturating_add(digit)
+                .min(MAX_COUNT);
+            self.count = Some(next);
+            return Outcome::Pending;
+        }
+        self.pending.push(chord);
+        match trie.lookup(&self.pending) {
+            Lookup::Exact(action) => {
+                let action = action.clone();
+                let count = self.count;
+                self.reset();
+                Outcome::Fire { action, count }
+            }
+            Lookup::Prefix | Lookup::ExactAndPrefix(_) => Outcome::Pending,
+            Lookup::None => {
+                let single = self.pending.len() == 1;
+                self.reset();
+                match chord.code {
+                    // A key that breaks a sequence is dropped, as in Vim (A12).
+                    KeyCode::Char(c)
+                        if single
+                            && mode != Mode::Normal
+                            && !chord
+                                .mods
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        Outcome::Text(c)
+                    }
+                    _ => Outcome::NoMatch,
+                }
+            }
+        }
     }
 
     /// The key timeout elapsed: fire an `ExactAndPrefix` binding or drop what is pending.
-    pub fn timeout(&mut self, _trie: &Trie<Action>) -> Outcome {
-        Outcome::NoMatch
+    pub fn timeout(&mut self, trie: &Trie<Action>) -> Outcome {
+        let outcome = if self.pending.is_empty() {
+            if self.count.is_some() {
+                Outcome::Cancelled
+            } else {
+                Outcome::NoMatch
+            }
+        } else {
+            match trie.lookup(&self.pending) {
+                Lookup::ExactAndPrefix(action) => Outcome::Fire {
+                    action: action.clone(),
+                    count: self.count,
+                },
+                _ => Outcome::Cancelled,
+            }
+        };
+        self.reset();
+        outcome
     }
 
     /// True while chords or a count are waiting for more keys.
@@ -80,7 +157,9 @@ impl Matcher {
 
     /// The pending count digits followed by the pending chords in Vim notation.
     pub fn display(&self) -> String {
-        String::new()
+        let mut out = self.count.map(|n| n.to_string()).unwrap_or_default();
+        out.push_str(&format_keys(&self.pending));
+        out
     }
 
     /// Drop all pending state.
@@ -99,7 +178,10 @@ mod tests {
     fn trie(rows: &[(&str, Action)]) -> Trie<Action> {
         let mut t = Trie::new();
         for (notation, action) in rows {
-            t.insert(&parse_keys(notation).expect("notation parses"), action.clone());
+            t.insert(
+                &parse_keys(notation).expect("notation parses"),
+                action.clone(),
+            );
         }
         t
     }
@@ -144,7 +226,10 @@ mod tests {
             fire(Action::MoveDown, Some(10))
         );
         // A leading 0 is an ordinary key.
-        assert_eq!(feed(&mut m, &t, Mode::Normal, "0"), fire(Action::EnterCommand, None));
+        assert_eq!(
+            feed(&mut m, &t, Mode::Normal, "0"),
+            fire(Action::EnterCommand, None)
+        );
         let unbound = trie(&[("j", Action::MoveDown)]);
         assert_eq!(feed(&mut m, &unbound, Mode::Normal, "0"), Outcome::NoMatch);
         assert!(!m.is_pending());
@@ -234,7 +319,10 @@ mod tests {
         let bare = trie(&[("gg", Action::MoveUp)]);
         let mut m = Matcher::default();
         feed(&mut m, &bare, Mode::Normal, "g");
-        assert_eq!(feed(&mut m, &bare, Mode::Normal, "<Esc>"), Outcome::Cancelled);
+        assert_eq!(
+            feed(&mut m, &bare, Mode::Normal, "<Esc>"),
+            Outcome::Cancelled
+        );
         assert!(!m.is_pending());
     }
 
