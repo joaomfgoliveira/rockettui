@@ -1,0 +1,24 @@
+---
+source: src/ui/sidebar.rs
+expression: terminal.backend()
+---
+"┏ Rooms ━━━━━━━━━━━━━━━━━━━┓"
+"┃  Unread                  ┃"
+"┃> * #general              ┃"
+"┃  * &dev-team             ┃"
+"┃  * @alice                ┃"
+"┃  Folders                 ┃"
+"┃  ▾ Work (1)              ┃"
+"┃      ~design-review      ┃"
+"┃      +platform           ┃"
+"┃  ▾ People (1)            ┃"
+"┃  Recent                  ┃"
+"┃    #random               ┃"
+"┃    &secrets [e2e]        ┃"
+"┃    #quiet                ┃"
+"┃                          ┃"
+"┃                          ┃"
+"┃                          ┃"
+"┃                          ┃"
+"┃                          ┃"
+"┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛"

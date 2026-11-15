@@ -1,29 +1,89 @@
-//! Sidebar pane: the room list (plan 01-04 replaces the plain list with sections and folders).
+//! Sidebar pane: section headers, foldable folders and rooms with kind glyphs and unread and
+//! encrypted markers (D-11, D-12). Every server-controlled name goes through `sanitize_line`.
 
+use crate::app::sidebar::{self, SidebarRow};
 use crate::app::{App, Focus};
 use crate::data::RoomKind;
 use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, ListState};
 
-/// The glyph drawn before a room name for its kind.
-pub fn kind_glyph(_kind: RoomKind) -> &'static str {
-    ""
+/// The glyph drawn before a room name for its kind. The app draws it; it never comes from the
+/// name, so a room cannot pose as another kind (T-01-14).
+pub fn kind_glyph(kind: RoomKind) -> &'static str {
+    match kind {
+        RoomKind::Channel => "#",
+        RoomKind::PrivateGroup => "&",
+        RoomKind::Discussion => "~",
+        RoomKind::Team => "+",
+        RoomKind::DirectMessage => "@",
+    }
+}
+
+/// The list item for one sidebar row. A row is one line of one style, so a room name is a
+/// contiguous run of identically styled cells.
+fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
+    match row {
+        SidebarRow::Header(section) => ListItem::new(Line::styled(
+            section.label(),
+            Style::new().add_modifier(Modifier::BOLD | Modifier::DIM),
+        )),
+        SidebarRow::Folder { id, open, unread } => {
+            let name = app
+                .folders
+                .iter()
+                .find(|folder| folder.id == *id)
+                .map(|folder| sanitize_line(&folder.name))
+                .unwrap_or_default();
+            let marker = if *open { "\u{25be} " } else { "\u{25b8} " };
+            let count = if *unread > 0 {
+                format!(" ({unread})")
+            } else {
+                String::new()
+            };
+            ListItem::new(format!("{marker}{name}{count}"))
+        }
+        SidebarRow::Room { id, indent } => {
+            let Some(room) = app.rooms.iter().find(|room| room.id == *id) else {
+                return ListItem::new("");
+            };
+            let indent = "  ".repeat(usize::from(*indent));
+            let unread = if room.unread { "* " } else { "  " };
+            let glyph = kind_glyph(room.kind);
+            let name = sanitize_line(&room.name);
+            let tag = if room.encrypted { " [e2e]" } else { "" };
+            let style = if room.unread {
+                Style::new().add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Line::styled(
+                format!("{indent}{unread}{glyph}{name}{tag}"),
+                style,
+            ))
+        }
+    }
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = app
-        .rooms
-        .iter()
-        .map(|r| ListItem::new(sanitize_line(&r.name)))
-        .collect();
+    let focused = app.focus == Focus::Sidebar;
+    let rows = sidebar::rows(app);
+    let items: Vec<ListItem> = rows.iter().map(|row| row_item(app, row)).collect();
+    let highlight = if focused {
+        Style::new().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
     let list = List::new(items)
-        .block(pane_block(" Rooms ", app.focus == Focus::Sidebar))
-        .highlight_symbol("> ");
+        .block(pane_block(" Rooms ", focused))
+        .highlight_symbol("> ")
+        .highlight_style(highlight);
     let mut state = ListState::default();
-    if !app.rooms.is_empty() {
+    if !rows.is_empty() {
         state.select(Some(app.sidebar.cursor));
     }
     frame.render_stateful_widget(list, area, &mut state);
