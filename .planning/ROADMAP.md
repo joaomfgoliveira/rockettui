@@ -30,7 +30,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
   3. Current mode is visible and user can switch between Normal, Insert and Command
   4. User quits with `:q`
 **UI hint**: yes
-**Plans:** 3/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 **Wave 1**
@@ -43,8 +43,8 @@ Plans:
 - [x] 01-03-PLAN.md — Vim key matcher: trie, counts, 1 s timeout, pending keys and room in status, Ctrl-w focus, per-pane motion router (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 01-04-PLAN.md — Sidebar sections (Unread / Folders / Recent), folds (h/l on folder rows only, D-19), Enter opens a room, glyphs and markers (wave 4, parallel with 01-05)
-- [ ] 01-05-PLAN.md — Messages pane: wrap with hanging indent, Compact/TwoLine layouts, message cursor and scrolling, h/l no-ops (D-19) (wave 4, parallel with 01-04)
+- [x] 01-04-PLAN.md — Sidebar sections (Unread / Folders / Recent), folds (h/l on folder rows only, D-19), Enter opens a room, glyphs and markers (wave 4, parallel with 01-05)
+- [x] 01-05-PLAN.md — Messages pane: wrap with hanging indent, Compact/TwoLine layouts, message cursor and scrolling, h/l no-ops (D-19) (wave 4, parallel with 01-04)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 01-06-PLAN.md — Insert mode and input bar: multiline input, Normal-mode motions in the input bar (D-18), Enter appends a local message, safe paste, full-screen snapshots (wave 5)
@@ -113,7 +113,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Modal TUI Shell | 3/6 | In Progress | - |
+| 1. Modal TUI Shell | 5/6 | In Progress | - |
 | 2. Configuration System | 0/TBD | Not started | - |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |
