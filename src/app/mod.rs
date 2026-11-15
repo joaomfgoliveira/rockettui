@@ -105,7 +105,10 @@ impl App {
     }
 
     /// Open a room: it becomes the current room and the messages pane takes focus (D-02).
-    pub fn open_room(&mut self, _id: RoomId) {}
+    pub fn open_room(&mut self, id: RoomId) {
+        self.current_room = Some(id);
+        self.focus = Focus::Messages;
+    }
 
     /// True while a count or the start of a key sequence is waiting for more keys.
     pub fn keys_pending(&self) -> bool {

@@ -51,16 +51,20 @@ pub fn update(app: &mut App, action: Action) {
         Action::Clock(secs) => {
             app.clock_secs = secs;
         }
-        Action::MoveDown | Action::MoveUp => apply_motion(app, &action, None),
-        Action::MoveLeft
+        Action::MoveDown
+        | Action::MoveUp
+        | Action::MoveLeft
         | Action::MoveRight
         | Action::GotoTop
         | Action::GotoBottom
         | Action::HalfPageDown
         | Action::HalfPageUp
         | Action::Select
-        | Action::ToggleFold => {}
-        Action::FocusLeft | Action::FocusDown | Action::FocusRight => {}
+        | Action::ToggleFold => apply_motion(app, &action, None),
+        // Absolute focus targets from any pane (A11).
+        Action::FocusLeft => app.focus = Focus::Sidebar,
+        Action::FocusRight => app.focus = Focus::Messages,
+        Action::FocusDown => app.focus = Focus::Input,
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();

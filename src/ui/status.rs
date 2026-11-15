@@ -1,4 +1,4 @@
-//! Status bar (mode badge plus status message) and the command-line row with its cursor.
+//! Status bar (mode badge, current room, pending keys and status message) and the command-line row with its cursor.
 
 use crate::app::{App, Mode, StatusMsg};
 use crate::ui::sanitize::sanitize_line;
@@ -14,7 +14,15 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
         format!(" {} ", app.mode.label()),
         Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
     );
-    let mut spans = vec![badge];
+    let room = match app.current_room_name() {
+        Some(name) => sanitize_line(name).into_owned(),
+        None => "-".to_string(),
+    };
+    let mut spans = vec![badge, Span::raw(format!(" {room}"))];
+    let pending = app.pending_display();
+    if !pending.is_empty() {
+        spans.push(Span::raw(format!(" {}", sanitize_line(&pending))));
+    }
     match &app.status_msg {
         Some(StatusMsg::Info(text)) => {
             spans.push(Span::raw(format!(" {}", sanitize_line(text))));
