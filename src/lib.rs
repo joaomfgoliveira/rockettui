@@ -16,6 +16,17 @@ use crate::app::update::update;
 /// Capacity of the one bounded Action channel.
 pub const CHANNEL_CAPACITY: usize = 256;
 
+/// How long a count or key sequence may wait for its next key (~1 s, D-06; configurable in Phase 2).
+pub const KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Sleep until `deadline`, or never when there is none.
+async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// Whole seconds since the Unix epoch, 0 if the clock is before it. The only wall-clock read on
 /// the app path: the reducer receives time as `Action::Clock`.
 fn unix_now() -> i64 {
@@ -44,8 +55,12 @@ pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> 
     while let Ok(action) = rx.try_recv() {
         batch.push(action);
     }
+    // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.
+    let mut key_deadline: Option<tokio::time::Instant> = None;
     loop {
+        let mut saw_key = false;
         for action in std::iter::once(Action::Clock(unix_now())).chain(batch.drain(..)) {
+            saw_key |= matches!(action, Action::Key(_) | Action::KeyTimeout);
             update(&mut app, action);
             if app.should_quit {
                 break;
@@ -54,6 +69,11 @@ pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> 
         if app.should_quit {
             break;
         }
+        if saw_key {
+            key_deadline = app
+                .keys_pending()
+                .then(|| tokio::time::Instant::now() + KEY_TIMEOUT);
+        }
         terminal.draw(|f| ui::view(f, &app))?;
         // Debug-only hook so the pty smoke harness and the manual UAT can prove that a panic
         // restores the terminal. Compiled out of release builds (A17).
@@ -61,9 +81,12 @@ pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> 
         if std::env::var_os("ROCKETTUI_DEBUG_PANIC").is_some() {
             panic!("ROCKETTUI_DEBUG_PANIC: deliberate panic to test terminal restore");
         }
-        match rx.recv().await {
-            Some(action) => batch.push(action),
-            None => break,
+        tokio::select! {
+            received = rx.recv() => match received {
+                Some(action) => batch.push(action),
+                None => break,
+            },
+            () = sleep_until_opt(key_deadline) => batch.push(Action::KeyTimeout),
         }
         while let Ok(action) = rx.try_recv() {
             batch.push(action);

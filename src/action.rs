@@ -13,6 +13,17 @@ use crossterm::event::KeyEvent;
 pub enum Action {
     MoveDown,
     MoveUp,
+    MoveLeft,
+    MoveRight,
+    GotoTop,
+    GotoBottom,
+    HalfPageDown,
+    HalfPageUp,
+    Select,
+    ToggleFold,
+    FocusLeft,
+    FocusDown,
+    FocusRight,
     EnterCommand,
     Cancel,
     InsertChar(char),
@@ -28,6 +39,29 @@ pub enum Action {
     RoomsLoaded(Vec<Room>),
     FoldersLoaded(Vec<Folder>),
     MessagesLoaded(RoomId, Vec<Message>),
+    /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
+    KeyTimeout,
+    /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
+    Counted(u32, Box<Action>),
+}
+
+impl Action {
+    /// True for the motions that the per-pane router handles and that accept a count as a jump.
+    pub fn is_motion(&self) -> bool {
+        matches!(
+            self,
+            Action::MoveDown
+                | Action::MoveUp
+                | Action::MoveLeft
+                | Action::MoveRight
+                | Action::GotoTop
+                | Action::GotoBottom
+                | Action::HalfPageDown
+                | Action::HalfPageUp
+                | Action::Select
+                | Action::ToggleFold
+        )
+    }
 }
 
 /// Redacting `Debug`: never prints typed characters, pasted text or message text. The match is
@@ -37,6 +71,17 @@ impl std::fmt::Debug for Action {
         match self {
             Action::MoveDown => write!(f, "MoveDown"),
             Action::MoveUp => write!(f, "MoveUp"),
+            Action::MoveLeft => write!(f, "MoveLeft"),
+            Action::MoveRight => write!(f, "MoveRight"),
+            Action::GotoTop => write!(f, "GotoTop"),
+            Action::GotoBottom => write!(f, "GotoBottom"),
+            Action::HalfPageDown => write!(f, "HalfPageDown"),
+            Action::HalfPageUp => write!(f, "HalfPageUp"),
+            Action::Select => write!(f, "Select"),
+            Action::ToggleFold => write!(f, "ToggleFold"),
+            Action::FocusLeft => write!(f, "FocusLeft"),
+            Action::FocusDown => write!(f, "FocusDown"),
+            Action::FocusRight => write!(f, "FocusRight"),
             Action::EnterCommand => write!(f, "EnterCommand"),
             Action::Cancel => write!(f, "Cancel"),
             Action::InsertChar(_) => write!(f, "InsertChar(..)"),
@@ -59,6 +104,8 @@ impl std::fmt::Debug for Action {
                     messages.len()
                 )
             }
+            Action::KeyTimeout => write!(f, "KeyTimeout"),
+            Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
     }
 }
