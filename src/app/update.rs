@@ -52,6 +52,15 @@ pub fn update(app: &mut App, action: Action) {
             app.clock_secs = secs;
         }
         Action::MoveDown | Action::MoveUp => apply_motion(app, &action, None),
+        Action::MoveLeft
+        | Action::MoveRight
+        | Action::GotoTop
+        | Action::GotoBottom
+        | Action::HalfPageDown
+        | Action::HalfPageUp
+        | Action::Select
+        | Action::ToggleFold => {}
+        Action::FocusLeft | Action::FocusDown | Action::FocusRight => {}
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();
@@ -121,7 +130,7 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
 #[cfg(test)]
 mod tests {
     use crate::action::Action;
-    use crate::app::{App, MAX_CMDLINE, sidebar};
+    use crate::app::{App, Focus, MAX_CMDLINE, sidebar};
     use crate::app::{Mode, update::update};
     use crate::data::{RoomId, fake};
     use crate::test_util::{app_80x24, press};
@@ -288,6 +297,50 @@ mod tests {
         let mut app = app_80x24();
         update(&mut app, Action::Counted(3, Box::new(Action::EnterCommand)));
         assert_eq!(app.mode, Mode::Command);
+    }
+
+    #[test]
+    fn focus_ctrl_w_moves_focus() {
+        let mut app = app_80x24();
+        assert_eq!(app.focus, Focus::Sidebar);
+        press(&mut app, "<C-w>");
+        assert!(app.keys_pending());
+        assert_eq!(app.pending_display(), "<C-w>");
+        press(&mut app, "l");
+        assert_eq!(app.focus, Focus::Messages);
+        assert!(!app.keys_pending());
+        press(&mut app, "<C-w>j");
+        assert_eq!(app.focus, Focus::Input);
+        press(&mut app, "<C-w>h");
+        assert_eq!(app.focus, Focus::Sidebar);
+        // Absolute targets from any pane.
+        press(&mut app, "<C-w>l<C-w>l");
+        assert_eq!(app.focus, Focus::Messages);
+    }
+
+    #[test]
+    fn focus_ctrl_w_wrong_key_drops() {
+        let mut app = app_80x24();
+        press(&mut app, "<C-w>x");
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert!(!app.keys_pending());
+        press(&mut app, "<C-w>");
+        update(&mut app, Action::KeyTimeout);
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert!(!app.keys_pending());
+        // The dropped key is not replayed as a fresh key: no mode change, no quit.
+        press(&mut app, "<C-w>:");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn focus_open_room_focuses_messages() {
+        let mut app = app_80x24();
+        assert_eq!(app.current_room, None);
+        app.open_room(general());
+        assert_eq!(app.current_room, Some(general()));
+        assert_eq!(app.focus, Focus::Messages);
     }
 
     #[test]

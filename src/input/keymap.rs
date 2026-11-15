@@ -90,4 +90,27 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn keymap_g_is_prefix() {
+        let keymap = default_keymap();
+        let g = parse_keys("g").unwrap();
+        let gg = parse_keys("gg").unwrap();
+        assert!(matches!(keymap.lookup(Mode::Normal, &g), Lookup::Prefix));
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &gg),
+            Lookup::Exact(Action::GotoTop)
+        ));
+        // Neither a bare <C-w> nor <C-w>k is bound (D-01 lists h/j/l only).
+        let ctrl_w = parse_keys("<C-w>").unwrap();
+        let ctrl_w_k = parse_keys("<C-w>k").unwrap();
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &ctrl_w),
+            Lookup::Prefix
+        ));
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &ctrl_w_k),
+            Lookup::None
+        ));
+    }
 }

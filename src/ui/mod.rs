@@ -104,6 +104,45 @@ mod tests {
     }
 
     #[test]
+    fn focused_pane_has_thick_border() {
+        let mut app = app_80x24();
+        let top_left = |app: &crate::app::App| {
+            let out = render_to_string(app, 80, 24);
+            let row = out.lines().next().unwrap_or_default().to_string();
+            (
+                row.chars().next().unwrap_or(' '),
+                row.chars().nth(28).unwrap_or(' '),
+            )
+        };
+        // The sidebar starts focused: thick sidebar corner, plain messages corner.
+        assert_eq!(top_left(&app), ('\u{250f}', '\u{250c}'));
+        press(&mut app, "<C-w>l");
+        assert_eq!(top_left(&app), ('\u{250c}', '\u{250f}'));
+    }
+
+    #[test]
+    fn status_shows_mode_room_and_pending() {
+        let mut app = app_80x24();
+        let status_row = |app: &crate::app::App| {
+            render_to_string(app, 80, 24)
+                .lines()
+                .nth(22)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let row = status_row(&app);
+        assert!(row.contains("NORMAL"), "{row:?}");
+        assert!(row.contains(" - "), "{row:?}");
+        assert!(!row.contains("general"), "{row:?}");
+        app.open_room(crate::data::RoomId("general".to_string()));
+        press(&mut app, "5");
+        let row = status_row(&app);
+        assert!(row.contains("NORMAL"), "{row:?}");
+        assert!(row.contains("general"), "{row:?}");
+        assert!(row.contains('5'), "{row:?}");
+    }
+
+    #[test]
     fn tiny_sizes() {
         let sizes = [
             (0u16, 0u16),

@@ -13,6 +13,17 @@ use crossterm::event::KeyEvent;
 pub enum Action {
     MoveDown,
     MoveUp,
+    MoveLeft,
+    MoveRight,
+    GotoTop,
+    GotoBottom,
+    HalfPageDown,
+    HalfPageUp,
+    Select,
+    ToggleFold,
+    FocusLeft,
+    FocusDown,
+    FocusRight,
     EnterCommand,
     Cancel,
     InsertChar(char),
@@ -37,7 +48,19 @@ pub enum Action {
 impl Action {
     /// True for the motions that the per-pane router handles and that accept a count as a jump.
     pub fn is_motion(&self) -> bool {
-        matches!(self, Action::MoveDown | Action::MoveUp)
+        matches!(
+            self,
+            Action::MoveDown
+                | Action::MoveUp
+                | Action::MoveLeft
+                | Action::MoveRight
+                | Action::GotoTop
+                | Action::GotoBottom
+                | Action::HalfPageDown
+                | Action::HalfPageUp
+                | Action::Select
+                | Action::ToggleFold
+        )
     }
 }
 
@@ -48,6 +71,17 @@ impl std::fmt::Debug for Action {
         match self {
             Action::MoveDown => write!(f, "MoveDown"),
             Action::MoveUp => write!(f, "MoveUp"),
+            Action::MoveLeft => write!(f, "MoveLeft"),
+            Action::MoveRight => write!(f, "MoveRight"),
+            Action::GotoTop => write!(f, "GotoTop"),
+            Action::GotoBottom => write!(f, "GotoBottom"),
+            Action::HalfPageDown => write!(f, "HalfPageDown"),
+            Action::HalfPageUp => write!(f, "HalfPageUp"),
+            Action::Select => write!(f, "Select"),
+            Action::ToggleFold => write!(f, "ToggleFold"),
+            Action::FocusLeft => write!(f, "FocusLeft"),
+            Action::FocusDown => write!(f, "FocusDown"),
+            Action::FocusRight => write!(f, "FocusRight"),
             Action::EnterCommand => write!(f, "EnterCommand"),
             Action::Cancel => write!(f, "Cancel"),
             Action::InsertChar(_) => write!(f, "InsertChar(..)"),
