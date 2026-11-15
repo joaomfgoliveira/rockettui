@@ -3,9 +3,14 @@
 //! Key bindings never live here; keys are resolved through `app.keymap` (D-07).
 
 use crate::action::Action;
-use crate::app::{App, Focus, MAX_CMDLINE, Mode, command, sidebar};
+use crate::app::input_buf::InputBuffer;
+use crate::app::{
+    App, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, messages, sidebar,
+};
+use crate::data::Message;
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
+use crate::ui::sanitize::sanitize_line;
 use ratatui::layout::Size;
 
 pub fn update(app: &mut App, action: Action) {
@@ -77,18 +82,49 @@ pub fn update(app: &mut App, action: Action) {
             Mode::Normal => {
                 app.status_msg = None;
             }
-            Mode::Insert => {}
-        },
-        Action::InsertChar(c) => {
-            if app.mode == Mode::Command && app.cmdline.chars().count() < MAX_CMDLINE {
-                app.cmdline.push(c);
-            }
-        }
-        Action::DeleteBack => {
-            if app.mode == Mode::Command && app.cmdline.pop().is_none() {
+            // Esc and Ctrl-c leave Insert mode and never quit; the draft is kept (D-17).
+            Mode::Insert => {
                 app.mode = Mode::Normal;
+                app.focus = app.prev_focus;
+            }
+        },
+        Action::EnterInsert => {
+            if app.mode == Mode::Normal {
+                app.prev_focus = app.focus;
+                app.focus = Focus::Input;
+                app.mode = Mode::Insert;
             }
         }
+        Action::InsertChar(c) => match app.mode {
+            Mode::Command => {
+                if app.cmdline.chars().count() < MAX_CMDLINE {
+                    app.cmdline.push(c);
+                }
+            }
+            Mode::Insert => edit_input(app, |input| {
+                input.insert_char(c);
+            }),
+            Mode::Normal => {}
+        },
+        Action::DeleteBack => match app.mode {
+            Mode::Command => {
+                if app.cmdline.pop().is_none() {
+                    app.mode = Mode::Normal;
+                }
+            }
+            Mode::Insert => edit_input(app, InputBuffer::backspace),
+            Mode::Normal => {}
+        },
+        Action::InsertNewline => edit_input(app, InputBuffer::newline),
+        Action::DeleteWordBack => edit_input(app, InputBuffer::delete_word_back),
+        Action::DeleteToLineStart => edit_input(app, InputBuffer::delete_to_line_start),
+        Action::CursorLeft => edit_input(app, InputBuffer::left),
+        Action::CursorRight => edit_input(app, InputBuffer::right),
+        Action::CursorUp => edit_input(app, InputBuffer::up),
+        Action::CursorDown => edit_input(app, InputBuffer::down),
+        Action::CursorHome => edit_input(app, InputBuffer::home),
+        Action::CursorEnd => edit_input(app, InputBuffer::end),
+        Action::SubmitInput => submit_input(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -96,12 +132,56 @@ pub fn update(app: &mut App, action: Action) {
                 command::execute(app, &line);
             }
         }
-        // Paste handling arrives with Insert and Command paste (plan 01-06).
-        Action::Paste(_) => {}
+        // A paste is one insert and never a submit (T-01-22).
+        Action::Paste(text) => match app.mode {
+            Mode::Insert => edit_input(app, |input| {
+                input.insert_str(&text);
+            }),
+            Mode::Command => {
+                let room = MAX_CMDLINE.saturating_sub(app.cmdline.chars().count());
+                app.cmdline.extend(sanitize_line(&text).chars().take(room));
+            }
+            Mode::Normal => {}
+        },
         Action::Quit => {
             app.should_quit = true;
         }
     }
+}
+
+/// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
+fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
+    if app.mode != Mode::Insert {
+        return;
+    }
+    edit(&mut app.input);
+    let (width, height) = app.input_viewport();
+    app.input.settle(width, height);
+}
+
+/// Enter in Insert mode (D-15): append the draft as a local message from `me` to the open room,
+/// clear it and stay in Insert mode. Phase 4 replaces the local append with an API send.
+fn submit_input(app: &mut App) {
+    if app.mode != Mode::Insert || app.input.text().trim().is_empty() {
+        return;
+    }
+    let Some(room) = app.current_room.clone() else {
+        app.status_msg = Some(StatusMsg::Error(
+            "No room open: select a room with Enter".into(),
+        ));
+        return;
+    };
+    let body = app.input.take();
+    app.local_seq += 1;
+    let message = Message {
+        id: format!("local-{}", app.local_seq),
+        room_id: room.clone(),
+        author: LOCAL_AUTHOR.into(),
+        ts: app.clock_secs,
+        body,
+    };
+    app.messages.entry(room.clone()).or_default().push(message);
+    messages::follow_newest(app, &room);
 }
 
 /// Turn what the matcher produced into reducer work.
@@ -125,9 +205,29 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     match app.focus {
         Focus::Sidebar => sidebar::apply_motion(app, motion, count),
         Focus::Messages => crate::app::messages::apply_motion(app, motion, count),
-        // Routed to the input-buffer motions of D-18 in plan 01-06.
-        Focus::Input => {}
+        Focus::Input => input_motion(app, motion, count),
     }
+}
+
+/// D-18: with the input bar focused, the Normal-mode motions move inside the draft. They never
+/// change the text, the mode, the focus, the current room or the sidebar selection. Select and
+/// ToggleFold do nothing in this pane (A25).
+fn input_motion(app: &mut App, motion: &Action, count: Option<u32>) {
+    let n = count.map_or(1, |c| c as usize);
+    let jump = count.map(|c| (c as usize).saturating_sub(1));
+    let (width, height) = app.input_viewport();
+    match motion {
+        Action::MoveLeft => app.input.left_in_line(n),
+        Action::MoveRight => app.input.right_in_line(n),
+        Action::MoveDown => app.input.move_line(i64::from(count.unwrap_or(1))),
+        Action::MoveUp => app.input.move_line(-i64::from(count.unwrap_or(1))),
+        Action::GotoTop => app.input.goto_line(jump.unwrap_or(0)),
+        Action::GotoBottom => app.input.goto_line(jump.unwrap_or(usize::MAX)),
+        Action::HalfPageDown => app.input.half_page(width, height, n, true),
+        Action::HalfPageUp => app.input.half_page(width, height, n, false),
+        _ => return,
+    }
+    app.input.settle(width, height);
 }
 
 #[cfg(test)]
@@ -372,5 +472,279 @@ mod tests {
         assert_eq!(app.clock_secs, 43);
         assert_eq!(app.mode, Mode::Command);
         assert_eq!(app.cmdline, "ab");
+    }
+
+    /// Draft "alpha\nbeta\ngamma" with the input bar focused in Normal mode, cursor at the end.
+    fn input_app(draft: &str) -> App {
+        let mut app = app_80x24();
+        press(&mut app, "<C-w>j");
+        app.input.insert_str(draft);
+        app
+    }
+
+    fn pos(app: &App) -> (usize, usize) {
+        (app.input.row(), app.input.col())
+    }
+
+    #[test]
+    fn input_normal_h_l_within_line() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "h");
+        assert_eq!(pos(&app), (2, 4));
+        press(&mut app, "3h");
+        assert_eq!(pos(&app), (2, 1));
+        press(&mut app, "10h");
+        assert_eq!(pos(&app), (2, 0));
+        press(&mut app, "l");
+        assert_eq!(pos(&app), (2, 1));
+        press(&mut app, "99l");
+        assert_eq!(pos(&app), (2, 5));
+    }
+
+    #[test]
+    fn input_normal_j_k_lines() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "k");
+        assert_eq!(pos(&app), (1, 4));
+        press(&mut app, "5k");
+        assert_eq!(app.input.row(), 0);
+        press(&mut app, "j");
+        assert_eq!(app.input.row(), 1);
+        press(&mut app, "9j");
+        assert_eq!(app.input.row(), 2);
+        let text = app.input.text();
+        let line = text.lines().nth(2).unwrap_or_default();
+        assert!(line.is_char_boundary(app.input.col()));
+    }
+
+    #[test]
+    fn input_normal_gg_g() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "gg");
+        assert_eq!(pos(&app), (0, 0));
+        press(&mut app, "G");
+        assert_eq!(pos(&app), (2, 0));
+        press(&mut app, "2gg");
+        assert_eq!(pos(&app), (1, 0));
+        press(&mut app, "G");
+        press(&mut app, "2G");
+        assert_eq!(pos(&app), (1, 0));
+    }
+
+    #[test]
+    fn input_normal_half_page() {
+        let mut short = input_app("a\nb\nc");
+        let before = pos(&short);
+        press(&mut short, "<C-d>");
+        assert_eq!(pos(&short), before);
+        press(&mut short, "<C-u>");
+        assert_eq!(pos(&short), before);
+
+        let draft: Vec<String> = (0..12).map(|i| format!("l{i}")).collect();
+        let mut tall = input_app(&draft.join("\n"));
+        press(&mut tall, "gg");
+        press(&mut tall, "<C-d>");
+        assert_eq!(tall.input.row(), 2);
+        press(&mut tall, "<C-u>");
+        assert_eq!(tall.input.row(), 0);
+        press(&mut tall, "3<C-d>");
+        assert_eq!(tall.input.row(), 6);
+    }
+
+    #[test]
+    fn input_normal_motions_keep_state() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        let text = app.input.text();
+        let room = app.current_room.clone();
+        let selected = sidebar::selected_room(&app);
+        for keys in [
+            "h", "l", "j", "k", "gg", "G", "3h", "2gg", "<C-d>", "<C-u>", "5j", "9k",
+        ] {
+            press(&mut app, keys);
+            assert_eq!(app.input.text(), text, "{keys}");
+            assert_eq!(app.mode, Mode::Normal, "{keys}");
+            assert_eq!(app.focus, Focus::Input, "{keys}");
+            assert_eq!(app.current_room, room, "{keys}");
+            assert_eq!(sidebar::selected_room(&app), selected, "{keys}");
+            assert!(!app.keys_pending(), "{keys}");
+        }
+    }
+
+    fn open_general_app() -> App {
+        let mut app = app_80x24();
+        app.open_room(general());
+        app
+    }
+
+    #[test]
+    fn mode_i_a_o_enter_insert_and_esc_restores_focus() {
+        for key in ["i", "a", "o"] {
+            let mut app = app_80x24();
+            press(&mut app, key);
+            assert_eq!(app.mode, Mode::Insert, "{key}");
+            assert_eq!(app.focus, Focus::Input, "{key}");
+            press(&mut app, "<Esc>");
+            assert_eq!(app.mode, Mode::Normal, "{key}");
+            assert_eq!(app.focus, Focus::Sidebar, "{key}");
+        }
+        let mut app = app_80x24();
+        press(&mut app, "<C-w>li<Esc>");
+        assert_eq!(app.focus, Focus::Messages);
+        press(&mut app, "<C-w>ji<Esc>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.focus, Focus::Input);
+        // D-18 applies there: a motion moves inside the draft.
+        app.input.insert_str("ab\ncd");
+        press(&mut app, "gg");
+        assert_eq!(app.input.row(), 0);
+    }
+
+    #[test]
+    fn mode_ctrl_c_in_insert_returns_normal_without_quitting() {
+        let mut app = app_80x24();
+        press(&mut app, "iabc<C-c>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert!(!app.should_quit);
+        assert_eq!(app.input.text(), "abc");
+    }
+
+    #[test]
+    fn insert_editing_keys() {
+        let mut app = app_80x24();
+        press(&mut app, "ihello world<C-w>");
+        assert_eq!(app.input.text(), "hello ");
+        press(&mut app, "<C-u>");
+        assert_eq!(app.input.text(), "");
+        press(&mut app, "abc<Left>");
+        assert_eq!(app.input.col(), 2);
+        press(&mut app, "<Right>");
+        assert_eq!(app.input.col(), 3);
+        press(&mut app, "<Home>");
+        assert_eq!(app.input.col(), 0);
+        press(&mut app, "<End>");
+        assert_eq!(app.input.col(), 3);
+        press(&mut app, "<A-CR>de<Up>");
+        assert_eq!(app.input.row(), 0);
+        press(&mut app, "<Down>");
+        assert_eq!(app.input.row(), 1);
+        press(&mut app, "<BS><BS><BS>");
+        assert_eq!(app.input.text(), "abc");
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn insert_newline_keys() {
+        let mut app = app_80x24();
+        press(&mut app, "ia<A-CR>b<C-j>c");
+        assert_eq!(app.input.text(), "a\nb\nc");
+        assert_eq!(app.input.line_count(), 3);
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn insert_keys_never_pend() {
+        let mut app = app_80x24();
+        press(&mut app, "i");
+        for key in ["g", "h", "j", "k", "l"] {
+            press(&mut app, key);
+            assert!(!app.keys_pending(), "{key}");
+        }
+        assert_eq!(app.input.text(), "ghjkl");
+    }
+
+    #[test]
+    fn submit_appends_local_message() {
+        let mut app = open_general_app();
+        let before = app.messages[&general()].len();
+        update(&mut app, Action::Clock(fake::FAKE_EPOCH + 43_200));
+        press(&mut app, "ihi there<CR>");
+        let msgs = &app.messages[&general()];
+        assert_eq!(msgs.len(), before + 1);
+        let last = &msgs[before];
+        assert_eq!(last.body, "hi there");
+        assert_eq!(last.author, "me");
+        assert_eq!(last.ts, fake::FAKE_EPOCH + 43_200);
+        assert!(last.id.starts_with("local-"));
+        assert!(app.input.is_empty());
+        assert_eq!(app.mode, Mode::Insert);
+        let v = crate::app::messages::view(&app, &general());
+        assert_eq!(v.cursor, before);
+        update(&mut app, Action::Clock(fake::FAKE_EPOCH + 43_260));
+        press(&mut app, "again<CR>");
+        let msgs = &app.messages[&general()];
+        assert_eq!(msgs[before + 1].ts, fake::FAKE_EPOCH + 43_260);
+        assert_ne!(msgs[before].id, msgs[before + 1].id);
+    }
+
+    #[test]
+    fn submit_blank_is_noop() {
+        let mut app = open_general_app();
+        let before = app.messages[&general()].len();
+        press(&mut app, "i<CR>");
+        press(&mut app, "  <CR>");
+        assert_eq!(app.messages[&general()].len(), before);
+        assert!(app.status_msg.is_none());
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn submit_without_room_errors_and_keeps_draft() {
+        let mut app = app_80x24();
+        press(&mut app, "ihello<CR>");
+        assert_eq!(app.input.text(), "hello");
+        match &app.status_msg {
+            Some(crate::app::StatusMsg::Error(text)) => {
+                assert_eq!(text, "No room open: select a room with Enter");
+            }
+            _ => panic!("expected an error status"),
+        }
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn paste_is_one_insert_never_submits() {
+        let mut app = open_general_app();
+        let before = app.messages[&general()].len();
+        press(&mut app, "i");
+        update(&mut app, Action::Paste("l1\nl2\nl3".to_string()));
+        assert_eq!(app.input.line_count(), 3);
+        assert_eq!(app.messages[&general()].len(), before);
+        update(&mut app, Action::Paste("\u{1b}[2Jx\r\ny".to_string()));
+        assert!(!app.input.text().contains('\u{1b}'));
+        assert!(!app.input.text().contains('\r'));
+        assert_eq!(app.messages[&general()].len(), before);
+        let out = crate::test_util::render_to_string(&app, 80, 24);
+        assert!(!out.chars().any(|c| c.is_control() && c != '\n'));
+    }
+
+    #[test]
+    fn paste_in_command_joins_one_line() {
+        let mut app = app_80x24();
+        press(&mut app, ":");
+        update(&mut app, Action::Paste("q\nx".to_string()));
+        assert_eq!(app.cmdline, "q x");
+        update(&mut app, Action::Paste("z".repeat(500)));
+        assert_eq!(app.cmdline.chars().count(), MAX_CMDLINE);
+        assert!(app.input.is_empty());
+        let mut normal = app_80x24();
+        update(&mut normal, Action::Paste("zz".to_string()));
+        assert!(normal.input.is_empty());
+        assert!(normal.cmdline.is_empty());
+    }
+
+    #[test]
+    fn mode_edges_and_repeats() {
+        let mut app = app_80x24();
+        press(&mut app, "<Esc><Esc>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.should_quit);
+        press(&mut app, "ii");
+        assert_eq!(app.input.text(), "i");
+        press(&mut app, "<Esc>::");
+        assert_eq!(app.cmdline, ":");
+        press(&mut app, "<BS><BS>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.should_quit);
     }
 }
