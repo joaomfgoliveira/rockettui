@@ -6,14 +6,66 @@ use std::borrow::Cow;
 /// Width a TAB expands to.
 pub const TAB_WIDTH: usize = 4;
 
-/// Make `s` safe to draw. (RED stub: identity.)
-pub fn sanitize(s: &str) -> Cow<'_, str> {
-    Cow::Borrowed(s)
+/// Invisible or direction-changing characters that can spoof or hide text. U+200C and U+200D
+/// are deliberately absent (emoji ZWJ sequences, Indic and Persian scripts), as are the
+/// variation selectors and regional indicators.
+fn is_spoofing(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x061c                       // Arabic letter mark
+        | 0x200b                     // zero-width space
+        | 0x200e | 0x200f            // LRM, RLM
+        | 0x202a..=0x202e            // embeddings and overrides
+        | 0x2060                     // word joiner
+        | 0x2066..=0x2069            // isolates
+        | 0xfeff                     // BOM / zero-width no-break space
+        | 0xe0000..=0xe007f          // Unicode tag block
+    )
 }
 
-/// `sanitize`, then newlines become spaces, for single-row contexts. (RED stub: identity.)
+/// True when `sanitize` would change this character.
+fn needs_change(c: char) -> bool {
+    match c {
+        '\n' => false,
+        '\r' | '\t' | '\u{2028}' | '\u{2029}' => true,
+        _ => c.is_control() || is_spoofing(c),
+    }
+}
+
+/// Make `s` safe to draw: line breaks become LF, tabs expand to `TAB_WIDTH` spaces, and every
+/// other control character (C0 including ESC, BEL and NUL; DEL; C1) plus the spoofing
+/// characters above are dropped. Subdivision flags are built from tag characters, so they
+/// degrade to the bare black flag: accepted. Returns `Cow::Borrowed` when nothing changes.
+pub fn sanitize(s: &str) -> Cow<'_, str> {
+    if !s.chars().any(needs_change) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            '\u{2028}' | '\u{2029}' => out.push('\n'),
+            '\t' => out.extend(std::iter::repeat_n(' ', TAB_WIDTH)),
+            '\n' => out.push('\n'),
+            _ if c.is_control() || is_spoofing(c) => {}
+            _ => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// `sanitize`, then line breaks become spaces, for single-row contexts.
 pub fn sanitize_line(s: &str) -> Cow<'_, str> {
-    Cow::Borrowed(s)
+    match sanitize(s) {
+        Cow::Borrowed(b) if !b.contains('\n') => Cow::Borrowed(b),
+        other => Cow::Owned(other.replace('\n', " ")),
+    }
 }
 
 #[cfg(test)]

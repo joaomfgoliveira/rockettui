@@ -1,6 +1,7 @@
 //! Status bar (mode badge plus status message) and the command-line row with its cursor.
 
 use crate::app::{App, Mode, StatusMsg};
+use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -15,9 +16,11 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
     );
     let mut spans = vec![badge];
     match &app.status_msg {
-        Some(StatusMsg::Info(text)) => spans.push(Span::raw(format!(" {text}"))),
+        Some(StatusMsg::Info(text)) => {
+            spans.push(Span::raw(format!(" {}", sanitize_line(text))));
+        }
         Some(StatusMsg::Error(text)) => spans.push(Span::styled(
-            format!(" {text}"),
+            format!(" {}", sanitize_line(text)),
             Style::default().fg(Color::Red),
         )),
         None => {}
@@ -30,7 +33,7 @@ pub fn cmdline_cursor(app: &App, area: Rect) -> Option<Position> {
     if app.mode != Mode::Command || area.width == 0 || area.height == 0 {
         return None;
     }
-    let text_width = u16::try_from(app.cmdline.width()).unwrap_or(u16::MAX);
+    let text_width = u16::try_from(sanitize_line(&app.cmdline).width()).unwrap_or(u16::MAX);
     let x = area
         .x
         .saturating_add(1)
@@ -41,7 +44,7 @@ pub fn cmdline_cursor(app: &App, area: Rect) -> Option<Position> {
 
 pub fn render_cmdline(frame: &mut Frame, area: Rect, app: &App) {
     if app.mode == Mode::Command {
-        let line = format!(":{}", app.cmdline);
+        let line = format!(":{}", sanitize_line(&app.cmdline));
         frame.render_widget(Paragraph::new(line), area);
     }
     if let Some(pos) = cmdline_cursor(app, area) {

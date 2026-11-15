@@ -3,6 +3,7 @@
 
 use crate::app::{App, Focus};
 use crate::ui::pane_block;
+use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -16,7 +17,7 @@ pub fn hhmm(ts: i64) -> String {
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let title = match app.current_room_name() {
-        Some(name) => format!(" {name} "),
+        Some(name) => format!(" {} ", sanitize_line(name)),
         None => " Messages ".to_string(),
     };
     let block = pane_block(&title, app.focus == Focus::Messages);
@@ -27,7 +28,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .get(id)
             .map(|msgs| {
                 msgs.iter()
-                    .map(|m| Line::from(format!("{} {}  {}", hhmm(m.ts), m.author, m.body)))
+                    .map(|m| {
+                        Line::from(format!(
+                            "{} {}  {}",
+                            hhmm(m.ts),
+                            sanitize_line(&m.author),
+                            sanitize_line(&m.body)
+                        ))
+                    })
                     .collect()
             })
             .unwrap_or_default(),

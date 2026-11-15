@@ -2,6 +2,7 @@
 
 use crate::app::{App, Focus};
 use crate::ui::pane_block;
+use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{List, ListItem, ListState};
@@ -10,7 +11,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
         .rooms
         .iter()
-        .map(|r| ListItem::new(r.name.as_str()))
+        .map(|r| ListItem::new(sanitize_line(&r.name)))
         .collect();
     let list = List::new(items)
         .block(pane_block(" Rooms ", app.focus == Focus::Sidebar))
