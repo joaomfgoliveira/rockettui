@@ -8,6 +8,7 @@ seeded rooms were applied before the first draw (general precedes NORMAL in the 
 Prints `SMOKE OK: <scenario>` and exits 0, or `SMOKE FAIL: <reason>` and exits 1.
 """
 
+import codecs
 import fcntl
 import os
 import pty
@@ -17,6 +18,7 @@ import struct
 import sys
 import termios
 import time
+import unicodedata
 
 ALT_ON = b"\x1b[?1049h"
 ALT_OFF = b"\x1b[?1049l"
@@ -26,6 +28,88 @@ PASTE_OFF = b"\x1b[?2004l"
 
 class SmokeFail(Exception):
     pass
+
+
+class Screen:
+    """A minimal 24x80 screen model.
+
+    ratatui only emits the cells that changed, so a typed word arrives split by cursor moves. This
+    applies CUP moves (CSI row;col H), ignores every other CSI and OSC sequence, writes printable
+    characters at the cursor (a wide character takes two columns) and exposes the grid as text.
+    """
+
+    def __init__(self, rows=24, cols=80):
+        self.nrows = rows
+        self.ncols = cols
+        self.grid = [[" "] * cols for _ in range(rows)]
+        self.row = 0
+        self.col = 0
+        self.state = "text"
+        self.params = ""
+        self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def feed(self, data):
+        for ch in self.decoder.decode(bytes(data)):
+            self.step(ch)
+
+    def step(self, ch):
+        if self.state == "text":
+            if ch == "\x1b":
+                self.state = "esc"
+            elif ch == "\r":
+                self.col = 0
+            elif ch == "\n":
+                self.row = min(self.row + 1, self.nrows - 1)
+            elif ch == "\b":
+                self.col = max(self.col - 1, 0)
+            elif ch >= " " and ch != "\x7f":
+                self.put(ch)
+        elif self.state == "esc":
+            if ch == "[":
+                self.state = "csi"
+                self.params = ""
+            elif ch == "]":
+                self.state = "osc"
+            else:
+                self.state = "text"  # a two-byte escape such as ESC 7 or ESC =
+        elif self.state == "csi":
+            if "\x40" <= ch <= "\x7e":
+                if ch in ("H", "f"):
+                    self.move(self.params)
+                self.state = "text"
+            else:
+                self.params += ch
+        elif self.state == "osc":
+            if ch == "\x07":
+                self.state = "text"
+            elif ch == "\x1b":
+                self.state = "esc"  # ESC \ ends the string; the backslash ends the escape
+
+    def move(self, params):
+        parts = params.split(";")
+        try:
+            row = int(parts[0]) if parts[0] else 1
+            col = int(parts[1]) if len(parts) > 1 and parts[1] else 1
+        except ValueError:
+            return
+        self.row = min(max(row - 1, 0), self.nrows - 1)
+        self.col = min(max(col - 1, 0), self.ncols - 1)
+
+    def put(self, ch):
+        if unicodedata.combining(ch):
+            return
+        width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if self.col + width <= self.ncols:
+            self.grid[self.row][self.col] = ch
+            if width == 2:
+                self.grid[self.row][self.col + 1] = " "
+        self.col = min(self.col + width, self.ncols)
+
+    def rows(self):
+        return ["".join(r) for r in self.grid]
+
+    def contains(self, text):
+        return any(text in r for r in self.rows())
 
 
 def spawn(binary, extra_env=None):
@@ -104,6 +188,13 @@ def wait_exit(pid, fd, buf, timeout):
     raise SmokeFail("process did not exit in time")
 
 
+def type_keys(fd, buf, data):
+    """Like `send`, but keeps draining output during each 20 ms gap."""
+    for i in range(len(data)):
+        os.write(fd, data[i : i + 1])
+        read_some(fd, buf, 0.02)
+
+
 def first_before(buf, first, second):
     a = bytes(buf).find(first)
     b = bytes(buf).find(second)
@@ -144,9 +235,41 @@ def scenario_panic(binary):
         raise SmokeFail("panic message printed before the terminal was restored")
 
 
+def scenario_insert(binary):
+    pid, fd = spawn(binary)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    # Enter opens the selected sidebar room (general), i enters Insert, Enter sends the message.
+    type_keys(fd, buf, b"\r")
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, b"hello smoke")
+    type_keys(fd, buf, b"\r")
+
+    def sent(b):
+        screen = Screen()
+        screen.feed(b)
+        return screen.contains("hello smoke")
+
+    if not read_until(fd, buf, sent, 5):
+        raise SmokeFail("typed message never appeared on the screen")
+    if b"INSERT" not in bytes(buf):
+        raise SmokeFail("INSERT mode never shown")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if ALT_OFF not in bytes(buf):
+        raise SmokeFail("alternate screen not left")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
+    "insert": scenario_insert,
 }
 
 
