@@ -174,6 +174,71 @@ mod tests {
         }
     }
 
+    fn draw_80x24(app: &crate::app::App) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("backend");
+        terminal.draw(|f| super::view(f, app)).expect("draw");
+        terminal
+    }
+
+    /// The fake-data app with the clock fixed, so timestamps in the screen are stable.
+    fn fixed_clock_app() -> crate::app::App {
+        let mut app = app_80x24();
+        let at = crate::data::fake::FAKE_EPOCH + 43_200;
+        crate::app::update::update(&mut app, crate::action::Action::Clock(at));
+        app
+    }
+
+    #[test]
+    fn layout_80x24_normal() {
+        let app = fixed_clock_app();
+        insta::assert_snapshot!(draw_80x24(&app).backend());
+    }
+
+    #[test]
+    fn layout_80x24_insert_multiline() {
+        let mut app = fixed_clock_app();
+        press(&mut app, "<CR>ihello<C-j>world");
+        assert_eq!(app.input.line_count(), 2);
+        insta::assert_snapshot!(draw_80x24(&app).backend());
+    }
+
+    #[test]
+    fn layout_80x24_command() {
+        let mut app = fixed_clock_app();
+        press(&mut app, ":qu");
+        insta::assert_snapshot!(draw_80x24(&app).backend());
+    }
+
+    #[test]
+    fn input_grows_to_five_rows() {
+        use crate::ui::layout;
+        use ratatui::layout::Rect;
+        let mut app = fixed_clock_app();
+        let one = layout::areas(Rect::new(0, 0, 80, 24), app.input_rows());
+        assert_eq!(one.input.height, 3);
+        let draft: Vec<String> = (0..7).map(|i| format!("line {i}")).collect();
+        press(&mut app, "i");
+        app.input.insert_str(&draft.join("\n"));
+        assert_eq!(app.input_rows(), 5);
+        let seven = layout::areas(Rect::new(0, 0, 80, 24), app.input_rows());
+        assert_eq!(seven.input.height, 7);
+        assert_eq!(one.messages.height - seven.messages.height, 4);
+        // The border row of the grown input pane is drawn where the layout says.
+        let out = render_to_string(&app, 80, 24);
+        let top_border = out
+            .lines()
+            .nth(usize::from(seven.input.y))
+            .unwrap_or_default();
+        assert!(top_border.contains("Input"), "{top_border:?}");
+        // The cursor line (the last draft line) is visible in the scrolled window.
+        assert!(out.contains("line 6"));
+        for (w, h) in [(40u16, 8u16), (39, 7)] {
+            app.size = ratatui::layout::Size::new(w, h);
+            let _ = render_to_string(&app, w, h);
+        }
+    }
+
     #[test]
     fn command_mode_renders_cmdline() {
         let mut app = app_80x24();
