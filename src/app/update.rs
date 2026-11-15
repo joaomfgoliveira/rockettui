@@ -88,7 +88,8 @@ pub fn update(app: &mut App, action: Action) {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{App, sidebar};
+    use crate::action::Action;
+    use crate::app::{App, MAX_CMDLINE, sidebar};
     use crate::app::{Mode, update::update};
     use crate::data::{RoomId, fake};
     use crate::test_util::{app_80x24, press};
@@ -140,5 +141,84 @@ mod tests {
         press(&mut app, "j");
         assert_eq!(sidebar::selected_room(&app), last);
         assert_ne!(last, first);
+    }
+
+    #[test]
+    fn mode_colon_enters_command() {
+        let mut app = app_80x24();
+        assert_eq!(app.mode.label(), "NORMAL");
+        press(&mut app, ":");
+        assert_eq!(app.mode, Mode::Command);
+        assert_eq!(app.mode.label(), "COMMAND");
+        assert!(app.cmdline.is_empty());
+    }
+
+    #[test]
+    fn mode_esc_and_ctrl_c_cancel_command() {
+        for cancel in ["<Esc>", "<C-c>"] {
+            let mut app = app_80x24();
+            press(&mut app, ":ab");
+            assert_eq!(app.cmdline, "ab");
+            press(&mut app, cancel);
+            assert_eq!(app.mode, Mode::Normal, "{cancel}");
+            assert!(app.cmdline.is_empty(), "{cancel}");
+            assert!(!app.should_quit, "{cancel}");
+        }
+    }
+
+    #[test]
+    fn mode_ctrl_c_and_esc_in_normal_do_not_quit() {
+        let mut app = app_80x24();
+        press(&mut app, "<C-c><C-c><Esc><Esc>");
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn command_bs_on_empty_returns_normal() {
+        let mut app = app_80x24();
+        press(&mut app, ":a<BS>");
+        assert_eq!(app.mode, Mode::Command);
+        assert!(app.cmdline.is_empty());
+        press(&mut app, "<BS>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn command_line_capped_at_max() {
+        let mut app = app_80x24();
+        press(&mut app, ":");
+        press(&mut app, &"a".repeat(300));
+        assert_eq!(app.cmdline.chars().count(), MAX_CMDLINE);
+        assert_eq!(app.mode, Mode::Command);
+    }
+
+    #[test]
+    fn resize_updates_size() {
+        let mut app = app_80x24();
+        press(&mut app, ":ab");
+        let rooms = app.rooms.len();
+        let clock = app.clock_secs;
+        update(&mut app, Action::Resize(120, 40));
+        assert_eq!(app.size, Size::new(120, 40));
+        assert_eq!(app.mode, Mode::Command);
+        assert_eq!(app.cmdline, "ab");
+        assert_eq!(app.rooms.len(), rooms);
+        assert_eq!(app.clock_secs, clock);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn clock_sets_clock_secs() {
+        let mut app = app_80x24();
+        update(&mut app, Action::Clock(42));
+        assert_eq!(app.clock_secs, 42);
+        assert_eq!(app.mode, Mode::Normal);
+        press(&mut app, ":ab");
+        update(&mut app, Action::Clock(43));
+        assert_eq!(app.clock_secs, 43);
+        assert_eq!(app.mode, Mode::Command);
+        assert_eq!(app.cmdline, "ab");
     }
 }

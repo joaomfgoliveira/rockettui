@@ -68,6 +68,17 @@ impl std::fmt::Debug for Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::app_80x24;
+
+    #[test]
+    fn with_fake_data_loads_everything() {
+        let app = app_80x24();
+        assert_eq!(app.rooms.len(), 8);
+        assert_eq!(app.folders.len(), 2);
+        for room in &app.rooms {
+            assert!(app.messages.contains_key(&room.id), "{}", room.name);
+        }
+    }
 
     #[test]
     fn debug_redacts() {

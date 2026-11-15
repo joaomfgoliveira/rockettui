@@ -59,3 +59,94 @@ pub fn seed() -> Vec<Action> {
     ));
     actions
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Folder;
+
+    type Parts = (Vec<Room>, Vec<Folder>, Vec<(RoomId, Vec<Message>)>);
+
+    fn parts() -> Parts {
+        let mut rooms = Vec::new();
+        let mut folders = Vec::new();
+        let mut messages = Vec::new();
+        for action in seed() {
+            match action {
+                Action::RoomsLoaded(r) => rooms = r,
+                Action::FoldersLoaded(f) => folders = f,
+                Action::MessagesLoaded(id, m) => messages.push((id, m)),
+                _ => panic!("seed holds only data Actions"),
+            }
+        }
+        (rooms, folders, messages)
+    }
+
+    #[test]
+    fn seed_matches_d13() {
+        let (rooms, folders, messages) = parts();
+        assert_eq!(rooms.len(), 8);
+        assert_eq!(rooms[0].name, "general");
+
+        for kind in [
+            RoomKind::Channel,
+            RoomKind::PrivateGroup,
+            RoomKind::Discussion,
+            RoomKind::Team,
+            RoomKind::DirectMessage,
+        ] {
+            assert!(rooms.iter().any(|r| r.kind == kind), "{kind:?}");
+        }
+
+        let count_of = |id: &RoomId| {
+            messages
+                .iter()
+                .find(|(room_id, _)| room_id == id)
+                .map_or(0, |(_, m)| m.len())
+        };
+
+        let encrypted: Vec<&Room> = rooms.iter().filter(|r| r.encrypted).collect();
+        assert_eq!(encrypted.len(), 1);
+        assert_eq!(encrypted[0].name, "secrets");
+        assert!(count_of(&encrypted[0].id) > 0);
+
+        assert_eq!(rooms.iter().filter(|r| r.unread).count(), 3);
+
+        let names: Vec<&str> = folders.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"Work"));
+        assert!(names.contains(&"People"));
+        for folder in &folders {
+            for id in &folder.room_ids {
+                assert!(rooms.iter().any(|r| &r.id == id), "{id:?}");
+            }
+        }
+
+        assert!(
+            rooms.iter().filter(|r| count_of(&r.id) >= 50).count() >= 2,
+            "at least two rooms with 50+ messages"
+        );
+
+        let empty: Vec<&Room> = rooms.iter().filter(|r| count_of(&r.id) == 0).collect();
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].name, "quiet");
+        assert!(!empty[0].encrypted);
+
+        assert!(
+            messages
+                .iter()
+                .flat_map(|(_, m)| m.iter())
+                .any(|m| m.body.chars().count() >= 500),
+            "one very long message"
+        );
+
+        assert_eq!(messages.len(), rooms.len());
+        for room in &rooms {
+            assert_eq!(
+                messages.iter().filter(|(id, _)| id == &room.id).count(),
+                1,
+                "{}",
+                room.name
+            );
+        }
+    }
+}

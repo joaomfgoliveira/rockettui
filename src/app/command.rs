@@ -39,6 +39,7 @@ pub fn execute(app: &mut App, line: &str) {
 
 #[cfg(test)]
 mod tests {
+    use crate::app::{Mode, StatusMsg};
     use crate::test_util::{app_80x24, press};
 
     #[test]
@@ -46,5 +47,36 @@ mod tests {
         let mut app = app_80x24();
         press(&mut app, ":q<CR>");
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn colon_quit_quits() {
+        let mut app = app_80x24();
+        press(&mut app, ":quit<CR>");
+        assert!(app.should_quit);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn unknown_command_errors() {
+        let mut app = app_80x24();
+        press(&mut app, ":foo<CR>");
+        assert!(matches!(
+            &app.status_msg,
+            Some(StatusMsg::Error(msg)) if msg == "Unknown command: foo"
+        ));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.should_quit);
+        press(&mut app, "j");
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn empty_command_is_noop() {
+        let mut app = app_80x24();
+        press(&mut app, ":<CR>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.status_msg.is_none());
+        assert!(!app.should_quit);
     }
 }
