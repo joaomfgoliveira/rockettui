@@ -30,7 +30,24 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
   3. Current mode is visible and user can switch between Normal, Insert and Command
   4. User quits with `:q`
 **UI hint**: yes
-**Plans**: TBD
+**Plans:** 6 plans
+
+Plans:
+**Wave 1**
+- [ ] 01-01-PLAN.md — Walking skeleton, headless core: cargo crate (all audited crates), Action/App/reducer, Vim-notation keymap data, fake data seam with the D-13 dataset, j/k sidebar, `:q` command (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 01-02-PLAN.md — Walking skeleton, binary: view and layout, terminal lifecycle, input task, run loop (seed applied before the first draw), pty smoke, sanitizer, tiny sizes and panic restore (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 01-03-PLAN.md — Vim key matcher: trie, counts, 1 s timeout, pending keys and room in status, Ctrl-w focus, per-pane motion router (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 01-04-PLAN.md — Sidebar sections (Unread / Folders / Recent), folds (h/l on folder rows only, D-19), Enter opens a room, glyphs and markers (wave 4, parallel with 01-05)
+- [ ] 01-05-PLAN.md — Messages pane: wrap with hanging indent, Compact/TwoLine layouts, message cursor and scrolling, h/l no-ops (D-19) (wave 4, parallel with 01-04)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 01-06-PLAN.md — Insert mode and input bar: multiline input, Normal-mode motions in the input bar (D-18), Enter appends a local message, safe paste, full-screen snapshots (wave 5)
 
 ### Phase 2: Configuration System
 **Goal**: The TUI is customizable through three TOML files in `~/.config/rockettui/`, with built-in defaults
@@ -96,7 +113,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Modal TUI Shell | 0/TBD | Not started | - |
+| 1. Modal TUI Shell | 0/6 | Not started | - |
 | 2. Configuration System | 0/TBD | Not started | - |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |

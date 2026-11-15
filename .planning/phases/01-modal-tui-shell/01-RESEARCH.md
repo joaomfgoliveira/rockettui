@@ -550,7 +550,7 @@ Omitted — greenfield phase (no rename/refactor/migration; no `Cargo.toml`/`src
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
-| A1 | Placement rule: each room appears once, precedence Unread > Folder > Rest | Pattern 6 | Author may expect an unread room in a folder to show in both; changes `sidebar_rows` and cursor identity (low cost now, needs confirmation) |
+| A1 | Placement rule: each room appears once, precedence Unread > Folder > Rest | Pattern 6 | Confirmed by the author on 2026-11-14 (Open Question 1, RESOLVED); no longer an assumption. A later change would touch only `app::sidebar::rows` and cursor identity |
 | A2 | `h`/`l` collapse/expand folders in the sidebar, `za` toggles, `<CR>` on a folder row toggles (fold keys are Claude's discretion) | Pattern 2/6 | Author may prefer other keys; data-driven keymap makes it a one-line change |
 | A3 | Max input height 5 content rows (+2 border) | Pattern 4 | Cosmetic |
 | A4 | Bounded channel size 256 | Pattern 3 | None in Phase 1; revisit when DDP floods arrive |
@@ -560,17 +560,18 @@ Omitted — greenfield phase (no rename/refactor/migration; no `Cargo.toml`/`src
 | A8 | Up/Down in the input move by logical line, not visual wrapped row | Pattern 7 | Slightly un-vim-like when a long line wraps; acceptable for Phase 1 |
 | A9 | `MIN_BODY` wrap width (e.g. 10) when the pane is very narrow | Pattern 5 | Cosmetic |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does an unread room that is also in a folder appear in Unread, the Folder, or both?**
+All three questions were confirmed by the author on 2026-11-14 during `/gsd-plan-phase 1` (plan-check iteration 1).
+
+1. **Does an unread room that is also in a folder appear in Unread, the Folder, or both?** — RESOLVED: show once, Unread wins; the folder row shows an unread count (assumption A1 is now a confirmed decision).
    - What we know: D-11 lists three sections; D-12 allows any kind in folders.
-   - What's unclear: precedence/duplication.
-   - Recommendation: show once, Unread wins (A1); folder row shows an unread count. Confirm with the author before the sidebar plan locks.
-2. **Hand-roll the multiline input or adopt `ratatui-textarea`?**
+   - Resolution: author chose "Once, Unread wins".
+2. **Hand-roll the multiline input or adopt `ratatui-textarea`?** — RESOLVED: hand-roll `InputBuffer` (Pattern 7).
    - What we know: crate is maintained (0.9.4, 2026-10-31) but owns key handling, conflicting with D-07/TEA; the project's stated goal is learning Rust/TUI architecture.
-   - Recommendation: hand-roll (Pattern 7). Revisit only if the author wants undo/redo, selections, etc.
-3. **Should Phase 1 enable bracketed paste?**
-   - Recommendation: yes (small, prevents N accidental sends once Phase 4 sends for real).
+   - Resolution: author chose "Hand-roll InputBuffer". Revisit only if undo/redo or selections are wanted.
+3. **Should Phase 1 enable bracketed paste?** — RESOLVED: yes, enable it in Phase 1.
+   - Resolution: author chose "Yes, enable it" (prevents N accidental sends once Phase 4 sends for real).
 
 ## Environment Availability
 

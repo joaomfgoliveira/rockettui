@@ -38,6 +38,10 @@ A runnable ratatui app with a sidebar (rooms) + messages + input bar layout, dri
 - **D-16:** Command mode supports only `:q` / `:quit`; unknown commands show an error in the status bar. Dispatch is table-driven so later phases can add commands.
 - **D-17:** `:` from Normal opens Command mode; `Esc` cancels any mode back to Normal; `Ctrl-c` acts as `Esc` and does not quit. Only `:q` quits.
 
+### Added during plan-phase (2026-11-14, author decision)
+- **D-18:** With focus on the input bar in Normal mode, the NAV-02 motions act on the input buffer, not as no-ops: `h`/`l` move the cursor left/right, `j`/`k` move between lines of the multiline input, `gg`/`G` jump to the first/last line. (Originally planned as no-ops; the author chose input-bar motions as above.) `Ctrl-d`/`Ctrl-u` scroll half a page of the input if it scrolls, otherwise are harmless no-ops.
+- **D-19:** Author-accepted narrowing of NAV-02's `hjkl` wording (2026-11-14): in the messages pane `h`/`l` are intentional no-ops (D-04 lists only j/k/gg/G/Ctrl-d/Ctrl-u there), and on sidebar room rows `h`/`l` do nothing; `h`/`l` only fold/unfold folder rows. D-18 applies to the input bar only, not to every pane.
+
 ### Claude's Discretion
 - Key used to insert a newline in the multiline input (Shift-Enter is unreliable in terminals; likely `Alt-Enter` or `Ctrl-j`).
 - Max height of the input bar, exact fold keys for sidebar folders, fake data content, border/glyph styling, event-loop/tick design, terminal setup/teardown and panic-restore handling, module skeleton (following TEA: one `App`, one `Action` enum, one channel, one reducer).
