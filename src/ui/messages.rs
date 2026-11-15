@@ -1,11 +1,12 @@
-//! Messages pane: the open room's messages, one line each (plan 01-05 adds wrapping, a cursor
-//! and scrolling).
+//! Messages pane: the open room's wrapped messages with a cursor highlight. It draws only the
+//! window `app::messages::view` selects, from the same row model the reducer scrolls with.
 
-use crate::app::{App, Focus};
-use crate::ui::pane_block;
+use crate::app::{App, Focus, messages};
 use crate::ui::sanitize::sanitize_line;
+use crate::ui::{pane_block, wrap};
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
@@ -15,32 +16,60 @@ pub fn hhmm(ts: i64) -> String {
     format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
 }
 
+/// Draw the messages pane: only the rows of the window `app::messages::view` selects.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focus == Focus::Messages;
     let title = match app.current_room_name() {
         Some(name) => format!(" {} ", sanitize_line(name)),
         None => " Messages ".to_string(),
     };
-    let block = pane_block(&title, app.focus == Focus::Messages);
-    let lines: Vec<Line> = match app.current_room.as_ref() {
-        None => vec![Line::from("No room open")],
-        Some(id) => app
-            .messages
-            .get(id)
-            .map(|msgs| {
-                msgs.iter()
-                    .map(|m| {
-                        Line::from(format!(
-                            "{} {}  {}",
-                            hhmm(m.ts),
-                            sanitize_line(&m.author),
-                            sanitize_line(&m.body)
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+    let block = pane_block(&title, focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let Some(room) = app.current_room.as_ref() else {
+        frame.render_widget(Paragraph::new(Line::styled("No room open", dim)), inner);
+        return;
     };
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    let msgs = app.messages.get(room).map_or(&[][..], Vec::as_slice);
+    if msgs.is_empty() {
+        frame.render_widget(Paragraph::new(Line::styled("No messages yet", dim)), inner);
+        return;
+    }
+
+    let v = messages::view(app, room);
+    let mut lines: Vec<Line> = Vec::new();
+    let mut cursor_rows = 0..0;
+    for (i, msg) in msgs.iter().enumerate() {
+        let rows = wrap::render_rows(msg, inner.width, app.message_layout);
+        if i == v.cursor {
+            cursor_rows = lines.len()..lines.len() + rows.len();
+        }
+        lines.extend(rows);
+    }
+    let highlight = if focused {
+        Style::new().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::new().bg(Color::DarkGray)
+    };
+    // The rows are pre-wrapped, so the Paragraph does no wrapping of its own.
+    let window: Vec<Line> = lines
+        .into_iter()
+        .skip(v.top_row)
+        .take(usize::from(inner.height))
+        .collect();
+    frame.render_widget(Paragraph::new(window), inner);
+    // Highlight the whole width of every visible row of the cursor message, trailing blanks
+    // included.
+    let first = cursor_rows.start.max(v.top_row);
+    let end = cursor_rows.end.min(v.top_row + usize::from(inner.height));
+    for row in first..end {
+        let y = inner.y + u16::try_from(row - v.top_row).unwrap_or(u16::MAX);
+        frame
+            .buffer_mut()
+            .set_style(Rect::new(inner.x, y, inner.width, 1), highlight);
+    }
 }
 
 #[cfg(test)]
@@ -156,8 +185,15 @@ mod tests {
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
         let width = buffer.area.width;
-        let reversed =
-            |y: u16| (1..width - 1).all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED));
+        // The second cell of a wide character is painted through its first cell, so skip it.
+        let hidden = |x: u16, y: u16| {
+            x > 0 && unicode_width::UnicodeWidthStr::width(buffer[(x - 1, y)].symbol()) == 2
+        };
+        let reversed = |y: u16| {
+            (1..width - 1)
+                .filter(|&x| !hidden(x, y))
+                .all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
+        };
         let plain =
             |y: u16| (1..width - 1).all(|x| !buffer[(x, y)].modifier.contains(Modifier::REVERSED));
         let first = 1 + (starts[3] - v.top_row) as u16;
@@ -201,13 +237,18 @@ mod tests {
                 .collect();
             let terminal = render_pane(&app);
             let inner = |y: u16| {
-                row_text(&terminal, y)
-                    .chars()
-                    .skip(1)
-                    .take(50)
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
+                // Inner columns only; the second cell of a wide character carries no text.
+                let buffer = terminal.backend().buffer();
+                let mut text = String::new();
+                let mut skip = false;
+                for x in 1..=50 {
+                    let symbol = buffer[(x, y)].symbol();
+                    if !skip {
+                        text.push_str(symbol);
+                    }
+                    skip = unicode_width::UnicodeWidthStr::width(symbol) == 2 && !skip;
+                }
+                text.trim_end().to_string()
             };
             assert_eq!(inner(1), expected[v.top_row].trim_end(), "{keys:?} first");
             assert_eq!(

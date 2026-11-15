@@ -1,0 +1,24 @@
+---
+source: src/ui/messages.rs
+expression: terminal.backend()
+---
+"┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┃09:00 carol  This is a deliberately long message  ┃"
+"┃             that keeps going so the message      ┃"
+"┃             pane has to wrap it across several   ┃"
+"┃             rows, with a hanging indent under    ┃"
+"┃             the author. This is a deliberately   ┃"
+"┃             long message that keeps going so the ┃"
+"┃             message pane has to wrap it across   ┃"
+"┃             several rows, with a hanging indent  ┃"
+"┃             under the author. see https://       ┃"
+"┃             example.invalid/abcdefgh-abcdefgh-   ┃"
+"┃             abcdefgh-abcdefgh-abcdefgh-abcdefgh- ┃"
+"┃             ij for the details. This is a        ┃"
+"┃             deliberately long message that keeps ┃"
+"┃             going so the message pane has to     ┃"
+"┃             wrap it across several rows, with a  ┃"
+"┃             hanging indent under the author. This┃"
+"┃             is a deliberately long message that  ┃"
+"┃             keeps going so the message pane has  ┃"
+"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
