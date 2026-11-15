@@ -9,11 +9,23 @@ pub mod status;
 
 use crate::app::App;
 use ratatui::Frame;
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-/// Draw the whole screen.
+/// Narrowest terminal the panes are laid out in.
+pub const MIN_WIDTH: u16 = 40;
+/// Shortest terminal the panes are laid out in.
+pub const MIN_HEIGHT: u16 = 8;
+
+/// Draw the whole screen. Below `MIN_WIDTH` x `MIN_HEIGHT` a one-line notice replaces the panes,
+/// so pane renderers only ever see areas of at least that size.
 pub fn view(frame: &mut Frame, app: &App) {
-    let areas = layout::areas(frame.area(), app.input_rows());
+    let area = frame.area();
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        let notice = format!("terminal too small: {}x{}", area.width, area.height);
+        frame.render_widget(Paragraph::new(notice), area);
+        return;
+    }
+    let areas = layout::areas(area, app.input_rows());
     sidebar::render(frame, areas.sidebar, app);
     messages::render(frame, areas.messages, app);
     input::render(frame, areas.input, app);

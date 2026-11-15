@@ -55,6 +55,12 @@ pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> 
             break;
         }
         terminal.draw(|f| ui::view(f, &app))?;
+        // Debug-only hook so the pty smoke harness and the manual UAT can prove that a panic
+        // restores the terminal. Compiled out of release builds (A17).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ROCKETTUI_DEBUG_PANIC").is_some() {
+            panic!("ROCKETTUI_DEBUG_PANIC: deliberate panic to test terminal restore");
+        }
         match rx.recv().await {
             Some(action) => batch.push(action),
             None => break,

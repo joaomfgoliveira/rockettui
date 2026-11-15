@@ -127,8 +127,26 @@ def scenario_quit(binary):
         raise SmokeFail("bracketed paste not enabled then disabled")
 
 
+def scenario_panic(binary):
+    pid, fd = spawn(binary, {"ROCKETTUI_DEBUG_PANIC": "1"})
+    buf = bytearray()
+    wait_ready(fd, buf)
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 101:
+        raise SmokeFail(f"exit code {code}, expected 101")
+    restored = bytes(buf).find(ALT_OFF)
+    message = bytes(buf).find(b"panicked at")
+    if restored == -1:
+        raise SmokeFail("alternate screen never left")
+    if message == -1:
+        raise SmokeFail("no panic message printed")
+    if restored > message:
+        raise SmokeFail("panic message printed before the terminal was restored")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
+    "panic": scenario_panic,
 }
 
 
