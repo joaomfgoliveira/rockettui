@@ -3,9 +3,14 @@
 //! Key bindings never live here; keys are resolved through `app.keymap` (D-07).
 
 use crate::action::Action;
-use crate::app::{App, Focus, MAX_CMDLINE, Mode, command, sidebar};
+use crate::app::input_buf::InputBuffer;
+use crate::app::{
+    App, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, messages, sidebar,
+};
+use crate::data::Message;
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
+use crate::ui::sanitize::sanitize_line;
 use ratatui::layout::Size;
 
 pub fn update(app: &mut App, action: Action) {
@@ -77,18 +82,49 @@ pub fn update(app: &mut App, action: Action) {
             Mode::Normal => {
                 app.status_msg = None;
             }
-            Mode::Insert => {}
-        },
-        Action::InsertChar(c) => {
-            if app.mode == Mode::Command && app.cmdline.chars().count() < MAX_CMDLINE {
-                app.cmdline.push(c);
-            }
-        }
-        Action::DeleteBack => {
-            if app.mode == Mode::Command && app.cmdline.pop().is_none() {
+            // Esc and Ctrl-c leave Insert mode and never quit; the draft is kept (D-17).
+            Mode::Insert => {
                 app.mode = Mode::Normal;
+                app.focus = app.prev_focus;
+            }
+        },
+        Action::EnterInsert => {
+            if app.mode == Mode::Normal {
+                app.prev_focus = app.focus;
+                app.focus = Focus::Input;
+                app.mode = Mode::Insert;
             }
         }
+        Action::InsertChar(c) => match app.mode {
+            Mode::Command => {
+                if app.cmdline.chars().count() < MAX_CMDLINE {
+                    app.cmdline.push(c);
+                }
+            }
+            Mode::Insert => edit_input(app, |input| {
+                input.insert_char(c);
+            }),
+            Mode::Normal => {}
+        },
+        Action::DeleteBack => match app.mode {
+            Mode::Command => {
+                if app.cmdline.pop().is_none() {
+                    app.mode = Mode::Normal;
+                }
+            }
+            Mode::Insert => edit_input(app, InputBuffer::backspace),
+            Mode::Normal => {}
+        },
+        Action::InsertNewline => edit_input(app, InputBuffer::newline),
+        Action::DeleteWordBack => edit_input(app, InputBuffer::delete_word_back),
+        Action::DeleteToLineStart => edit_input(app, InputBuffer::delete_to_line_start),
+        Action::CursorLeft => edit_input(app, InputBuffer::left),
+        Action::CursorRight => edit_input(app, InputBuffer::right),
+        Action::CursorUp => edit_input(app, InputBuffer::up),
+        Action::CursorDown => edit_input(app, InputBuffer::down),
+        Action::CursorHome => edit_input(app, InputBuffer::home),
+        Action::CursorEnd => edit_input(app, InputBuffer::end),
+        Action::SubmitInput => submit_input(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -96,23 +132,56 @@ pub fn update(app: &mut App, action: Action) {
                 command::execute(app, &line);
             }
         }
-        // Paste handling arrives with Insert and Command paste (plan 01-06).
-        Action::Paste(_) => {}
-        Action::EnterInsert
-        | Action::InsertNewline
-        | Action::DeleteWordBack
-        | Action::DeleteToLineStart
-        | Action::CursorLeft
-        | Action::CursorRight
-        | Action::CursorUp
-        | Action::CursorDown
-        | Action::CursorHome
-        | Action::CursorEnd
-        | Action::SubmitInput => {}
+        // A paste is one insert and never a submit (T-01-22).
+        Action::Paste(text) => match app.mode {
+            Mode::Insert => edit_input(app, |input| {
+                input.insert_str(&text);
+            }),
+            Mode::Command => {
+                let room = MAX_CMDLINE.saturating_sub(app.cmdline.chars().count());
+                app.cmdline.extend(sanitize_line(&text).chars().take(room));
+            }
+            Mode::Normal => {}
+        },
         Action::Quit => {
             app.should_quit = true;
         }
     }
+}
+
+/// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
+fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
+    if app.mode != Mode::Insert {
+        return;
+    }
+    edit(&mut app.input);
+    let (width, height) = app.input_viewport();
+    app.input.settle(width, height);
+}
+
+/// Enter in Insert mode (D-15): append the draft as a local message from `me` to the open room,
+/// clear it and stay in Insert mode. Phase 4 replaces the local append with an API send.
+fn submit_input(app: &mut App) {
+    if app.mode != Mode::Insert || app.input.text().trim().is_empty() {
+        return;
+    }
+    let Some(room) = app.current_room.clone() else {
+        app.status_msg = Some(StatusMsg::Error(
+            "No room open: select a room with Enter".into(),
+        ));
+        return;
+    };
+    let body = app.input.take();
+    app.local_seq += 1;
+    let message = Message {
+        id: format!("local-{}", app.local_seq),
+        room_id: room.clone(),
+        author: LOCAL_AUTHOR.into(),
+        ts: app.clock_secs,
+        body,
+    };
+    app.messages.entry(room.clone()).or_default().push(message);
+    messages::follow_newest(app, &room);
 }
 
 /// Turn what the matcher produced into reducer work.
