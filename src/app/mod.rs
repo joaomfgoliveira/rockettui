@@ -9,6 +9,7 @@ pub mod update;
 
 use crate::data::{Folder, Message, Room, RoomId};
 use crate::input::keymap::{Keymap, default_keymap};
+use crate::input::matcher::Matcher;
 use ratatui::layout::Size;
 use std::collections::HashMap;
 
@@ -62,6 +63,8 @@ pub struct App {
     pub cmdline: String,
     pub status_msg: Option<StatusMsg>,
     pub keymap: Keymap,
+    /// Pending count and key sequence between keys (D-05, D-06).
+    pub matcher: Matcher,
     pub should_quit: bool,
 }
 
@@ -82,6 +85,7 @@ impl App {
             cmdline: String::new(),
             status_msg: None,
             keymap: default_keymap(),
+            matcher: Matcher::default(),
             should_quit: false,
         }
     }
@@ -98,6 +102,16 @@ impl App {
     /// Rows the input bar occupies (plan 01-06 derives this from the input buffer).
     pub fn input_rows(&self) -> u16 {
         1
+    }
+
+    /// True while a count or the start of a key sequence is waiting for more keys.
+    pub fn keys_pending(&self) -> bool {
+        self.matcher.is_pending()
+    }
+
+    /// The pending count and keys in Vim notation, empty when nothing is pending.
+    pub fn pending_display(&self) -> String {
+        self.matcher.display()
     }
 
     /// Display name of the open room, if one is open.

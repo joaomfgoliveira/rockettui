@@ -83,6 +83,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::Quit => {
             app.should_quit = true;
         }
+        Action::KeyTimeout | Action::Counted(..) => {}
     }
 }
 
@@ -191,6 +192,73 @@ mod tests {
         press(&mut app, ":");
         press(&mut app, &"a".repeat(300));
         assert_eq!(app.cmdline.chars().count(), MAX_CMDLINE);
+        assert_eq!(app.mode, Mode::Command);
+    }
+
+    #[test]
+    fn motion_count_5j_equals_five_j() {
+        let mut counted = app_80x24();
+        let initial = sidebar::selected_room(&counted);
+        press(&mut counted, "5j");
+        let mut repeated = app_80x24();
+        press(&mut repeated, "jjjjj");
+        assert_ne!(sidebar::selected_room(&counted), initial);
+        assert_eq!(
+            sidebar::selected_room(&counted),
+            sidebar::selected_room(&repeated)
+        );
+        assert!(!counted.keys_pending());
+    }
+
+    #[test]
+    fn motion_huge_count_clamps() {
+        let mut huge = app_80x24();
+        press(&mut huge, "99999999999j");
+        let mut twenty = app_80x24();
+        for _ in 0..20 {
+            press(&mut twenty, "j");
+        }
+        assert_eq!(
+            sidebar::selected_room(&huge),
+            sidebar::selected_room(&twenty)
+        );
+        assert!(!huge.keys_pending());
+    }
+
+    #[test]
+    fn pending_count_tracked() {
+        let mut app = app_80x24();
+        assert!(!app.keys_pending());
+        press(&mut app, "5");
+        assert!(app.keys_pending());
+        assert_eq!(app.pending_display(), "5");
+        press(&mut app, "<Esc>");
+        assert!(!app.keys_pending());
+        assert_eq!(app.pending_display(), "");
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn pending_timeout_clears() {
+        let mut app = app_80x24();
+        let before = sidebar::selected_room(&app);
+        press(&mut app, "5");
+        assert!(app.keys_pending());
+        update(&mut app, Action::KeyTimeout);
+        assert!(!app.keys_pending());
+        assert_eq!(sidebar::selected_room(&app), before);
+        // A timeout with nothing pending is harmless.
+        update(&mut app, Action::KeyTimeout);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn counted_non_motion_repeats() {
+        let mut app = app_80x24();
+        update(
+            &mut app,
+            Action::Counted(3, Box::new(Action::EnterCommand)),
+        );
         assert_eq!(app.mode, Mode::Command);
     }
 

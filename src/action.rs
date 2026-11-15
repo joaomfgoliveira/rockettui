@@ -28,6 +28,17 @@ pub enum Action {
     RoomsLoaded(Vec<Room>),
     FoldersLoaded(Vec<Folder>),
     MessagesLoaded(RoomId, Vec<Message>),
+    /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
+    KeyTimeout,
+    /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
+    Counted(u32, Box<Action>),
+}
+
+impl Action {
+    /// True for the motions that the per-pane router handles and that accept a count as a jump.
+    pub fn is_motion(&self) -> bool {
+        matches!(self, Action::MoveDown | Action::MoveUp)
+    }
 }
 
 /// Redacting `Debug`: never prints typed characters, pasted text or message text. The match is
@@ -59,6 +70,8 @@ impl std::fmt::Debug for Action {
                     messages.len()
                 )
             }
+            Action::KeyTimeout => write!(f, "KeyTimeout"),
+            Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
     }
 }
