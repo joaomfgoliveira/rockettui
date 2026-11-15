@@ -373,4 +373,100 @@ mod tests {
         assert_eq!(app.mode, Mode::Command);
         assert_eq!(app.cmdline, "ab");
     }
+
+    /// Draft "alpha\nbeta\ngamma" with the input bar focused in Normal mode, cursor at the end.
+    fn input_app(draft: &str) -> App {
+        let mut app = app_80x24();
+        press(&mut app, "<C-w>j");
+        app.input.insert_str(draft);
+        app
+    }
+
+    fn pos(app: &App) -> (usize, usize) {
+        (app.input.row(), app.input.col())
+    }
+
+    #[test]
+    fn input_normal_h_l_within_line() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "h");
+        assert_eq!(pos(&app), (2, 4));
+        press(&mut app, "3h");
+        assert_eq!(pos(&app), (2, 1));
+        press(&mut app, "10h");
+        assert_eq!(pos(&app), (2, 0));
+        press(&mut app, "l");
+        assert_eq!(pos(&app), (2, 1));
+        press(&mut app, "99l");
+        assert_eq!(pos(&app), (2, 5));
+    }
+
+    #[test]
+    fn input_normal_j_k_lines() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "k");
+        assert_eq!(pos(&app), (1, 4));
+        press(&mut app, "5k");
+        assert_eq!(app.input.row(), 0);
+        press(&mut app, "j");
+        assert_eq!(app.input.row(), 1);
+        press(&mut app, "9j");
+        assert_eq!(app.input.row(), 2);
+        let text = app.input.text();
+        let line = text.lines().nth(2).unwrap_or_default();
+        assert!(line.is_char_boundary(app.input.col()));
+    }
+
+    #[test]
+    fn input_normal_gg_g() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        press(&mut app, "gg");
+        assert_eq!(pos(&app), (0, 0));
+        press(&mut app, "G");
+        assert_eq!(pos(&app), (2, 0));
+        press(&mut app, "2gg");
+        assert_eq!(pos(&app), (1, 0));
+        press(&mut app, "G");
+        press(&mut app, "2G");
+        assert_eq!(pos(&app), (1, 0));
+    }
+
+    #[test]
+    fn input_normal_half_page() {
+        let mut short = input_app("a\nb\nc");
+        let before = pos(&short);
+        press(&mut short, "<C-d>");
+        assert_eq!(pos(&short), before);
+        press(&mut short, "<C-u>");
+        assert_eq!(pos(&short), before);
+
+        let draft: Vec<String> = (0..12).map(|i| format!("l{i}")).collect();
+        let mut tall = input_app(&draft.join("\n"));
+        press(&mut tall, "gg");
+        press(&mut tall, "<C-d>");
+        assert_eq!(tall.input.row(), 2);
+        press(&mut tall, "<C-u>");
+        assert_eq!(tall.input.row(), 0);
+        press(&mut tall, "3<C-d>");
+        assert_eq!(tall.input.row(), 6);
+    }
+
+    #[test]
+    fn input_normal_motions_keep_state() {
+        let mut app = input_app("alpha\nbeta\ngamma");
+        let text = app.input.text();
+        let room = app.current_room.clone();
+        let selected = sidebar::selected_room(&app);
+        for keys in [
+            "h", "l", "j", "k", "gg", "G", "3h", "2gg", "<C-d>", "<C-u>", "5j", "9k",
+        ] {
+            press(&mut app, keys);
+            assert_eq!(app.input.text(), text, "{keys}");
+            assert_eq!(app.mode, Mode::Normal, "{keys}");
+            assert_eq!(app.focus, Focus::Input, "{keys}");
+            assert_eq!(app.current_room, room, "{keys}");
+            assert_eq!(sidebar::selected_room(&app), selected, "{keys}");
+            assert!(!app.keys_pending(), "{keys}");
+        }
+    }
 }
