@@ -40,26 +40,122 @@ pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
 }
 
 /// The new `top_row` that brings message `cursor` into the window.
-fn scroll_into_view(
-    _starts: &[usize],
-    _cursor: usize,
-    top_row: usize,
-    _viewport_h: usize,
-) -> usize {
-    top_row
+///
+/// `starts` is `row_starts`: message `i` occupies rows `starts[i]..starts[i + 1]`. A message
+/// taller than the window is aligned to its first row. A zero-height window only clamps.
+fn scroll_into_view(starts: &[usize], cursor: usize, top_row: usize, viewport_h: usize) -> usize {
+    let total = starts.last().copied().unwrap_or(0);
+    let max_top = total.saturating_sub(viewport_h);
+    if viewport_h == 0 || cursor + 1 >= starts.len() {
+        return top_row.min(max_top);
+    }
+    let first = starts[cursor];
+    let end = starts[cursor + 1];
+    let top = if end - first > viewport_h || first < top_row {
+        first
+    } else if end > top_row.saturating_add(viewport_h) {
+        end - viewport_h
+    } else {
+        top_row
+    };
+    top.min(max_top)
 }
 
 /// The effective view of `room`: the stored one (or the newest default), clamped and scrolled so
-/// the cursor message is inside the window at the current size.
-pub fn view(_app: &App, _room: &RoomId) -> MsgView {
-    MsgView::default()
+/// the cursor message is inside the window at the current size. Nothing is cached: the viewport
+/// and row heights are recomputed from `app.size` on every call, so a Resize can never leave the
+/// cursor message outside the window.
+pub fn view(app: &App, room: &RoomId) -> MsgView {
+    let starts = row_starts(app, room);
+    let count = starts.len() - 1;
+    if count == 0 {
+        return MsgView::default();
+    }
+    let total = starts[count];
+    let viewport_h = usize::from(viewport(app).1);
+    let (cursor, top_row) = match app.msg_views.get(room) {
+        Some(v) => (v.cursor, v.top_row),
+        None => (count - 1, total.saturating_sub(viewport_h)),
+    };
+    let cursor = cursor.min(count - 1);
+    MsgView {
+        cursor,
+        top_row: scroll_into_view(&starts, cursor, top_row, viewport_h),
+    }
 }
 
 /// Apply a Normal-mode motion to the messages pane of the current room.
-pub fn apply_motion(_app: &mut App, _motion: &Action, _count: Option<u32>) {}
+///
+/// h and l (and Select and za) are intentional no-ops in this pane (D-19): they return before
+/// anything is stored. An empty room or no room is a no-op too.
+pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
+    let Some(room) = app.current_room.clone() else {
+        return;
+    };
+    if !matches!(
+        motion,
+        Action::MoveDown
+            | Action::MoveUp
+            | Action::GotoTop
+            | Action::GotoBottom
+            | Action::HalfPageDown
+            | Action::HalfPageUp
+    ) {
+        return;
+    }
+    let starts = row_starts(app, &room);
+    let messages = starts.len() - 1;
+    if messages == 0 {
+        return;
+    }
+    let last = messages - 1;
+    let total = starts[messages];
+    let viewport_h = usize::from(viewport(app).1);
+    let max_top = total.saturating_sub(viewport_h);
+    let current = view(app, &room);
+    let n = count.map(|c| c as usize);
+    let step = n.unwrap_or(1);
+    // A half page is max(1, rows / 2); the cursor moves by the same number of rows.
+    let delta = (viewport_h / 2).max(1).saturating_mul(step);
+    let message_at = |row: usize| (starts.partition_point(|&s| s <= row) - 1).min(last);
 
-/// Forget the stored view so the room shows its newest message again.
-pub fn follow_newest(_app: &mut App, _room: &RoomId) {}
+    let (cursor, top_row) = match motion {
+        Action::MoveDown => (
+            current.cursor.saturating_add(step).min(last),
+            current.top_row,
+        ),
+        Action::MoveUp => (current.cursor.saturating_sub(step), current.top_row),
+        Action::GotoTop => (
+            n.map_or(0, |c| c.saturating_sub(1)).min(last),
+            current.top_row,
+        ),
+        Action::GotoBottom => (
+            n.map_or(last, |c| c.saturating_sub(1)).min(last),
+            current.top_row,
+        ),
+        Action::HalfPageDown => {
+            let row = starts[current.cursor]
+                .saturating_add(delta)
+                .min(total.saturating_sub(1));
+            (
+                message_at(row),
+                current.top_row.saturating_add(delta).min(max_top),
+            )
+        }
+        _ => {
+            let row = starts[current.cursor].saturating_sub(delta);
+            (message_at(row), current.top_row.saturating_sub(delta))
+        }
+    };
+    let top_row = scroll_into_view(&starts, cursor, top_row, viewport_h);
+    app.msg_views.insert(room, MsgView { cursor, top_row });
+}
+
+/// Forget the stored view so the room shows its newest message again (plan 01-06 calls this
+/// after appending a local message).
+pub fn follow_newest(app: &mut App, room: &RoomId) {
+    app.msg_views.remove(room);
+}
 
 #[cfg(test)]
 mod tests {
