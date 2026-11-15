@@ -57,4 +57,19 @@ mod tests {
             assert_eq!(r.x + r.width, 80);
         }
     }
+
+    #[test]
+    fn areas_tiny() {
+        for (w, h) in [(0u16, 0u16), (1, 1), (10, 3)] {
+            let outer = Rect::new(0, 0, w, h);
+            for rows in [1u16, 5] {
+                let a = areas(outer, rows);
+                for r in [a.sidebar, a.messages, a.input, a.status, a.cmdline] {
+                    assert!(r.x >= outer.x && r.y >= outer.y, "{w}x{h} rows {rows}");
+                    assert!(r.right() <= outer.right(), "{w}x{h} rows {rows}");
+                    assert!(r.bottom() <= outer.bottom(), "{w}x{h} rows {rows}");
+                }
+            }
+        }
+    }
 }

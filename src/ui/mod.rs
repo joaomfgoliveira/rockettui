@@ -92,6 +92,37 @@ mod tests {
     }
 
     #[test]
+    fn tiny_sizes() {
+        let sizes = [
+            (0u16, 0u16),
+            (1, 1),
+            (10, 3),
+            (39, 7),
+            (40, 8),
+            (80, 24),
+            (120, 40),
+            (200, 60),
+        ];
+        for command_mode in [false, true] {
+            for (w, h) in sizes {
+                let mut app = app_80x24();
+                app.current_room = Some(app.rooms[0].id.clone());
+                app.size = ratatui::layout::Size::new(w, h);
+                if command_mode {
+                    press(&mut app, ":q");
+                }
+                let out = render_to_string(&app, w, h);
+                if (w, h) == (39, 7) {
+                    assert!(out.contains("too small"), "39x7: {out:?}");
+                }
+                if (w, h) == (40, 8) {
+                    assert!(out.contains(if command_mode { "COMMAND" } else { "NORMAL" }));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn command_mode_renders_cmdline() {
         let mut app = app_80x24();
         let cmdline = ratatui::layout::Rect::new(0, 23, 80, 1);
