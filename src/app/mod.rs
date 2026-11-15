@@ -4,6 +4,7 @@
 //! `Action`s from a data source (the D-13 seam).
 
 pub mod command;
+pub mod messages;
 pub mod sidebar;
 pub mod update;
 
@@ -59,6 +60,10 @@ pub struct App {
     pub folders: Vec<Folder>,
     pub messages: HashMap<RoomId, Vec<Message>>,
     pub current_room: Option<RoomId>,
+    /// Per-room message cursor and scroll position; a room with no entry shows its newest message.
+    pub msg_views: HashMap<RoomId, messages::MsgView>,
+    /// How messages are laid out (D-10); Compact until Phase 2 adds the config selector.
+    pub message_layout: crate::ui::wrap::MessageLayout,
     pub sidebar: sidebar::SidebarState,
     pub cmdline: String,
     pub status_msg: Option<StatusMsg>,
@@ -81,6 +86,8 @@ impl App {
             folders: Vec::new(),
             messages: HashMap::new(),
             current_room: None,
+            msg_views: HashMap::new(),
+            message_layout: crate::ui::wrap::MessageLayout::default(),
             sidebar: sidebar::SidebarState::default(),
             cmdline: String::new(),
             status_msg: None,

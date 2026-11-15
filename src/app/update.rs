@@ -124,8 +124,7 @@ fn dispatch(app: &mut App, outcome: Outcome) {
 fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     match app.focus {
         Focus::Sidebar => sidebar::apply_motion(app, motion, count),
-        // Routed to app::messages in plan 01-05.
-        Focus::Messages => {}
+        Focus::Messages => crate::app::messages::apply_motion(app, motion, count),
         // Routed to the input-buffer motions of D-18 in plan 01-06.
         Focus::Input => {}
     }
