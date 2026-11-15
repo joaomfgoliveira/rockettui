@@ -98,7 +98,7 @@ impl App {
             message_layout: crate::ui::wrap::MessageLayout::default(),
             sidebar: sidebar::SidebarState::default(),
             cmdline: String::new(),
-            input: input_buf::InputBuffer::default(),
+            input: input_buf::InputBuffer::new(),
             local_seq: 0,
             status_msg: None,
             keymap: default_keymap(),
@@ -116,9 +116,18 @@ impl App {
         app
     }
 
-    /// Rows the input bar occupies (plan 01-06 derives this from the input buffer).
+    /// Rows the input bar occupies: the draft's visual rows, from 1 up to `MAX_INPUT_ROWS`.
     pub fn input_rows(&self) -> u16 {
-        1
+        let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
+        // The input pane's width does not depend on its own height.
+        let width = crate::ui::layout::areas(area, 1)
+            .input
+            .width
+            .saturating_sub(2);
+        let rows = self.input.visual_row_count(width);
+        u16::try_from(rows)
+            .unwrap_or(u16::MAX)
+            .clamp(1, input_buf::MAX_INPUT_ROWS)
     }
 
     /// Inner (width, height) of the input pane, borders removed; shared by reducer and renderer.

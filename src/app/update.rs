@@ -125,9 +125,29 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     match app.focus {
         Focus::Sidebar => sidebar::apply_motion(app, motion, count),
         Focus::Messages => crate::app::messages::apply_motion(app, motion, count),
-        // Routed to the input-buffer motions of D-18 in plan 01-06.
-        Focus::Input => {}
+        Focus::Input => input_motion(app, motion, count),
     }
+}
+
+/// D-18: with the input bar focused, the Normal-mode motions move inside the draft. They never
+/// change the text, the mode, the focus, the current room or the sidebar selection. Select and
+/// ToggleFold do nothing in this pane (A25).
+fn input_motion(app: &mut App, motion: &Action, count: Option<u32>) {
+    let n = count.map_or(1, |c| c as usize);
+    let jump = count.map(|c| (c as usize).saturating_sub(1));
+    let (width, height) = app.input_viewport();
+    match motion {
+        Action::MoveLeft => app.input.left_in_line(n),
+        Action::MoveRight => app.input.right_in_line(n),
+        Action::MoveDown => app.input.move_line(i64::from(count.unwrap_or(1))),
+        Action::MoveUp => app.input.move_line(-i64::from(count.unwrap_or(1))),
+        Action::GotoTop => app.input.goto_line(jump.unwrap_or(0)),
+        Action::GotoBottom => app.input.goto_line(jump.unwrap_or(usize::MAX)),
+        Action::HalfPageDown => app.input.half_page(width, height, n, true),
+        Action::HalfPageUp => app.input.half_page(width, height, n, false),
+        _ => return,
+    }
+    app.input.settle(width, height);
 }
 
 #[cfg(test)]
