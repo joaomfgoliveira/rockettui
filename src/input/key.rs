@@ -156,6 +156,11 @@ fn parse_angle(token: &str) -> Result<Chord, ParseError> {
     Ok(Chord { code, mods })
 }
 
+/// Print chords in Vim notation: the canonical inverse of [`parse_keys`].
+pub fn format_keys(_chords: &[Chord]) -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +220,38 @@ mod tests {
         assert!(!format!("{parsed:?}").contains('Ж'));
         let enter = chord(KeyCode::Enter, KeyModifiers::NONE);
         assert!(format!("{enter:?}").contains("Enter"));
+    }
+
+    #[test]
+    fn format_round_trip() {
+        use crate::input::keymap::default_bindings;
+        for (_, row, _) in default_bindings() {
+            assert_eq!(format_keys(&parse_keys(row).unwrap()), row, "row {row}");
+        }
+        for row in [
+            "<lt>",
+            "<Space>",
+            "<S-Tab>",
+            "<A-CR>",
+            "<C-w>h",
+            "gg",
+            "G",
+            "<C-A-x>",
+            "<C-Space>",
+            "<S-Up>",
+            "<Esc>",
+            "<BS>",
+            "<Del>",
+            "<Home>",
+            "<End>",
+            "<PageUp>",
+            "<PageDown>",
+            "<Left><Right><Down>",
+            "5<Tab>",
+        ] {
+            assert_eq!(format_keys(&parse_keys(row).unwrap()), row, "row {row}");
+        }
+        assert_eq!(format_keys(&[]), "");
     }
 
     #[test]
