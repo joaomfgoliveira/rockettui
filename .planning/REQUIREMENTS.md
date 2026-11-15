@@ -28,10 +28,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Navigation
 
-- [ ] **NAV-01**: User can switch between Normal, Insert and Command modes, with the current mode shown
-- [ ] **NAV-02**: In Normal mode, `hjkl`, `gg`/`G` and `Ctrl-d`/`Ctrl-u` move and scroll
+- [x] **NAV-01**: User can switch between Normal, Insert and Command modes, with the current mode shown
+- [x] **NAV-02**: In Normal mode, `hjkl`, `gg`/`G` and `Ctrl-d`/`Ctrl-u` move and scroll
 - [ ] **NAV-03**: User can quit with `:q` in Command mode
-- [ ] **NAV-04**: Layout is sidebar (rooms) + messages + input bar
+- [x] **NAV-04**: Layout is sidebar (rooms) + messages + input bar
 
 ### Configuration
 
@@ -87,10 +87,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| NAV-01 | Phase 1 | Pending |
-| NAV-02 | Phase 1 | Pending |
+| NAV-01 | Phase 1 | Complete |
+| NAV-02 | Phase 1 | Complete |
 | NAV-03 | Phase 1 | Pending |
-| NAV-04 | Phase 1 | Pending |
+| NAV-04 | Phase 1 | Complete |
 | CONF-01 | Phase 2 | Pending |
 | CONF-02 | Phase 2 | Pending |
 | CONF-03 | Phase 2 | Pending |
