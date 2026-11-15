@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::app::{App, Focus, MAX_CMDLINE, Mode, command, sidebar};
 use crate::input::key::normalize;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crate::input::matcher::{MAX_COUNT, Outcome};
 use ratatui::layout::Size;
 
 pub fn update(app: &mut App, action: Action) {
@@ -13,16 +13,25 @@ pub fn update(app: &mut App, action: Action) {
         Action::Key(ev) => {
             app.status_msg = None;
             let chord = normalize(ev);
-            if let Some(bound) = app.keymap.lookup(app.mode, &[chord]).cloned() {
-                update(app, bound);
-            } else if app.mode != Mode::Normal
-                && let KeyCode::Char(c) = chord.code
-                && !chord
-                    .mods
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            {
-                // Text-entry fallback: unbound plain characters are typed.
-                update(app, Action::InsertChar(c));
+            let outcome = app.matcher.feed(app.keymap.trie(app.mode), app.mode, chord);
+            dispatch(app, outcome);
+        }
+        Action::KeyTimeout => {
+            let outcome = app.matcher.timeout(app.keymap.trie(app.mode));
+            dispatch(app, outcome);
+        }
+        Action::Counted(n, inner) => {
+            let n = n.min(MAX_COUNT);
+            if inner.is_motion() {
+                // Motions apply a count as one clamped jump, not n redraws.
+                apply_motion(app, &inner, Some(n));
+            } else {
+                for _ in 0..n {
+                    update(app, (*inner).clone());
+                    if app.should_quit {
+                        break;
+                    }
+                }
             }
         }
         Action::RoomsLoaded(rooms) => {
@@ -42,11 +51,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::Clock(secs) => {
             app.clock_secs = secs;
         }
-        Action::MoveDown | Action::MoveUp => {
-            if app.focus == Focus::Sidebar {
-                sidebar::apply_motion(app, &action, None);
-            }
-        }
+        Action::MoveDown | Action::MoveUp => apply_motion(app, &action, None),
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();
@@ -83,7 +88,33 @@ pub fn update(app: &mut App, action: Action) {
         Action::Quit => {
             app.should_quit = true;
         }
-        Action::KeyTimeout | Action::Counted(..) => {}
+    }
+}
+
+/// Turn what the matcher produced into reducer work.
+fn dispatch(app: &mut App, outcome: Outcome) {
+    match outcome {
+        Outcome::Fire {
+            action,
+            count: None,
+        } => update(app, action),
+        Outcome::Fire {
+            action,
+            count: Some(n),
+        } => update(app, Action::Counted(n, Box::new(action))),
+        Outcome::Text(c) => update(app, Action::InsertChar(c)),
+        Outcome::Pending | Outcome::Cancelled | Outcome::NoMatch => {}
+    }
+}
+
+/// The one router every Normal-mode motion goes through: it dispatches on the focused pane.
+fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
+    match app.focus {
+        Focus::Sidebar => sidebar::apply_motion(app, motion, count),
+        // Routed to app::messages in plan 01-05.
+        Focus::Messages => {}
+        // Routed to the input-buffer motions of D-18 in plan 01-06.
+        Focus::Input => {}
     }
 }
 
@@ -255,10 +286,7 @@ mod tests {
     #[test]
     fn counted_non_motion_repeats() {
         let mut app = app_80x24();
-        update(
-            &mut app,
-            Action::Counted(3, Box::new(Action::EnterCommand)),
-        );
+        update(&mut app, Action::Counted(3, Box::new(Action::EnterCommand)));
         assert_eq!(app.mode, Mode::Command);
     }
 

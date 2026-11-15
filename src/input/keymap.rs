@@ -5,34 +5,56 @@
 use crate::action::Action;
 use crate::app::Mode;
 use crate::input::key::{Chord, ParseError, parse_keys};
-use std::collections::HashMap;
+use crate::input::trie::{Lookup, Trie};
 
-/// Per-mode map from a chord sequence to the Action it fires.
+/// One key-sequence trie per mode. All three modes always exist, possibly empty.
 pub struct Keymap {
-    maps: HashMap<Mode, HashMap<Vec<Chord>, Action>>,
+    normal: Trie<Action>,
+    insert: Trie<Action>,
+    command: Trie<Action>,
 }
 
 impl Keymap {
     /// Build a keymap from `(mode, notation, action)` rows; a later row replaces an earlier one
     /// with the same mode and keys.
     pub fn from_bindings(rows: &[(Mode, &str, Action)]) -> Result<Keymap, ParseError> {
-        let mut maps: HashMap<Mode, HashMap<Vec<Chord>, Action>> = HashMap::new();
+        let mut keymap = Keymap {
+            normal: Trie::new(),
+            insert: Trie::new(),
+            command: Trie::new(),
+        };
         for (mode, notation, action) in rows {
             let chords = parse_keys(notation)?;
-            maps.entry(*mode)
-                .or_default()
-                .insert(chords, action.clone());
+            keymap.trie_mut(*mode).insert(&chords, action.clone());
         }
-        Ok(Keymap { maps })
+        Ok(keymap)
     }
 
-    /// The Action bound to exactly `seq` in `mode`, if any.
-    pub fn lookup(&self, mode: Mode, seq: &[Chord]) -> Option<&Action> {
-        self.maps.get(&mode)?.get(seq)
+    fn trie_mut(&mut self, mode: Mode) -> &mut Trie<Action> {
+        match mode {
+            Mode::Normal => &mut self.normal,
+            Mode::Insert => &mut self.insert,
+            Mode::Command => &mut self.command,
+        }
+    }
+
+    /// The whole trie of `mode`, as the matcher consumes it.
+    pub fn trie(&self, mode: Mode) -> &Trie<Action> {
+        match mode {
+            Mode::Normal => &self.normal,
+            Mode::Insert => &self.insert,
+            Mode::Command => &self.command,
+        }
+    }
+
+    /// What `seq` resolves to in `mode`.
+    pub fn lookup(&self, mode: Mode, seq: &[Chord]) -> Lookup<'_, Action> {
+        self.trie(mode).lookup(seq)
     }
 }
 
-/// The built-in default bindings.
+/// The built-in default bindings. `<C-i>` and `<C-m>` are never bound: legacy terminals send them
+/// as Tab and Enter.
 pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
     vec![
         (Mode::Normal, "j", Action::MoveDown),
@@ -62,7 +84,10 @@ mod tests {
         let keymap = Keymap::from_bindings(&rows).expect("default bindings parse");
         for (mode, notation, action) in &rows {
             let chords = parse_keys(notation).unwrap();
-            assert!(keymap.lookup(*mode, &chords) == Some(action), "{notation}");
+            assert!(
+                matches!(keymap.lookup(*mode, &chords), Lookup::Exact(bound) if bound == action),
+                "{notation}"
+            );
         }
     }
 }
