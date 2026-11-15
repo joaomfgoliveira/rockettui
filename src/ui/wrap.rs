@@ -2,7 +2,12 @@
 //! and the renderer (drawing) can never disagree about a message's height.
 
 use crate::data::Message;
-use ratatui::text::Line;
+use crate::ui::messages::hhmm;
+use crate::ui::sanitize::{sanitize, sanitize_line};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use std::borrow::Cow;
+use unicode_width::UnicodeWidthStr;
 
 /// How a message is laid out (D-10). Compact is the built-in default; the config.toml selector
 /// arrives in Phase 2.
@@ -20,18 +25,69 @@ pub const MIN_BODY: usize = 10;
 
 /// Wrap `text` to `width` display columns. Sanitized first, so width math matches what is drawn.
 /// Always returns at least one row.
-pub fn wrap_body(_text: &str, _width: usize) -> Vec<String> {
-    Vec::new()
+pub fn wrap_body(text: &str, width: usize) -> Vec<String> {
+    let clean = sanitize(text);
+    let mut rows: Vec<String> = textwrap::wrap(&clean, width.max(1))
+        .into_iter()
+        .map(Cow::into_owned)
+        .collect();
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
 }
 
 /// The styled rows of one message at `width` columns in the given layout.
-pub fn render_rows(_msg: &Message, _width: u16, _layout: MessageLayout) -> Vec<Line<'static>> {
-    Vec::new()
+pub fn render_rows(msg: &Message, width: u16, layout: MessageLayout) -> Vec<Line<'static>> {
+    let time = hhmm(msg.ts);
+    let author = sanitize_line(&msg.author).into_owned();
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let width = usize::from(width);
+    match layout {
+        MessageLayout::Compact => {
+            let prefix_width = time.width() + 1 + author.width() + 2;
+            let body_width = width.saturating_sub(prefix_width).max(MIN_BODY);
+            let indent = " ".repeat(prefix_width);
+            wrap_body(&msg.body, body_width)
+                .into_iter()
+                .enumerate()
+                .map(|(i, row)| {
+                    if i == 0 {
+                        Line::from(vec![
+                            Span::styled(time.clone(), dim),
+                            Span::raw(" "),
+                            Span::styled(author.clone(), bold),
+                            Span::raw("  "),
+                            Span::raw(row),
+                        ])
+                    } else {
+                        Line::from(vec![Span::raw(indent.clone()), Span::raw(row)])
+                    }
+                })
+                .collect()
+        }
+        MessageLayout::TwoLine => {
+            let body_width = width.saturating_sub(2).max(MIN_BODY);
+            let header = Line::from(vec![
+                Span::styled(author, bold),
+                Span::raw("  "),
+                Span::styled(time, dim),
+            ]);
+            std::iter::once(header)
+                .chain(
+                    wrap_body(&msg.body, body_width)
+                        .into_iter()
+                        .map(|row| Line::from(vec![Span::raw("  "), Span::raw(row)])),
+                )
+                .collect()
+        }
+    }
 }
 
 /// Number of rows `render_rows` produces for this message.
-pub fn message_rows(_msg: &Message, _width: u16, _layout: MessageLayout) -> usize {
-    0
+pub fn message_rows(msg: &Message, width: u16, layout: MessageLayout) -> usize {
+    render_rows(msg, width, layout).len()
 }
 
 #[cfg(test)]
@@ -39,7 +95,6 @@ mod tests {
     use super::*;
     use crate::action::Action;
     use crate::data::{RoomId, fake};
-    use unicode_width::UnicodeWidthStr;
 
     fn msg(author: &str, body: &str) -> Message {
         Message {
@@ -135,7 +190,10 @@ mod tests {
         assert_eq!(wrap_body("", 20), vec![String::new()]);
         let rows = render_rows(&msg("alice", ""), 40, MessageLayout::Compact);
         assert_eq!(rows.len(), 1);
-        assert_eq!(message_rows(&msg("alice", ""), 40, MessageLayout::Compact), 1);
+        assert_eq!(
+            message_rows(&msg("alice", ""), 40, MessageLayout::Compact),
+            1
+        );
     }
 
     #[test]
@@ -154,7 +212,11 @@ mod tests {
     #[test]
     fn two_line_layout() {
         let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
-        let rows = texts(&render_rows(&msg("alice", body), 30, MessageLayout::TwoLine));
+        let rows = texts(&render_rows(
+            &msg("alice", body),
+            30,
+            MessageLayout::TwoLine,
+        ));
         assert_eq!(rows[0], "alice  00:00");
         assert!(rows.len() > 2, "{rows:?}");
         for row in &rows[1..] {
