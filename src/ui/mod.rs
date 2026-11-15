@@ -3,6 +3,7 @@
 pub mod input;
 pub mod layout;
 pub mod messages;
+pub mod sanitize;
 pub mod sidebar;
 pub mod status;
 
@@ -45,6 +46,49 @@ mod tests {
         for needle in ["Rooms", "NORMAL", "Input", "general"] {
             assert!(out.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn hostile_text_is_sanitized_in_render() {
+        use crate::data::{Message, RoomId};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app_80x24();
+        app.rooms[0].name = "\u{1b}]0;pwn\u{7}evil\u{202e}name".to_string();
+        let id = app.rooms[0].id.clone();
+        app.current_room = Some(id.clone());
+        app.messages.entry(id.clone()).or_default().insert(
+            0,
+            Message {
+                id: "hostile-0".to_string(),
+                room_id: RoomId(id.0.clone()),
+                author: "\u{202e}mallory".to_string(),
+                ts: 0,
+                body: "\u{1b}[2Jclear\u{9b}31m\ttab".to_string(),
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+        terminal.draw(|f| super::view(f, &app)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..24 {
+            for x in 0..80 {
+                let symbol = buffer[(x, y)].symbol();
+                for c in symbol.chars() {
+                    assert!(!c.is_control(), "control char {:?} at {x},{y}", c as u32);
+                    assert!(
+                        !matches!(c as u32,
+                            0x61c | 0x200b | 0x200e | 0x200f | 0x202a..=0x202e
+                            | 0x2060 | 0x2066..=0x2069 | 0xfeff | 0xe0000..=0xe007f),
+                        "spoofing char U+{:04X} at {x},{y}",
+                        c as u32
+                    );
+                }
+                text.push_str(symbol);
+            }
+        }
+        assert!(text.contains("evilname"), "room name not visible");
     }
 
     #[test]
