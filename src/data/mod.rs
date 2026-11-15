@@ -43,7 +43,7 @@ pub struct Folder {
     pub room_ids: Vec<RoomId>,
 }
 
-/// One chat message. It has no derived `Debug`: bodies are never printed.
+/// One chat message. Its `Debug` is written by hand and prints no body or author text.
 #[derive(Clone, PartialEq)]
 pub struct Message {
     pub id: String,
@@ -52,4 +52,36 @@ pub struct Message {
     /// Unix seconds.
     pub ts: i64,
     pub body: String,
+}
+
+/// Redacting `Debug` (T-01-03): only the id, the room id and the body length.
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Message")
+            .field("id", &self.id)
+            .field("room_id", &self.room_id)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts() {
+        let message = Message {
+            id: "general-000".to_string(),
+            room_id: RoomId("general".to_string()),
+            author: "SENTINEL-AUTHOR-2b9d".to_string(),
+            ts: 0,
+            body: "SENTINEL-BODY-7f3a".to_string(),
+        };
+        let shown = format!("{message:?}");
+        assert!(!shown.contains("SENTINEL-BODY-7f3a"));
+        assert!(!shown.contains("SENTINEL-AUTHOR-2b9d"));
+        assert!(shown.contains("general-000"));
+        assert!(shown.contains("general"));
+    }
 }

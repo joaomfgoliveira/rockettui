@@ -12,6 +12,17 @@ pub struct Chord {
     pub mods: KeyModifiers,
 }
 
+/// Redacting `Debug` (T-01-03): a `Char` code is typed text and prints as `Char(..)`; every other
+/// code (Enter, Esc, Tab, arrows and the other named keys) is not typed text and prints as is.
+impl fmt::Debug for Chord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.code {
+            KeyCode::Char(_) => write!(f, "Chord(Char(..), {:?})", self.mods),
+            other => write!(f, "Chord({:?}, {:?})", other, self.mods),
+        }
+    }
+}
+
 /// Turn a live key event into the canonical chord used for keymap lookups.
 ///
 /// Keeps only CONTROL, ALT and SHIFT; drops SHIFT on `Char` codes (the case is in the char);
@@ -93,31 +104,55 @@ pub fn parse_keys(s: &str) -> Result<Vec<Chord>, ParseError> {
     Ok(chords)
 }
 
-/// Parse the inside of an angle token: optional `C-` modifier then a key name.
+/// Parse the inside of an angle token: optional `C-`, `A-`, `M-`, `S-` modifiers then a key name.
+///
+/// The result is already in the canonical form `normalize` produces for the same live key:
+/// SHIFT is folded into the char of a `Char` key, and CONTROL lowercases it.
 fn parse_angle(token: &str) -> Result<Chord, ParseError> {
     let mut mods = KeyModifiers::NONE;
     let mut rest = token;
+    // A modifier prefix is one ASCII letter, a dash and a non-empty remainder (`<C-->` is Ctrl and `-`).
     while rest.len() > 2 && rest.as_bytes()[1] == b'-' {
         match rest[..1].to_ascii_lowercase().as_str() {
             "c" => mods |= KeyModifiers::CONTROL,
+            "a" | "m" => mods |= KeyModifiers::ALT,
+            "s" => mods |= KeyModifiers::SHIFT,
             _ => return Err(ParseError::UnknownModifier(rest[..1].to_string())),
         }
         rest = &rest[2..];
     }
-    let code = match rest.to_ascii_lowercase().as_str() {
+    let mut code = match rest.to_ascii_lowercase().as_str() {
         "esc" => KeyCode::Esc,
-        "cr" => KeyCode::Enter,
+        "cr" | "enter" => KeyCode::Enter,
+        "tab" => KeyCode::Tab,
         "bs" => KeyCode::Backspace,
-        _ if rest.chars().count() == 1 => {
-            let c = rest.chars().next().unwrap_or(' ');
-            if mods.contains(KeyModifiers::CONTROL) {
-                KeyCode::Char(c.to_ascii_lowercase())
-            } else {
-                KeyCode::Char(c)
+        "del" => KeyCode::Delete,
+        "space" => KeyCode::Char(' '),
+        "lt" => KeyCode::Char('<'),
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        _ => {
+            let mut chars = rest.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => KeyCode::Char(c),
+                _ => return Err(ParseError::UnknownKey(rest.to_string())),
             }
         }
-        _ => return Err(ParseError::UnknownKey(rest.to_string())),
     };
+    if let KeyCode::Char(c) = code {
+        if mods.contains(KeyModifiers::CONTROL) {
+            code = KeyCode::Char(c.to_ascii_lowercase());
+        } else if mods.contains(KeyModifiers::SHIFT) {
+            code = KeyCode::Char(c.to_ascii_uppercase());
+        }
+        mods.remove(KeyModifiers::SHIFT);
+    }
     Ok(Chord { code, mods })
 }
 
@@ -167,6 +202,19 @@ mod tests {
             assert_eq!(parse_keys(one).unwrap().len(), 1, "{one}");
         }
         assert!(parse_keys("<esc>").unwrap() == parse_keys("<Esc>").unwrap());
+    }
+
+    #[test]
+    fn debug_redacts_typed_char() {
+        let plain = chord(KeyCode::Char('Ж'), KeyModifiers::NONE);
+        let ctrl = chord(KeyCode::Char('Ж'), KeyModifiers::CONTROL);
+        assert!(!format!("{plain:?}").contains('Ж'));
+        assert!(!format!("{ctrl:?}").contains('Ж'));
+        assert!(format!("{ctrl:?}").contains("CONTROL"));
+        let parsed = parse_keys("Ж").unwrap();
+        assert!(!format!("{parsed:?}").contains('Ж'));
+        let enter = chord(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(format!("{enter:?}").contains("Enter"));
     }
 
     #[test]
