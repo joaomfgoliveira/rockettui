@@ -72,6 +72,36 @@ mod tests {
     }
 
     #[test]
+    fn palette_avoids_clashes() {
+        for (i, a) in AUTHOR_PALETTE.iter().enumerate() {
+            for b in &AUTHOR_PALETTE[i + 1..] {
+                assert_ne!(a, b, "duplicate palette entry");
+            }
+        }
+        let banned = [
+            Color::Reset,
+            Color::Black,
+            Color::White,
+            Color::Gray,
+            Color::DarkGray,
+            Color::Red,
+            Color::LightRed,
+            Color::Blue,
+            Color::LightGreen,
+            Color::LightCyan,
+            Color::LightYellow,
+        ];
+        for color in AUTHOR_PALETTE {
+            assert!(!banned.contains(&color), "{color:?} is excluded");
+            assert!(!matches!(color, Color::Rgb(..) | Color::Indexed(_)));
+        }
+        for i in 0..1000 {
+            let color = author_color(&format!("user{i}"));
+            assert!(AUTHOR_PALETTE.contains(&color), "{color:?}");
+        }
+    }
+
+    #[test]
     fn empty_author_is_a_palette_entry() {
         assert!(AUTHOR_PALETTE.contains(&author_color("")));
     }

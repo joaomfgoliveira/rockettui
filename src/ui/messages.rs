@@ -235,6 +235,25 @@ mod tests {
     }
 
     #[test]
+    fn author_color_survives_cursor_highlight() {
+        use crate::ui::palette::author_color;
+        let mut app = app_80x24();
+        app.open_room(general());
+        press(&mut app, "gg");
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let name: String = (7..=11u16).map(|x| buffer[(x, 1)].symbol()).collect();
+        let name = name.trim().to_string();
+        assert_eq!(buffer[(7, 1)].fg, author_color(&name));
+        assert!(buffer[(7, 1)].modifier.contains(Modifier::REVERSED));
+        press(&mut app, "<C-w>h");
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(7, 1)].fg, author_color(&name));
+        assert_eq!(buffer[(7, 1)].bg, Color::DarkGray);
+    }
+
+    #[test]
     fn cursor_row_not_reversed_when_unfocused() {
         let mut app = app_80x24();
         app.open_room(general());
