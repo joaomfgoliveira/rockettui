@@ -3,6 +3,7 @@
 
 use crate::data::Message;
 use crate::ui::messages::hhmm;
+use crate::ui::palette::author_color;
 use crate::ui::sanitize::{sanitize, sanitize_line};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -15,7 +16,8 @@ use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageLayout {
     /// `HH:MM author  text`. The author is padded to the room's shared author column, so every
-    /// body starts at the same x, and continuation rows hang under the body.
+    /// body starts at the same x, and continuation rows hang under the body. The author name is
+    /// bold and colored by `palette::author_color`.
     #[default]
     Compact,
     /// An `author  HH:MM` header row, then the body indented by 2.
@@ -82,6 +84,10 @@ pub fn author_column(msgs: &[Message]) -> usize {
 /// it so all bodies start at the same x; TwoLine ignores it, because its body already sits at a
 /// shared column 2 (and its header keeps the full-length author).
 ///
+/// In both layouts the author name, and only the name, is bold and colored by
+/// `palette::author_color`, keyed on the full sanitized name, so truncation never changes a
+/// user's color.
+///
 /// Compact caps the column at `width - (5 + 1 + 2 + MIN_BODY)` (saturating), so the body keeps at
 /// least `MIN_BODY` columns. An author wider than the capped column is cut on a grapheme boundary
 /// and ends in an ellipsis. Below an inner width of 19 the column is 0 and the author is omitted;
@@ -97,6 +103,9 @@ pub fn render_rows(
     let author = sanitize_line(&msg.author).into_owned();
     let dim = Style::new().add_modifier(Modifier::DIM);
     let bold = Style::new().add_modifier(Modifier::BOLD);
+    // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
+    // at every width.
+    let name = bold.fg(author_color(&author));
     let width = usize::from(width);
     match layout {
         MessageLayout::Compact => {
@@ -114,7 +123,7 @@ pub fn render_rows(
                         Line::from(vec![
                             Span::styled(time.clone(), dim),
                             Span::raw(" "),
-                            Span::styled(author.clone(), bold),
+                            Span::styled(author.clone(), name),
                             Span::raw(pad.clone()),
                             Span::raw(row),
                         ])
@@ -127,7 +136,7 @@ pub fn render_rows(
         MessageLayout::TwoLine => {
             let body_width = width.saturating_sub(2).max(MIN_BODY);
             let header = Line::from(vec![
-                Span::styled(author, bold),
+                Span::styled(author, name),
                 Span::raw("  "),
                 Span::styled(time, dim),
             ]);
@@ -152,6 +161,7 @@ mod tests {
     use super::*;
     use crate::action::Action;
     use crate::data::{RoomId, fake};
+    use crate::ui::palette::author_color;
 
     fn msg(author: &str, body: &str) -> Message {
         Message {
@@ -187,6 +197,62 @@ mod tests {
     /// The author column a room holding only `m` would have.
     fn solo(m: &Message) -> usize {
         author_column(std::slice::from_ref(m))
+    }
+
+    #[test]
+    fn compact_author_colored() {
+        let rows = render_rows(&msg("bob", "hi"), 60, MessageLayout::Compact, 5);
+        assert_eq!(texts(&rows), vec!["00:00 bob    hi".to_string()]);
+        let spans = &rows[0].spans;
+        assert_eq!(spans[2].content, "bob");
+        assert_eq!(spans[2].style.fg, Some(author_color("bob")));
+        assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[3].style, Style::default());
+        assert_eq!(spans[4].style, Style::default());
+        assert_eq!(spans[0].style.fg, None);
+        assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn two_line_author_colored() {
+        let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
+        let rows = render_rows(&msg("alice", body), 30, MessageLayout::TwoLine, 0);
+        assert_eq!(text(&rows[0]), "alice  00:00");
+        let spans = &rows[0].spans;
+        assert_eq!(spans[0].style.fg, Some(author_color("alice")));
+        assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[1].style, Style::default());
+        assert_eq!(spans[2].style.fg, None);
+        for row in &rows[1..] {
+            for span in &row.spans {
+                assert_eq!(span.style.fg, None);
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_author_keeps_full_name_color() {
+        let rows = render_rows(&msg(LONG, "x"), 30, MessageLayout::Compact, 29);
+        let span = &rows[0].spans[2];
+        assert_eq!(span.content, "firstname.l\u{2026}");
+        assert_eq!(span.style.fg, Some(author_color(LONG)));
+        assert_ne!(author_color(LONG), author_color("firstname.l\u{2026}"));
+    }
+
+    #[test]
+    fn hostile_author_colored_by_sanitized_name() {
+        let hostile = msg("\u{202e}mallory\u{1b}", "x");
+        let rows = render_rows(&hostile, 60, MessageLayout::Compact, solo(&hostile));
+        let span = &rows[0].spans[2];
+        assert_eq!(span.content, "mallory");
+        assert_eq!(span.style.fg, Some(author_color("mallory")));
+        let plain = msg("mallory", "x");
+        let plain_rows = render_rows(&plain, 60, MessageLayout::Compact, solo(&plain));
+        assert_eq!(span.style.fg, plain_rows[0].spans[2].style.fg);
+        assert_ne!(
+            author_color("mallory"),
+            author_color("\u{202e}mallory\u{1b}")
+        );
     }
 
     #[test]
