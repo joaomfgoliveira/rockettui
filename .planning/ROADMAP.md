@@ -10,7 +10,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Modal TUI Shell** - Navigable sidebar + messages + input layout with fake rooms and vim modes
+- [x] **Phase 1: Modal TUI Shell** - Navigable sidebar + messages + input layout with fake rooms and vim modes (completed 2026-11-15)
 - [ ] **Phase 2: Configuration System** - Config, keymap and theme files with presets and defaults
 - [ ] **Phase 3: Connect & Read** - Token login, real room list and message history from a local server
 - [ ] **Phase 4: Send Messages** - Compose and send messages from Insert mode
@@ -30,7 +30,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
   3. Current mode is visible and user can switch between Normal, Insert and Command
   4. User quits with `:q`
 **UI hint**: yes
-**Plans:** 6/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 **Wave 1**
@@ -61,7 +61,21 @@ Plans:
   4. User sets sidebar width, timestamp format and history size in `config.toml`
   5. A malformed config entry shows a clear error instead of a crash
 **UI hint**: yes
-**Plans**: TBD
+**Plans:** 5 plans
+
+Plans:
+**Wave 1**
+- [ ] 02-01-PLAN.md — Config pipeline tracer: XDG loading, config.toml validation (D-12/D-13), one-pass multi-file problem report, refuse-to-start error screen (exit 1), message_layout end to end, isolated smoke harness (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 02-02-PLAN.md — config.toml consumers: sidebar_width in layout and reducer geometry, chrono timestamp_format with shared RowCtx, key_timeout_ms in the run loop, local time in the binary (wave 2, parallel with 02-03)
+- [ ] 02-03-PLAN.md — keymap.toml: curated action names, vim / vim-extras presets, none unbinding, cmd: bindings, duplicate / prefix-clash / lockout checks (wave 2, parallel with 02-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 02-04-PLAN.md — theme.toml core and pane chrome: D-08 colors, D-09 element tables for sidebar / status / cmdline / input, border styles and types, validated markers (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 02-05-PLAN.md — Messages pane theme and themeable author palette (D-10); every element path themeable (wave 4)
 
 ### Phase 3: Connect & Read
 **Goal**: User authenticates with a PAT and reads real rooms and history from a local Docker Rocket.Chat
@@ -113,8 +127,8 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Modal TUI Shell | 6/6 | In Progress | - |
-| 2. Configuration System | 0/TBD | Not started | - |
+| 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
+| 2. Configuration System | 0/5 | Planned | - |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
