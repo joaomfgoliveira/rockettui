@@ -24,6 +24,10 @@ pub enum Action {
     FocusLeft,
     FocusDown,
     FocusRight,
+    /// Cycle focus forward: Sidebar, Messages, Input, Sidebar (vim-extras `<Tab>`, D-14).
+    FocusNext,
+    /// Cycle focus backward (vim-extras `<S-Tab>`, D-14).
+    FocusPrev,
     EnterCommand,
     Cancel,
     /// Enter Insert mode on the input bar (`i`, `a`, `o`).
@@ -43,6 +47,9 @@ pub enum Action {
     SubmitInput,
     ExecuteCommand,
     Quit,
+    /// A `:` command line bound in keymap.toml as `cmd:<command>`; produced only by the keymap.
+    /// The text is user configuration, so `Debug` never prints it (T-02-12).
+    RunCommand(String),
     /// A raw key event, resolved through the keymap by the reducer.
     Key(KeyEvent),
     Resize(u16, u16),
@@ -95,6 +102,8 @@ impl std::fmt::Debug for Action {
             Action::FocusLeft => write!(f, "FocusLeft"),
             Action::FocusDown => write!(f, "FocusDown"),
             Action::FocusRight => write!(f, "FocusRight"),
+            Action::FocusNext => write!(f, "FocusNext"),
+            Action::FocusPrev => write!(f, "FocusPrev"),
             Action::EnterCommand => write!(f, "EnterCommand"),
             Action::Cancel => write!(f, "Cancel"),
             Action::EnterInsert => write!(f, "EnterInsert"),
@@ -112,6 +121,7 @@ impl std::fmt::Debug for Action {
             Action::SubmitInput => write!(f, "SubmitInput"),
             Action::ExecuteCommand => write!(f, "ExecuteCommand"),
             Action::Quit => write!(f, "Quit"),
+            Action::RunCommand(_) => write!(f, "RunCommand(..)"),
             Action::Key(_) => write!(f, "Key(..)"),
             Action::Resize(w, h) => write!(f, "Resize({w}, {h})"),
             Action::Clock(secs) => write!(f, "Clock({secs})"),
@@ -168,5 +178,9 @@ mod tests {
         assert!(loaded.contains('1'));
 
         assert!(format!("{:?}", Action::Clock(42)).contains("42"));
+
+        let run = format!("{:?}", Action::RunCommand("SENTINEL-CMD-5e2a".to_string()));
+        assert!(!run.contains("SENTINEL-CMD-5e2a"));
+        assert_eq!(run, "RunCommand(..)");
     }
 }

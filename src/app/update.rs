@@ -70,6 +70,21 @@ pub fn update(app: &mut App, action: Action) {
         Action::FocusLeft => app.focus = Focus::Sidebar,
         Action::FocusRight => app.focus = Focus::Messages,
         Action::FocusDown => app.focus = Focus::Input,
+        // Like the absolute targets above, the cycle acts in any mode it is bound in (A28).
+        Action::FocusNext => {
+            app.focus = match app.focus {
+                Focus::Sidebar => Focus::Messages,
+                Focus::Messages => Focus::Input,
+                Focus::Input => Focus::Sidebar,
+            }
+        }
+        Action::FocusPrev => {
+            app.focus = match app.focus {
+                Focus::Sidebar => Focus::Input,
+                Focus::Messages => Focus::Sidebar,
+                Focus::Input => Focus::Messages,
+            }
+        }
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();
@@ -146,6 +161,8 @@ pub fn update(app: &mut App, action: Action) {
         Action::Quit => {
             app.should_quit = true;
         }
+        // A `cmd:<command>` binding: runs exactly as typing `:<command><CR>` would.
+        Action::RunCommand(line) => command::execute(app, &line),
     }
 }
 
@@ -746,5 +763,38 @@ mod tests {
         press(&mut app, "<BS><BS>");
         assert_eq!(app.mode, Mode::Normal);
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn focus_cycle() {
+        let mut app = app_80x24();
+        assert_eq!(app.focus, Focus::Sidebar);
+        update(&mut app, Action::FocusNext);
+        assert_eq!(app.focus, Focus::Messages);
+        update(&mut app, Action::FocusNext);
+        assert_eq!(app.focus, Focus::Input);
+        update(&mut app, Action::FocusNext);
+        assert_eq!(app.focus, Focus::Sidebar);
+        update(&mut app, Action::FocusPrev);
+        assert_eq!(app.focus, Focus::Input);
+        update(&mut app, Action::FocusPrev);
+        assert_eq!(app.focus, Focus::Messages);
+        update(&mut app, Action::FocusPrev);
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn run_command_executes() {
+        let mut app = app_80x24();
+        update(&mut app, Action::RunCommand("quit".to_string()));
+        assert!(app.should_quit);
+
+        let mut app = app_80x24();
+        update(&mut app, Action::RunCommand("bogus".to_string()));
+        assert!(!app.should_quit);
+        assert!(matches!(
+            &app.status_msg,
+            Some(crate::app::StatusMsg::Error(msg)) if msg == "Unknown command: bogus"
+        ));
     }
 }

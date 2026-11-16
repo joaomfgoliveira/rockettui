@@ -22,6 +22,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "focus_left",
     "focus_down",
     "focus_right",
+    "focus_next",
+    "focus_prev",
     "enter_command",
     "enter_insert",
     "cancel",
@@ -56,6 +58,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "focus_left" => Action::FocusLeft,
         "focus_down" => Action::FocusDown,
         "focus_right" => Action::FocusRight,
+        "focus_next" => Action::FocusNext,
+        "focus_prev" => Action::FocusPrev,
         "enter_command" => Action::EnterCommand,
         "enter_insert" => Action::EnterInsert,
         "cancel" => Action::Cancel,
@@ -93,6 +97,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::FocusLeft => Some("focus_left"),
         Action::FocusDown => Some("focus_down"),
         Action::FocusRight => Some("focus_right"),
+        Action::FocusNext => Some("focus_next"),
+        Action::FocusPrev => Some("focus_prev"),
         Action::EnterCommand => Some("enter_command"),
         Action::EnterInsert => Some("enter_insert"),
         Action::Cancel => Some("cancel"),
@@ -109,7 +115,9 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::SubmitInput => Some("submit_input"),
         Action::ExecuteCommand => Some("execute_command"),
         Action::Quit => Some("quit"),
-        Action::InsertChar(_)
+        // `cmd:<command>` is a form of the value, not a name of its own.
+        Action::RunCommand(_)
+        | Action::InsertChar(_)
         | Action::Key(_)
         | Action::Resize(..)
         | Action::Clock(_)
@@ -147,6 +155,7 @@ mod tests {
             Action::Resize(1, 1),
             Action::Clock(0),
             Action::Paste("p".to_string()),
+            Action::RunCommand("quit".to_string()),
             Action::KeyTimeout,
             Action::Counted(2, Box::new(Action::MoveDown)),
         ] {

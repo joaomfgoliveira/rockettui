@@ -100,6 +100,15 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
     ]
 }
 
+/// The `vim-extras` preset: [`default_bindings`] plus Tab and Shift-Tab pane focus cycling in
+/// Normal mode (D-14). Nothing else is added; Ctrl-k room switching stays deferred.
+pub fn vim_extras_bindings() -> Vec<(Mode, &'static str, Action)> {
+    let mut rows = default_bindings();
+    rows.push((Mode::Normal, "<Tab>", Action::FocusNext));
+    rows.push((Mode::Normal, "<S-Tab>", Action::FocusPrev));
+    rows
+}
+
 /// The keymap built from [`default_bindings`].
 pub fn default_keymap() -> Keymap {
     Keymap::from_bindings(&default_bindings()).expect("built-in keymap parses")
@@ -120,6 +129,35 @@ mod tests {
                 "{notation}"
             );
         }
+    }
+
+    #[test]
+    fn vim_extras_parses() {
+        let rows = vim_extras_bindings();
+        let keymap = Keymap::from_bindings(&rows).expect("vim-extras bindings parse");
+        for (mode, notation, action) in &rows {
+            let chords = parse_keys(notation).unwrap();
+            assert!(
+                matches!(keymap.lookup(*mode, &chords), Lookup::Exact(bound) if bound == action),
+                "{notation}"
+            );
+        }
+    }
+
+    #[test]
+    fn vim_extras_adds_only_tab_rows() {
+        let base = default_bindings();
+        let extras = vim_extras_bindings();
+        assert_eq!(extras.len(), base.len() + 2);
+        assert!(extras[..base.len()] == base[..]);
+        assert!(matches!(
+            extras[base.len()],
+            (Mode::Normal, "<Tab>", Action::FocusNext)
+        ));
+        assert!(matches!(
+            extras[base.len() + 1],
+            (Mode::Normal, "<S-Tab>", Action::FocusPrev)
+        ));
     }
 
     #[test]

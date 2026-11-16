@@ -8,9 +8,10 @@ use super::diag::{ConfigFile, Problem, Reader, parse_table};
 use super::settings::KeymapPreset;
 use crate::action::Action;
 use crate::app::Mode;
+use crate::app::command::COMMANDS;
 use crate::input::actions::action_from_name;
 use crate::input::key::parse_keys;
-use crate::input::keymap::{Keymap, default_bindings, default_keymap};
+use crate::input::keymap::{Keymap, default_bindings, default_keymap, vim_extras_bindings};
 use toml::Spanned;
 use toml::de::DeValue;
 
@@ -45,9 +46,30 @@ fn key_path(table: &str, notation: &str) -> String {
     format!("{table}.\"{}\"", cap(notation))
 }
 
-/// The rows of the chosen preset.
-fn preset_rows(_preset: KeymapPreset) -> Vec<(Mode, &'static str, Action)> {
-    default_bindings()
+/// The rows of the chosen preset (D-14): `vim` is the Phase 1 defaults, `vim-extras` adds Tab and
+/// Shift-Tab pane focus cycling.
+fn preset_rows(preset: KeymapPreset) -> Vec<(Mode, &'static str, Action)> {
+    match preset {
+        KeymapPreset::Vim => default_bindings(),
+        KeymapPreset::VimExtras => vim_extras_bindings(),
+    }
+}
+
+/// The action a value stands for: a curated name, or `cmd:<command>` (D-07). A `cmd:` command
+/// must exist in the in-app command table, so a typo fails at load and not at the key press (A5).
+fn resolve_value(text: &str) -> Result<Action, String> {
+    let Some(rest) = text.strip_prefix("cmd:") else {
+        return action_from_name(text).ok_or_else(|| format!("unknown action '{}'", cap(text)));
+    };
+    let line = rest.trim();
+    let Some(name) = line.split_whitespace().next() else {
+        return Err("empty command after cmd:".to_string());
+    };
+    if COMMANDS.iter().any(|def| def.names.contains(&name)) {
+        Ok(Action::RunCommand(line.to_string()))
+    } else {
+        Err(format!("unknown command '{}'", cap(name)))
+    }
 }
 
 /// Build the keymap: the preset, then the user's rows on top. Every problem goes to `out`; when
@@ -136,17 +158,13 @@ fn read_mode_table(
             );
             continue;
         };
-        match action_from_name(text) {
-            Some(action) => rows.push(UserRow {
+        match resolve_value(text) {
+            Ok(action) => rows.push(UserRow {
                 mode,
                 notation,
                 action,
             }),
-            None => reader.error(
-                entry.span().start,
-                &path,
-                format!("unknown action '{}'", cap(text)),
-            ),
+            Err(message) => reader.error(entry.span().start, &path, message),
         }
     }
 }
@@ -162,8 +180,9 @@ mod tests {
     use crate::config::diag::Severity;
     use crate::config::{Config, Sources, load_from_sources};
     use crate::input::key::parse_keys;
+    use crate::input::keymap::default_bindings;
     use crate::input::trie::Lookup;
-    use crate::test_util::{app_with_config, press};
+    use crate::test_util::{app_with_config, press, render_to_string};
 
     fn load(keymap: &str) -> Result<Config, crate::config::Report> {
         load_from_sources(&Sources {
@@ -259,5 +278,98 @@ mod tests {
         let keymap = build(KeymapPreset::Vim, Some("[normal\n"), &mut out);
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "exact");
         assert!(!out.is_empty());
+    }
+
+    fn with_preset(preset: &str, keymap: Option<&str>) -> Config {
+        let sources = Sources {
+            config: Some(format!("keymap_preset = \"{preset}\"\n")),
+            keymap: keymap.map(str::to_string),
+            ..Sources::default()
+        };
+        match load_from_sources(&sources) {
+            Ok(config) => config,
+            Err(report) => panic!("expected Ok, got {report}"),
+        }
+    }
+
+    #[test]
+    fn preset_vim_equals_default() {
+        let config = with_preset("vim", None);
+        for (mode, notation, action) in default_bindings() {
+            let chords = parse_keys(notation).unwrap();
+            assert!(
+                matches!(config.keymap.lookup(mode, &chords), Lookup::Exact(a) if *a == action),
+                "{notation}"
+            );
+        }
+        assert_eq!(lookup_kind(&config.keymap, Mode::Normal, "<Tab>"), "none");
+    }
+
+    #[test]
+    fn preset_vim_extras_adds_tab() {
+        let config = with_preset("vim-extras", None);
+        let tab = parse_keys("<Tab>").unwrap();
+        let shift_tab = parse_keys("<S-Tab>").unwrap();
+        assert!(matches!(
+            config.keymap.lookup(Mode::Normal, &tab),
+            Lookup::Exact(Action::FocusNext)
+        ));
+        assert!(matches!(
+            config.keymap.lookup(Mode::Normal, &shift_tab),
+            Lookup::Exact(Action::FocusPrev)
+        ));
+        for (mode, notation, action) in default_bindings() {
+            let chords = parse_keys(notation).unwrap();
+            assert!(
+                matches!(config.keymap.lookup(mode, &chords), Lookup::Exact(a) if *a == action),
+                "{notation}"
+            );
+        }
+        // Tab is not bound in the other modes.
+        assert_eq!(lookup_kind(&config.keymap, Mode::Insert, "<Tab>"), "none");
+    }
+
+    #[test]
+    fn vim_extras_tab_moves_focus_rendered() {
+        let mut app = app_with_config(with_preset("vim-extras", None), 80, 24);
+        let thick_corner_at_28 = |app: &crate::app::App| {
+            render_to_string(app, 80, 24)
+                .lines()
+                .next()
+                .and_then(|row| row.chars().nth(28))
+                == Some('\u{250f}')
+        };
+        assert!(!thick_corner_at_28(&app));
+        press(&mut app, "<Tab>");
+        assert_eq!(app.focus, crate::app::Focus::Messages);
+        assert!(thick_corner_at_28(&app));
+        press(&mut app, "<S-Tab>");
+        assert_eq!(app.focus, crate::app::Focus::Sidebar);
+        assert!(!thick_corner_at_28(&app));
+    }
+
+    #[test]
+    fn cmd_binding_runs_command() {
+        let config = match load("[normal]\nQ = \"cmd:quit\"\n") {
+            Ok(config) => config,
+            Err(report) => panic!("expected Ok, got {report}"),
+        };
+        let mut app = app_with_config(config, 80, 24);
+        press(&mut app, "Q");
+        assert!(app.should_quit);
+        // `cmd:q` and surrounding spaces are fine too.
+        assert!(load("[normal]\nQ = \"cmd: q \"\n").is_ok());
+    }
+
+    #[test]
+    fn cmd_unknown_command_error() {
+        for value in ["cmd:bogus", "cmd:", "cmd:   "] {
+            let found = errors(&format!("[normal]\nQ = \"{value}\"\n"));
+            assert_eq!(found.len(), 1, "{value}: {found:?}");
+            assert_eq!(found[0].file, ConfigFile::Keymap);
+            assert_eq!(found[0].pos.map(|(line, _)| line), Some(2));
+        }
+        let found = errors("[normal]\nQ = \"cmd:bogus\"\n");
+        assert!(found[0].message.contains("unknown command 'bogus'"));
     }
 }
