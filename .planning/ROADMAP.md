@@ -61,7 +61,7 @@ Plans:
   4. User sets sidebar width, timestamp format and history size in `config.toml`
   5. A malformed config entry shows a clear error instead of a crash
 **UI hint**: yes
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 
 Plans:
 **Wave 1**
@@ -69,7 +69,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 02-02-PLAN.md — config.toml consumers: sidebar_width in layout and reducer geometry, chrono timestamp_format with shared RowCtx, key_timeout_ms in the run loop, local time in the binary (wave 2, parallel with 02-03)
-- [ ] 02-03-PLAN.md — keymap.toml: curated action names, vim / vim-extras presets, none unbinding, cmd: bindings, duplicate / prefix-clash / lockout checks (wave 2, parallel with 02-02)
+- [x] 02-03-PLAN.md — keymap.toml: curated action names, vim / vim-extras presets, none unbinding, cmd: bindings, duplicate / prefix-clash / lockout checks (wave 2, parallel with 02-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 02-04-PLAN.md — theme.toml core and pane chrome: D-08 colors, D-09 element tables for sidebar / status / cmdline / input, border styles and types, validated markers (wave 3)
@@ -128,7 +128,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
-| 2. Configuration System | 2/5 | In Progress | - |
+| 2. Configuration System | 3/5 | In Progress | - |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |

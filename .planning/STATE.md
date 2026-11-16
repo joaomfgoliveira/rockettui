@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Configuration System
 status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-11-16T15:35:56.636Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-11-16T15:43:04.398Z"
 last_activity: 2026-11-16
 last_activity_desc: Phase 02 execution started
-state_head: 6d83551869fbcadea4a67635b0524a6c1bc6a728
+state_head: eb614e1d5e71d64c78ac329e8da8ac2ddf73738a
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 02 (Configuration System) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-11-16 — Phase 02 execution started
 
@@ -46,6 +46,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: sidebar_width is not clamped to the terminal width; a wide sidebar leaves the main column narrow or empty and never panics (A26)
 - [Phase 02]: The binary shows system local time (chrono::Local set once in run); App::new, with_config and tests stay UTC (A2)
 - [Phase 02]: Reducer geometry and row model go through App::areas and App::row_ctx, the same helpers the renderer uses (Pitfalls 9 and 10)
+- [Phase 02]: 02-03: keymap action names are the 31 curated snake_case names (D-07) plus focus_next/focus_prev, none and cmd:<command>; the vocabulary is user-facing
+- [Phase 02]: 02-03: keymap rows are ordered by file offset, removals apply before binds; duplicates, prefix clashes, lockout and text-eating insert/command sequences are config errors
 
 ### Pending Todos
 
@@ -64,8 +66,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-16T15:35:56.560Z
-**Stopped at:** Completed 02-02-PLAN.md
+**Last session:** 2026-11-16T15:43:03.955Z
+**Stopped at:** Completed 02-03-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -74,3 +76,4 @@ None yet.
 |------|----------|-------|-------|
 | Phase 02 P01 | 25 min | 3 tasks | 14 files |
 | Phase 02 P02 | 15 min | 3 tasks | 13 files |
+| Phase 02 P03 | 5 min | 3 tasks | 9 files |
