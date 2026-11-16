@@ -3,6 +3,7 @@
 pub mod input;
 pub mod layout;
 pub mod messages;
+pub mod palette;
 pub mod sanitize;
 pub mod sidebar;
 pub mod status;

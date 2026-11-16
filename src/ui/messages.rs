@@ -49,6 +49,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
         lines.extend(rows);
     }
+    // Neither highlight sets a foreground, so author colors survive on the cursor rows (REVERSED
+    // swaps them into the background).
     let highlight = if focused {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
@@ -203,6 +205,33 @@ mod tests {
         assert!(reversed(last), "cursor message last row");
         assert!(plain(first - 1), "row of the previous message");
         assert!(plain(last + 1), "row of the next message");
+    }
+
+    #[test]
+    fn authors_colored_in_buffer() {
+        use crate::ui::palette::author_color;
+        let app = open_general_80x25();
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let mut colors = std::collections::HashSet::new();
+        for y in 1..=18u16 {
+            if buffer[(3, y)].symbol() == ":" {
+                let name: String = (7..=11u16).map(|x| buffer[(x, y)].symbol()).collect();
+                let name = name.trim();
+                let cell = &buffer[(7, y)];
+                assert_eq!(cell.fg, author_color(name), "row {y} {name:?}");
+                assert!(cell.modifier.contains(Modifier::BOLD), "row {y}");
+                for x in [12u16, 13, 14] {
+                    assert_eq!(buffer[(x, y)].fg, Color::Reset, "row {y} x {x}");
+                }
+                colors.insert(format!("{:?}", cell.fg));
+            } else {
+                for x in [1u16, 14] {
+                    assert_eq!(buffer[(x, y)].fg, Color::Reset, "row {y} x {x}");
+                }
+            }
+        }
+        assert_eq!(colors.len(), 4, "{colors:?}");
     }
 
     #[test]
