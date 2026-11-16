@@ -30,18 +30,18 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **NAV-01**: User can switch between Normal, Insert and Command modes, with the current mode shown
 - [x] **NAV-02**: In Normal mode, `hjkl`, `gg`/`G` and `Ctrl-d`/`Ctrl-u` move and scroll
-- [ ] **NAV-03**: User can quit with `:q` in Command mode
+- [x] **NAV-03**: User can quit with `:q` in Command mode
 - [x] **NAV-04**: Layout is sidebar (rooms) + messages + input bar
 
 ### Configuration
 
-- [ ] **CONF-01**: App loads `config.toml`, `keymap.toml` and `theme.toml` from `~/.config/rockettui/` (honoring `$XDG_CONFIG_HOME`)
-- [ ] **CONF-02**: App runs with built-in defaults when any or all config files are absent
+- [x] **CONF-01**: App loads `config.toml`, `keymap.toml` and `theme.toml` from `~/.config/rockettui/` (honoring `$XDG_CONFIG_HOME`)
+- [x] **CONF-02**: App runs with built-in defaults when any or all config files are absent
 - [ ] **CONF-03**: Invalid config entries show a clear error instead of crashing
 - [ ] **CONF-04**: User can pick the `vim` or `vim-extras` keymap preset in `config.toml`
 - [ ] **CONF-05**: User can rebind keys per mode in `keymap.toml`, overriding the preset
 - [ ] **CONF-06**: User can set colors and styles for every UI element in `theme.toml`
-- [ ] **CONF-07**: User can set server URL, history size, timestamp format and sidebar width in `config.toml`
+- [ ] **CONF-07**: User can set history size, timestamp format and sidebar width in `config.toml` (the server URL setting is deferred to Phase 3, per Phase 2 decision D-12)
 
 ### Delivery
 
@@ -89,10 +89,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | NAV-01 | Phase 1 | Complete |
 | NAV-02 | Phase 1 | Complete |
-| NAV-03 | Phase 1 | Pending |
+| NAV-03 | Phase 1 | Complete |
 | NAV-04 | Phase 1 | Complete |
-| CONF-01 | Phase 2 | Pending |
-| CONF-02 | Phase 2 | Pending |
+| CONF-01 | Phase 2 | Complete |
+| CONF-02 | Phase 2 | Complete |
 | CONF-03 | Phase 2 | Pending |
 | CONF-04 | Phase 2 | Pending |
 | CONF-05 | Phase 2 | Pending |
