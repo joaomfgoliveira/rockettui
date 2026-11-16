@@ -11,7 +11,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Modal TUI Shell** - Navigable sidebar + messages + input layout with fake rooms and vim modes (completed 2026-11-15)
-- [ ] **Phase 2: Configuration System** - Config, keymap and theme files with presets and defaults
+- [x] **Phase 2: Configuration System** - Config, keymap and theme files with presets and defaults (completed 2026-11-16)
 - [ ] **Phase 3: Connect & Read** - Token login, real room list and message history from a local server
 - [ ] **Phase 4: Send Messages** - Compose and send messages from Insert mode
 - [ ] **Phase 5: Realtime** - Live incoming messages over DDP with reconnect
@@ -61,7 +61,7 @@ Plans:
   4. User sets sidebar width, timestamp format and history size in `config.toml`
   5. A malformed config entry shows a clear error instead of a crash
 **UI hint**: yes
-**Plans:** 5/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -128,7 +128,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
-| 2. Configuration System | 5/5 | In Progress | - |
+| 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
 | 3. Connect & Read | 0/TBD | Not started | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
