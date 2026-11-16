@@ -12,7 +12,22 @@ use toml::de::{DeTable, DeValue};
 
 /// Every styled element a theme.toml may set, as `pane.element`. Grows with each task of plan
 /// 02-04 and with plan 02-05; the names are the user-facing vocabulary of theme.toml.
-pub const ELEMENT_PATHS: &[&str] = &["status.mode"];
+pub const ELEMENT_PATHS: &[&str] = &[
+    "sidebar.header",
+    "sidebar.folder",
+    "sidebar.room",
+    "sidebar.unread",
+    "sidebar.cursor",
+    "sidebar.cursor_unfocused",
+    "status.mode",
+    "status.room",
+    "status.pending",
+    "status.info",
+    "status.error",
+    "cmdline.text",
+    "input.text",
+    "input.hint",
+];
 
 /// Modifier names accepted in `modifiers = [..]` (D-09).
 pub const MODIFIER_NAMES: &[(&str, Modifier)] = &[
@@ -36,13 +51,40 @@ const MAX_ECHO: usize = 32;
 /// The resolved look of the UI. `Default` is the Phase 1 look.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
+    pub sidebar_header: Style,
+    pub sidebar_folder: Style,
+    pub sidebar_room: Style,
+    pub sidebar_unread: Style,
+    pub sidebar_cursor: Style,
+    pub sidebar_cursor_unfocused: Style,
     pub status_mode: Style,
+    pub status_room: Style,
+    pub status_pending: Style,
+    pub status_info: Style,
+    pub status_error: Style,
+    pub cmdline_text: Style,
+    pub input_text: Style,
+    pub input_hint: Style,
 }
 
 impl Default for Theme {
     fn default() -> Self {
+        let plain = Style::default();
         Theme {
-            status_mode: Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            sidebar_header: plain.add_modifier(Modifier::BOLD | Modifier::DIM),
+            sidebar_folder: plain,
+            sidebar_room: plain,
+            sidebar_unread: plain.add_modifier(Modifier::BOLD),
+            sidebar_cursor: plain.add_modifier(Modifier::REVERSED),
+            sidebar_cursor_unfocused: plain.add_modifier(Modifier::BOLD),
+            status_mode: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            status_room: plain,
+            status_pending: plain,
+            status_info: plain,
+            status_error: plain.fg(Color::Red),
+            cmdline_text: plain,
+            input_text: plain,
+            input_hint: plain.add_modifier(Modifier::DIM),
         }
     }
 }
@@ -51,7 +93,20 @@ impl Theme {
     /// The style field behind `pane.element`, or `None` for a path that is not an element.
     fn style_slot_mut(&mut self, pane: &str, element: &str) -> Option<&mut Style> {
         match (pane, element) {
+            ("sidebar", "header") => Some(&mut self.sidebar_header),
+            ("sidebar", "folder") => Some(&mut self.sidebar_folder),
+            ("sidebar", "room") => Some(&mut self.sidebar_room),
+            ("sidebar", "unread") => Some(&mut self.sidebar_unread),
+            ("sidebar", "cursor") => Some(&mut self.sidebar_cursor),
+            ("sidebar", "cursor_unfocused") => Some(&mut self.sidebar_cursor_unfocused),
             ("status", "mode") => Some(&mut self.status_mode),
+            ("status", "room") => Some(&mut self.status_room),
+            ("status", "pending") => Some(&mut self.status_pending),
+            ("status", "info") => Some(&mut self.status_info),
+            ("status", "error") => Some(&mut self.status_error),
+            ("cmdline", "text") => Some(&mut self.cmdline_text),
+            ("input", "text") => Some(&mut self.input_text),
+            ("input", "hint") => Some(&mut self.input_hint),
             _ => None,
         }
     }
@@ -404,6 +459,63 @@ mod tests {
             .collect();
         assert_eq!(keys, ["status.mode.underline", "nope", "status.nope"]);
         assert!(report.warnings.iter().all(|p| p.file == ConfigFile::Theme));
+    }
+
+    #[test]
+    fn chrome_elements_parse() {
+        assert_eq!(ELEMENT_PATHS.len(), 14);
+        let mut toml = String::new();
+        for (i, path) in ELEMENT_PATHS.iter().enumerate() {
+            let (pane, element) = path.split_once('.').expect("pane.element");
+            toml.push_str(&format!("[{pane}.{element}]\nfg = {i}\n"));
+        }
+        let (mut theme, out) = parse_str(&toml);
+        assert!(out.is_empty(), "{out:?}");
+        for (i, path) in ELEMENT_PATHS.iter().enumerate() {
+            let (pane, element) = path.split_once('.').expect("pane.element");
+            let style = theme.style_slot_mut(pane, element).expect("slot");
+            assert_eq!(style.fg, Some(Color::Indexed(i as u8)), "{path}");
+        }
+        // The default-valued elements keep their modifiers when only fg is set.
+        assert_eq!(
+            theme.sidebar_header.add_modifier,
+            Modifier::BOLD | Modifier::DIM
+        );
+        assert_eq!(theme.status_error.fg, Some(Color::Indexed(10)));
+    }
+
+    #[test]
+    fn defaults_match_phase1_chrome() {
+        let t = Theme::default();
+        assert_eq!(
+            t.sidebar_header,
+            Style::default().add_modifier(Modifier::BOLD | Modifier::DIM)
+        );
+        assert_eq!(
+            t.sidebar_unread,
+            Style::default().add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(
+            t.sidebar_cursor,
+            Style::default().add_modifier(Modifier::REVERSED)
+        );
+        assert_eq!(
+            t.sidebar_cursor_unfocused,
+            Style::default().add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(t.status_error, Style::default().fg(Color::Red));
+        assert_eq!(t.input_hint, Style::default().add_modifier(Modifier::DIM));
+        for plain in [
+            t.sidebar_folder,
+            t.sidebar_room,
+            t.status_room,
+            t.status_pending,
+            t.status_info,
+            t.cmdline_text,
+            t.input_text,
+        ] {
+            assert_eq!(plain, Style::default());
+        }
     }
 
     #[test]

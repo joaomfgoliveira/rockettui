@@ -6,7 +6,6 @@ use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
@@ -36,7 +35,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
     if app.input.is_empty() && app.mode != Mode::Insert {
-        let hint = Line::styled("press i to write", Style::new().add_modifier(Modifier::DIM));
+        let hint = Line::styled("press i to write", app.theme.input_hint);
         frame.render_widget(Paragraph::new(hint), inner);
     } else {
         let top = app.input.view_top(inner.width, inner.height);
@@ -48,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .iter()
             .skip(top)
             .take(usize::from(inner.height))
-            .map(|row| Line::raw(sanitize_line(row).into_owned()))
+            .map(|row| Line::styled(sanitize_line(row).into_owned(), app.theme.input_text))
             .collect();
         frame.render_widget(Paragraph::new(rows), inner);
     }
@@ -61,10 +60,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::app::Mode;
-    use crate::test_util::{app_80x24, press};
+    use crate::test_util::{
+        app_80x24, app_with_config, config_from_theme, press, render_buffer, render_to_string,
+    };
     use crate::ui;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
     fn input_area(app: &App) -> Rect {
         app.areas().input
@@ -107,5 +109,45 @@ mod tests {
         press(&mut app, "<Esc>:");
         assert_eq!(app.mode, Mode::Command);
         assert_eq!(cursor_position(&app, input_area(&app)), None);
+    }
+
+    #[test]
+    fn themed_hint() {
+        let config = config_from_theme("[input.hint]\nfg = 5\n");
+        let app = app_with_config(config, 80, 24);
+        let screen = render_to_string(&app, 80, 24);
+        let (y, row) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, row)| row.contains("press i to write"))
+            .expect("hint row");
+        let x = row[..row.find("press i to write").expect("hint")]
+            .chars()
+            .count();
+        let buffer = render_buffer(&app, 80, 24);
+        for dx in 0.."press i to write".len() {
+            let cell = &buffer[(
+                u16::try_from(x + dx).expect("x"),
+                u16::try_from(y).expect("y"),
+            )];
+            assert_eq!(cell.fg, Color::Indexed(5), "cell {dx}");
+        }
+        // Positive control: the default hint is dim with no color.
+        let app = app_80x24();
+        let buffer = render_buffer(&app, 80, 24);
+        let cell = &buffer[(u16::try_from(x).expect("x"), u16::try_from(y).expect("y"))];
+        assert_eq!(cell.fg, Color::Reset);
+    }
+
+    #[test]
+    fn themed_draft_text() {
+        let config = config_from_theme("[input.text]\nfg = 2\n");
+        let mut app = app_with_config(config, 80, 24);
+        press(&mut app, "<C-w>jiab");
+        let buffer = render_buffer(&app, 80, 24);
+        let area = input_area(&app);
+        for x in area.x + 1..area.x + 3 {
+            assert_eq!(buffer[(x, area.y + 1)].fg, Color::Indexed(2), "cell {x}");
+        }
     }
 }

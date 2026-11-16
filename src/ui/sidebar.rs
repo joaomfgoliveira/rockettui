@@ -8,7 +8,6 @@ use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, ListState};
 
@@ -28,10 +27,9 @@ pub fn kind_glyph(kind: RoomKind) -> &'static str {
 /// contiguous run of identically styled cells.
 fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
     match row {
-        SidebarRow::Header(section) => ListItem::new(Line::styled(
-            section.label(),
-            Style::new().add_modifier(Modifier::BOLD | Modifier::DIM),
-        )),
+        SidebarRow::Header(section) => {
+            ListItem::new(Line::styled(section.label(), app.theme.sidebar_header))
+        }
         SidebarRow::Folder { id, open, unread } => {
             let name = app
                 .folders
@@ -45,7 +43,10 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
             } else {
                 String::new()
             };
-            ListItem::new(format!("{marker}{name}{count}"))
+            ListItem::new(Line::styled(
+                format!("{marker}{name}{count}"),
+                app.theme.sidebar_folder,
+            ))
         }
         SidebarRow::Room { id, indent } => {
             let Some(room) = app.rooms.iter().find(|room| room.id == *id) else {
@@ -57,9 +58,9 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
             let name = sanitize_line(&room.name);
             let tag = if room.encrypted { " [e2e]" } else { "" };
             let style = if room.unread {
-                Style::new().add_modifier(Modifier::BOLD)
+                app.theme.sidebar_unread
             } else {
-                Style::new()
+                app.theme.sidebar_room
             };
             ListItem::new(Line::styled(
                 format!("{indent}{unread}{glyph}{name}{tag}"),
@@ -74,9 +75,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let rows = sidebar::rows(app);
     let items: Vec<ListItem> = rows.iter().map(|row| row_item(app, row)).collect();
     let highlight = if focused {
-        Style::new().add_modifier(Modifier::REVERSED)
+        app.theme.sidebar_cursor
     } else {
-        Style::new().add_modifier(Modifier::BOLD)
+        app.theme.sidebar_cursor_unfocused
     };
     let list = List::new(items)
         .block(pane_block(" Rooms ", focused))
@@ -94,10 +95,10 @@ mod tests {
     use super::*;
     use crate::app::sidebar;
     use crate::data::FolderId;
-    use crate::test_util::{app_80x24, press};
+    use crate::test_util::{app_80x24, app_with_config, config_from_theme, press};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
 
     fn draw(app: &App) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(28, 20)).expect("backend");
@@ -230,5 +231,43 @@ mod tests {
         let text = screen_rows(&terminal).join("\n");
         assert!(text.contains("evilname"), "{text}");
         assert!(text.contains("folder"), "{text}");
+    }
+
+    #[test]
+    fn themed_cursor_and_unread() {
+        let config = config_from_theme("[sidebar.cursor]\nbg = 4\n[sidebar.unread]\nfg = 1\n");
+        let mut app = app_with_config(config, 28, 20);
+        let terminal = draw(&app);
+        let buffer = terminal.backend().buffer();
+        // The cursor row is the one after the top border; every cell inside the borders is themed.
+        let y = u16::try_from(app.sidebar.cursor).expect("cursor") + 1;
+        for x in 1..27 {
+            assert_eq!(buffer[(x, y)].bg, Color::Indexed(4), "cursor cell {x}");
+        }
+        // Another row keeps the terminal background.
+        assert_eq!(buffer[(5, y + 1)].bg, Color::Reset);
+
+        // Unfocused, the unread room's name takes the themed foreground.
+        press(&mut app, "<C-w>l");
+        let terminal = draw(&app);
+        let rows = screen_rows(&terminal);
+        let row = rows
+            .iter()
+            .position(|r| r.contains("general"))
+            .expect("general row");
+        let name = rows[row].chars().position(|c| c == 'g').expect("name");
+        let buffer = terminal.backend().buffer();
+        for x in name..name + "general".len() {
+            let cell = &buffer[(u16::try_from(x).expect("x"), u16::try_from(row).expect("y"))];
+            assert_eq!(cell.fg, Color::Indexed(1), "cell {x}");
+        }
+        // A read room is not recolored.
+        let random = rows.iter().position(|r| r.contains("random")).expect("row");
+        let x = rows[random].chars().position(|c| c == 'r').expect("x");
+        let cell = &buffer[(
+            u16::try_from(x).expect("x"),
+            u16::try_from(random).expect("y"),
+        )];
+        assert_eq!(cell.fg, Color::Reset);
     }
 }

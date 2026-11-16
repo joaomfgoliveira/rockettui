@@ -74,6 +74,18 @@ pub(crate) fn config_from_toml(toml: &str) -> Config {
     }
 }
 
+/// The `Config` parsed from the text of a theme.toml; panics with the problem count if invalid.
+pub(crate) fn config_from_theme(toml: &str) -> Config {
+    let sources = crate::config::Sources {
+        theme: Some(toml.to_string()),
+        ..Default::default()
+    };
+    match crate::config::load_from_sources(&sources) {
+        Ok(config) => config,
+        Err(report) => panic!("test theme is invalid: {} problem(s)", report.errors.len()),
+    }
+}
+
 /// An app built from `config`, with the fake data loaded through the reducer.
 pub(crate) fn app_with_config(config: Config, w: u16, h: u16) -> App {
     let mut app = App::with_config(Size::new(w, h), config);
