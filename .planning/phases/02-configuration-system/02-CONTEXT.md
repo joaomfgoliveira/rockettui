@@ -19,7 +19,7 @@ Make the TUI customizable through three TOML files in `~/.config/rockettui/` (ho
 - **D-03:** **Unknown keys/sections are not errors.** They are ignored in normal startup, but listed as warnings on the error screen when a real error is also present. Do not use `deny_unknown_fields`.
 
 ### Keymap overrides (CONF-04, CONF-05)
-- **D-04:** `keymap.toml` has one table per mode (`[normal]`, `[insert]`, `[command]`) in `"<keys>" = "action_name"` form, Vim notation per Phase 1 D-08. It layers on top of the active preset's rows via the existing `Keymap::from_bindings` (later row wins for identical mode+keys).
+- **D-04:** `keymap.toml` has one table per mode (`[normal]`, `[insert]`, `[command]`) in `"<keys>" = "action_name"` form, Vim notation per Phase 1 D-08. It layers on top of the active preset's rows via the existing `Keymap::from_bindings` (later row wins for identical mode+keys). *Amended 2026-11-16 by author during plan review: same-file duplicate chords (two spellings of the same keys in one mode table) are a config error naming both bindings; later-wins applies only to user rows over preset rows.*
 - **D-05:** Unbind with the special action `"none"`: `"<C-d>" = "none"` removes the preset binding and leaves nothing.
 - **D-06:** If an override makes one binding a prefix of another (e.g. user binds `g` while `gg` is bound), that is a **config error** naming both bindings. The user must `"none"` the old one first.
 - **D-07:** Bindable actions are a **curated snake_case name table** (e.g. `move_down`, `goto_top`, `focus_left`, `enter_insert`, `submit_input`), excluding internal actions (typed characters, ticks, etc.). Additionally, a `"cmd:<command>"` form (e.g. `"cmd:quit"`) binds a key to a command-line command. Unknown action name = error.
