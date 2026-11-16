@@ -38,6 +38,26 @@ impl Keymap {
         }
     }
 
+    /// Bind `seq` in `mode`, replacing any earlier binding of the same keys.
+    pub fn bind(&mut self, mode: Mode, seq: &[Chord], action: Action) {
+        self.trie_mut(mode).insert(seq, action);
+    }
+
+    /// Remove the binding of `seq` in `mode`, pruning empty branches. False when it was not bound.
+    pub fn unbind(&mut self, mode: Mode, seq: &[Chord]) -> bool {
+        self.trie_mut(mode).remove(seq)
+    }
+
+    /// Every `(short, long)` pair in `mode` where a binding is a strict prefix of another.
+    pub fn clashes(&self, mode: Mode) -> Vec<(Vec<Chord>, Vec<Chord>)> {
+        self.trie(mode).clashes()
+    }
+
+    /// Every binding of `mode`, in no particular order.
+    pub fn bindings(&self, mode: Mode) -> Vec<(Vec<Chord>, &Action)> {
+        self.trie(mode).entries()
+    }
+
     /// The whole trie of `mode`, as the matcher consumes it.
     pub fn trie(&self, mode: Mode) -> &Trie<Action> {
         match mode {

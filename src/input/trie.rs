@@ -77,6 +77,63 @@ impl<A> Trie<A> {
             (None, true) => Lookup::None,
         }
     }
+
+    /// Unbind `seq` and prune every branch it leaves with no value and no children, so removing
+    /// `gg` leaves no `g` prefix behind (D-05). Returns whether `seq` was bound. An empty or
+    /// unbound sequence changes nothing.
+    pub fn remove(&mut self, seq: &[Chord]) -> bool {
+        if seq.is_empty() {
+            return false;
+        }
+        remove_from(&mut self.root, seq)
+    }
+
+    /// Every bound sequence with its value, in no particular order.
+    pub fn entries(&self) -> Vec<(Vec<Chord>, &A)> {
+        let mut out = Vec::new();
+        collect(&self.root, &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// Every pair `(short, long)` where bound `short` is a strict prefix of bound `long`: such a
+    /// pair makes `short` wait for the sequence timeout instead of firing at once (D-06).
+    pub fn clashes(&self) -> Vec<(Vec<Chord>, Vec<Chord>)> {
+        let entries = self.entries();
+        let mut out = Vec::new();
+        for (short, _) in &entries {
+            for (long, _) in &entries {
+                if long.len() > short.len() && long.starts_with(short) {
+                    out.push((short.clone(), long.clone()));
+                }
+            }
+        }
+        out
+    }
+}
+
+fn remove_from<A>(node: &mut Node<A>, seq: &[Chord]) -> bool {
+    let Some((first, rest)) = seq.split_first() else {
+        return node.value.take().is_some();
+    };
+    let Some(child) = node.children.get_mut(first) else {
+        return false;
+    };
+    let removed = remove_from(child, rest);
+    if child.value.is_none() && child.children.is_empty() {
+        node.children.remove(first);
+    }
+    removed
+}
+
+fn collect<'a, A>(node: &'a Node<A>, path: &mut Vec<Chord>, out: &mut Vec<(Vec<Chord>, &'a A)>) {
+    if let Some(value) = &node.value {
+        out.push((path.clone(), value));
+    }
+    for (chord, child) in &node.children {
+        path.push(*chord);
+        collect(child, path, out);
+        path.pop();
+    }
 }
 
 #[cfg(test)]
@@ -110,5 +167,57 @@ mod tests {
         t.insert(&[], 3);
         assert!(matches!(t.lookup(&[]), Lookup::None));
         assert!(matches!(t.lookup(&seq("k")), Lookup::None));
+    }
+
+    #[test]
+    fn remove_prunes() {
+        let mut t = Trie::new();
+        t.insert(&seq("gg"), 1);
+        assert!(t.remove(&seq("gg")));
+        assert!(matches!(t.lookup(&seq("g")), Lookup::None));
+        assert!(matches!(t.lookup(&seq("gg")), Lookup::None));
+        assert!(t.entries().is_empty());
+
+        assert!(!t.remove(&seq("gg")), "already removed");
+        assert!(!t.remove(&seq("x")), "never bound");
+        assert!(!t.remove(&[]), "empty sequence");
+
+        // Removing a prefix keeps the longer binding; removing only a prefix node is a no-op.
+        t.insert(&seq("g"), 2);
+        t.insert(&seq("gg"), 1);
+        assert!(!t.remove(&seq("ggg")));
+        assert!(t.remove(&seq("g")));
+        assert!(matches!(t.lookup(&seq("g")), Lookup::Prefix));
+        assert!(matches!(t.lookup(&seq("gg")), Lookup::Exact(&1)));
+        assert!(!t.remove(&seq("g")), "g is only a prefix now");
+        assert!(matches!(t.lookup(&seq("gg")), Lookup::Exact(&1)));
+    }
+
+    #[test]
+    fn clashes_lists_pairs() {
+        let mut t = Trie::new();
+        t.insert(&seq("gg"), 1);
+        assert!(t.clashes().is_empty());
+        t.insert(&seq("g"), 2);
+        let clashes = t.clashes();
+        assert_eq!(clashes.len(), 1);
+        assert!(clashes[0].0 == seq("g") && clashes[0].1 == seq("gg"));
+        t.insert(&seq("x"), 3);
+        assert_eq!(t.clashes().len(), 1);
+        t.insert(&seq("ggg"), 4);
+        // g/gg, g/ggg and gg/ggg.
+        assert_eq!(t.clashes().len(), 3);
+    }
+
+    #[test]
+    fn entries_lists_every_binding() {
+        let mut t = Trie::new();
+        t.insert(&seq("gg"), 1);
+        t.insert(&seq("g"), 2);
+        t.insert(&seq("<C-w>h"), 3);
+        let mut found: Vec<(usize, i32)> =
+            t.entries().iter().map(|(s, v)| (s.len(), **v)).collect();
+        found.sort();
+        assert_eq!(found, [(1, 2), (2, 1), (2, 3)]);
     }
 }
