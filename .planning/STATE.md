@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Configuration System
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-11-16T15:43:04.398Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-11-16T15:50:13.218Z"
 last_activity: 2026-11-16
 last_activity_desc: Phase 02 execution started
-state_head: eb614e1d5e71d64c78ac329e8da8ac2ddf73738a
+state_head: dda8e0982350c1a2f1016ff5cfc120e5d589d1a5
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 02 (Configuration System) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-11-16 — Phase 02 execution started
 
@@ -48,6 +48,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Reducer geometry and row model go through App::areas and App::row_ctx, the same helpers the renderer uses (Pitfalls 9 and 10)
 - [Phase 02]: 02-03: keymap action names are the 31 curated snake_case names (D-07) plus focus_next/focus_prev, none and cmd:<command>; the vocabulary is user-facing
 - [Phase 02]: 02-03: keymap rows are ordered by file offset, removals apply before binds; duplicates, prefix clashes, lockout and text-eating insert/command sequences are config errors
+- [Phase 02]: theme.toml element names (sidebar.cursor, status.error, input.hint, border.focused, ...) and the [markers] keys are the user-facing vocabulary; renaming one silently drops a user's setting
+- [Phase 02]: Config error screen keeps fixed built-in styles and never reads the user theme (A30)
+- [Phase 02]: Marker strings are rejected, not sanitized, when sanitize_line would change them; width caps 4 columns (encrypted 12)
 
 ### Pending Todos
 
@@ -66,8 +69,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-16T15:43:03.955Z
-**Stopped at:** Completed 02-03-PLAN.md
+**Last session:** 2026-11-16T15:50:13.100Z
+**Stopped at:** Completed 02-04-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -77,3 +80,4 @@ None yet.
 | Phase 02 P01 | 25 min | 3 tasks | 14 files |
 | Phase 02 P02 | 15 min | 3 tasks | 13 files |
 | Phase 02 P03 | 5 min | 3 tasks | 9 files |
+| Phase 02 P04 | 6 min | 3 tasks | 10 files |

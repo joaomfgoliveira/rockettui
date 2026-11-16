@@ -37,7 +37,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **CONF-01**: App loads `config.toml`, `keymap.toml` and `theme.toml` from `~/.config/rockettui/` (honoring `$XDG_CONFIG_HOME`)
 - [x] **CONF-02**: App runs with built-in defaults when any or all config files are absent
-- [ ] **CONF-03**: Invalid config entries show a clear error instead of crashing
+- [x] **CONF-03**: Invalid config entries show a clear error instead of crashing
 - [x] **CONF-04**: User can pick the `vim` or `vim-extras` keymap preset in `config.toml`
 - [x] **CONF-05**: User can rebind keys per mode in `keymap.toml`, overriding the preset
 - [ ] **CONF-06**: User can set colors and styles for every UI element in `theme.toml`
@@ -93,7 +93,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NAV-04 | Phase 1 | Complete |
 | CONF-01 | Phase 2 | Complete |
 | CONF-02 | Phase 2 | Complete |
-| CONF-03 | Phase 2 | Pending |
+| CONF-03 | Phase 2 | Complete |
 | CONF-04 | Phase 2 | Complete |
 | CONF-05 | Phase 2 | Complete |
 | CONF-06 | Phase 2 | Pending |
