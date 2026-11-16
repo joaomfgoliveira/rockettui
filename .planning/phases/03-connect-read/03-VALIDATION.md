@@ -30,31 +30,31 @@ created: "2026-11-16"
 
 - **After every task commit:** Run `cargo test --lib`
 - **After every plan wave:** Run `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
-- **Before `/gsd-verify-work`:** Full suite green, pty scenarios `quit`, `panic`, `insert`, `config_error`, `config_keymap`, `connect_read`, `unauthorized`, `perm_warning`
+- **Before `/gsd-verify-work`:** Full suite green, pty scenarios `quit`, `panic`, `insert`, `config_layout`, `config_keymap`, `config_error`, `connect_read`, `missing_creds`, `config_creds`, `perm_warning`, `unauthorized`, `docker_read`
 - **Max feedback latency:** 60 seconds
 
 ---
 
 ## Per-Task Verification Map
 
-Task IDs are assigned by the planner; rows below are keyed by requirement and are refined into task rows once PLAN.md files exist.
+Refined by the planner on 2026-11-16: one row per task of plans 03-01..03-07 (task id = `<plan>-T<n>`). Every test file and scenario below is created by the task in its row (❌ W0 = does not exist yet at plan time).
 
-| Requirement | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|-------------|-----------------|-----------|-------------------|-------------|--------|
-| AUTH-01 | env overrides file per key; missing URL/user/token reported with key and place; bad / userinfo / non-http URL rejected | unit | `cargo test --lib -- config::connection config::tests` | ❌ W0 | ⬜ pending |
-| AUTH-01 | `X-User-Id` and `X-Auth-Token` sent on every call | unit (wiremock) | `cargo test --lib -- api::tests::sends_auth_headers` | ❌ W0 | ⬜ pending |
-| AUTH-02 | 0o644/0o640/0o604 file with token → warning; 0o600 or env token → none | unit | `cargo test --lib -- config::paths::tests::perm_` | ❌ W0 | ⬜ pending |
-| AUTH-02 | warning persists across key presses; stderr line after exit | reducer + snapshot; pty | `cargo test --lib -- ui::status::tests::perm_warning` | ❌ W0 | ⬜ pending |
-| AUTH-03 | sentinel token / URL userinfo / message body absent from `Debug` and `Display` of every new type | unit | `cargo test --lib -- redaction` | ❌ W0 | ⬜ pending |
-| AUTH-03 | cross-origin redirect not followed (token not leaked) | unit (two wiremock servers) | `cargo test --lib -- api::tests::no_redirect_follow` | ❌ W0 | ⬜ pending |
-| AUTH-03 | 401 against the real binary: screen and stderr contain no token | pty + mock server | `python3 -I scripts/smoke_pty.py target/debug/rockettui unauthorized` | ❌ W0 | ⬜ pending |
-| ROOM-01 | subscriptions + rooms joined on rid → kinds, names, unread bool, sort by activity; `open:false` skipped; folders = categories or Favorites | unit (fixtures) | `cargo test --lib -- api::map::tests` | ❌ W0 | ⬜ pending |
-| ROOM-02 | select opens room and issues exactly one history load; reopen does not refetch | reducer unit | `cargo test --lib -- app::history::tests` | ❌ W0 | ⬜ pending |
-| ROOM-03 | encrypted room: marker, placeholder, zero HTTP requests | reducer + snapshot + wiremock `expect(0)` | `cargo test --lib -- app::history::tests::encrypted ui::messages::tests::encrypted` | ❌ W0 | ⬜ pending |
-| MSG-01 | history mapped oldest-first; older page uses raw `latest`; empty page = exhausted; cursor stable on prepend | unit + wiremock | `cargo test --lib -- api::map::tests::history app::history::tests::older` | ❌ W0 | ⬜ pending |
-| MSG-01 | Loading… / Could not load history / empty placeholders | snapshot | `cargo test --lib -- ui::messages::tests` | ❌ W0 | ⬜ pending |
-| D-06 | 401 / unreachable / timeout / 429 / 3xx → distinct `ApiError`; `:reconnect` and `:retry` reload | unit | `cargo test --lib -- api::tests::error_mapping app::command::tests::reconnect` | ❌ W0 | ⬜ pending |
-| DLVR-01 | rooms, history, scroll and encrypted placeholder work against the Docker server | manual UAT + pty twin | `python3 -I scripts/smoke_pty.py target/debug/rockettui connect_read` | ❌ W0 | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Secure Behavior | Test Type | Automated Command | File Exists | Status |
+|---------|------|------|-------------|-----------------|-----------|-------------------|-------------|--------|
+| 03-01-T1 | 03-01 | 1 | AUTH-01, ROOM-01, AUTH-03 | env PAT → rooms in the real binary; `X-User-Id`/`X-Auth-Token` sensitive on every call; redirects never followed; missing URL/user/token → error screen naming the env var; bad / userinfo / non-http URL rejected without echo; room mapping and skips; all-or-nothing load | unit + wiremock + pty | `cargo test --lib -- config::connection api:: app::tests::conn_state` ; `python3 -I scripts/smoke_pty.py target/debug/rockettui connect_read` ; `... missing_creds` | ❌ W0 | ⬜ pending |
+| 03-01-T2 | 03-01 | 1 | ROOM-01 (D-10) | folders = Favorites + categories (A6); getPreferences failure → Favorites only | unit + wiremock + pty | `cargo test --lib -- api::map::tests::folders api::tests::preferences` | ❌ W0 | ⬜ pending |
+| 03-02-T1 | 03-02 | 1 | DLVR-01 | local Rocket.Chat on 127.0.0.1 only; PAT reads subscriptions.get; state files 0600 and git-ignored | integration (Docker) | `python3 -I dev/seed.py check` | ❌ W0 | ⬜ pending |
+| 03-02-T2 | 03-02 | 1 | DLVR-01 | full seed; captured fixtures scrubbed (no lastMessage, no md, no secrets) | integration (Docker) | `python3 -I dev/seed.py capture` | ❌ W0 | ⬜ pending |
+| 03-03-T1 | 03-03 | 2 | ROOM-02, ROOM-03, MSG-01 | Enter opens a room and issues exactly one history load via the type-correct endpoint; reopen does not refetch; encrypted room → zero requests; Failed reopen retries | reducer unit + wiremock + pty | `cargo test --lib -- app::history api::map::tests::history api::tests::history effect::tests` ; `... connect_read` | ❌ W0 | ⬜ pending |
+| 03-03-T2 | 03-03 | 2 | ROOM-03, MSG-01 (D-16) | `encrypted, not supported` / `Loading…` / `Could not load history` / `No messages yet` | snapshot + pty | `cargo test --lib -- ui::messages::tests::placeholder` | ❌ W0 | ⬜ pending |
+| 03-04-T1 | 03-04 | 3 | MSG-01 (D-14) | older page uses the raw `latest`; cursor stable on prepend; dedupe; empty page = exhausted; count above cap handled | reducer unit + wiremock + pty | `cargo test --lib -- app::history api::tests::latest_param api::tests::count_above_cap` ; `... connect_read` | ❌ W0 | ⬜ pending |
+| 03-04-T2 | 03-04 | 3 | MSG-01 (D-15) | system one-liners, attachment tags, `[encrypted message]`, ciphertext never drawn | unit + snapshot + pty | `cargo test --lib -- api::map::tests::history_kinds ui::wrap::tests::system_row_style ui::messages::tests::message_kinds` | ❌ W0 | ⬜ pending |
+| 03-05-T1 | 03-05 | 4 | AUTH-01, AUTH-03 | config.toml credentials; env overrides file per key; values never echoed (Report, Sources Debug) | unit + pty | `cargo test --lib -- config::` ; `... config_creds` | ❌ W0 | ⬜ pending |
+| 03-05-T2 | 03-05 | 4 | AUTH-02 | 0o644/0o640/0o604 with file token → persistent warning + stderr line; 0o600 or env token → none; cleartext http warning for non-loopback hosts | unit + snapshot-free render + pty | `cargo test --lib -- config::paths::tests::perm config::tests::perm_warning_rules config::tests::cleartext_warning ui::status::tests::warning_persists` ; `... perm_warning` | ❌ W0 | ⬜ pending |
+| 03-06-T1 | 03-06 | 5 | AUTH-01 (D-06), ROOM-02 (D-16) | `:reconnect` and `:retry` reload; failed history retried; no automatic retry | unit + pty | `cargo test --lib -- app::command` ; `... unauthorized` | ❌ W0 | ⬜ pending |
+| 03-06-T2 | 03-06 | 5 | AUTH-03 | distinct ApiError per class; cross-origin redirect not followed; GET only; sentinel sweep over every new type; hostile text sanitized; no logging crate | unit (wiremock) | `cargo test --lib -- api::tests::error_mapping api::tests::no_redirect_follow api::tests::only_get_requests api::tests::client_debug_redacts redaction` | ❌ W0 | ⬜ pending |
+| 03-07-T1 | 03-07 | 6 | DLVR-01 | the real binary against the seeded Docker server: rooms, folders, open, paging to the start, kinds, encrypted placeholder; token never on screen | pty (Docker) | `python3 -I scripts/smoke_pty.py target/debug/rockettui docker_read` | ❌ W0 | ⬜ pending |
+| 03-07-T2 | 03-07 | 6 | DLVR-01 | mapping tested on captured real responses; 9.0.0 compatibility recorded; author UAT | unit + pty + manual | `cargo test --lib -- api::map::tests::docker_fixtures` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -62,12 +62,12 @@ Task IDs are assigned by the planner; rows below are keyed by requirement and ar
 
 ## Wave 0 Requirements
 
-- [ ] `wiremock = "0.6"` dev-dependency; `reqwest` (0.13, `json`+`query`), `serde`, `serde_json` dependencies
-- [ ] `src/api/fixtures/*.json` (hand-written interim fixtures for the tracer; replace with ones captured from the seeded Docker server before phase end)
-- [ ] `scripts/smoke_pty.py`: `wait_ready` must stop depending on seeded fake rooms; add a stdlib `http.server` mock Rocket.Chat on an ephemeral port, passed via `ROCKETTUI_SERVER_URL`, `ROCKETTUI_USER_ID`, `ROCKETTUI_TOKEN`
-- [ ] Sentinel-based redaction test module covering new types (pattern exists in `src/data/mod.rs`, `src/action.rs`)
-- [ ] Rewrite `config::tests::server_url_is_unknown_key` (`server_url` becomes a known key)
-- [ ] `dev/compose.yml`, `dev/seed.py`, `dev/README.md`, `.gitignore` entry for `dev/.env.local`
+- [ ] `wiremock = "0.6"` dev-dependency; `reqwest` (0.13, `json`+`query`), `serde`, `serde_json` dependencies (03-01-T1)
+- [ ] `src/api/fixtures/*.json` hand-written fixtures (03-01-T1, 03-01-T2, 03-03-T1, 03-04-T2); captured Docker fixtures in `src/api/fixtures/docker/` (03-02-T2) tested in 03-07-T2 (kept alongside, not replacing the hand-written ones, which cover skip cases a seed cannot produce)
+- [ ] `scripts/smoke_pty.py`: `wait_ready` no longer depends on seeded fake rooms; stdlib `http.server` mock Rocket.Chat on an ephemeral port, passed via `ROCKETTUI_SERVER_URL`, `ROCKETTUI_USER_ID`, `ROCKETTUI_TOKEN` (03-01-T1)
+- [ ] Sentinel-based redaction test module `src/redaction.rs` covering new types (03-06-T2; per-type sentinel tests also land in 03-01-T1 and 03-05-T1)
+- [ ] Rewrite the Phase 2 test that asserted `server_url` is an unknown key into `config::tests::server_url_is_known_key` (03-05-T1)
+- [ ] `dev/compose.yml`, `dev/seed.py`, `dev/README.md`, `.gitignore` entry `/dev/state/` (credentials live in `dev/state/<project>/`, 03-02-T1)
 
 ---
 
@@ -75,7 +75,7 @@ Task IDs are assigned by the planner; rows below are keyed by requirement and ar
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Real Docker Rocket.Chat: authenticate, list channels/groups/DMs, open a room, scroll to older history, see the encrypted placeholder | DLVR-01 | Needs a running local server with seeded data | Follow `dev/README.md`: start the compose stack, run `dev/seed.py`, export the generated `dev/.env.local`, run the binary, walk the five ROADMAP success criteria |
+| Real Docker Rocket.Chat: authenticate, list channels/groups/DMs, open a room, scroll to older history, see the encrypted placeholder; judge folder layout (A6) and D-15 wording | DLVR-01 | The author's own use against a real server; folder layout and wording are product judgments (the automated twin is `docker_read`, 03-07-T1) | Follow `dev/README.md`: `python3 -I dev/seed.py up`, `seed`, then `set -a; . dev/state/rockettui-dev/.env.local; set +a; cargo run`, and walk the five ROADMAP success criteria (human-check in 03-07-T2) |
 
 ---
 

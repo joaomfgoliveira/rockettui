@@ -89,7 +89,27 @@ Plans:
   4. Encrypted rooms show "encrypted, not supported"
   5. App warns about a config file with credentials that is not `chmod 600`, and logs contain no token or message content
 **UI hint**: yes
-**Plans**: TBD
+**Plans:** 7 plans
+
+Plans:
+**Wave 1**
+- [ ] 03-01-PLAN.md — Tracer: env PAT -> api::Client -> subscriptions.get + rooms.get -> Effect outbox -> real rooms in the sidebar, Favorites + categories folders, mock-backed pty harness, missing-credential error screen (wave 1)
+- [ ] 03-02-PLAN.md — Local Docker Rocket.Chat 8.9.1: compose, seed with every Phase 3 case, PAT in git-ignored 0600 state, scrubbed captured fixtures (wave 1, parallel with 03-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 03-03-PLAN.md — Open a room: first-open history via channels/groups/im.history, per-room cache, encrypted rooms never fetched, Loading / Could not load / encrypted placeholders (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 03-04-PLAN.md — Scroll back: older pages with a stable cursor and end-of-history; D-15 system lines, attachment tags, [encrypted message] (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 03-05-PLAN.md — Credentials in config.toml (env wins per key) and the persistent chmod 600 / cleartext-http warnings (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 03-06-PLAN.md — :reconnect / :retry, distinct failure messages, no redirect following, GET only, redaction sweep (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 03-07-PLAN.md — Proof against the Docker server (8.9.1 and 9.0.0), captured-fixture mapping tests, end-of-phase UAT (wave 6)
 
 ### Phase 4: Send Messages
 **Goal**: User composes and sends messages to the open room
