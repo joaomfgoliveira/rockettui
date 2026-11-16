@@ -42,6 +42,18 @@ pub struct Sources {
 pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
     let mut problems = sources.read_errors.clone();
     let settings = settings::parse(sources.config.as_deref(), &mut problems);
+    // keymap.toml and theme.toml get real parsers in plans 02-03 and 02-04; until then their
+    // syntax errors still land in the one report.
+    diag::check_syntax(
+        diag::ConfigFile::Keymap,
+        sources.keymap.as_deref(),
+        &mut problems,
+    );
+    diag::check_syntax(
+        diag::ConfigFile::Theme,
+        sources.theme.as_deref(),
+        &mut problems,
+    );
     let report = Report::new(problems);
     if report.errors.is_empty() {
         Ok(Config {
@@ -151,5 +163,95 @@ mod tests {
             Err(report) => panic!("expected Ok, got {report}"),
         }
         assert!(!missing.exists(), "loading must not create the directory");
+    }
+
+    fn sources(config: &str) -> Sources {
+        Sources {
+            config: Some(config.to_string()),
+            ..Sources::default()
+        }
+    }
+
+    #[test]
+    fn multiple_errors_one_pass() {
+        let sources = Sources {
+            config: Some(
+                "sidebar_width = 99\nhistory_size = \"x\"\n\nkey_timeout_ms = 5\n".to_string(),
+            ),
+            keymap: Some("[normal\n".to_string()),
+            theme: Some("x = \n".to_string()),
+            read_errors: Vec::new(),
+        };
+        let Err(report) = load_from_sources(&sources) else {
+            panic!("expected Err");
+        };
+        assert!(report.errors.len() >= 5, "{report}");
+        let order: Vec<(diag::ConfigFile, Option<usize>)> = report
+            .errors
+            .iter()
+            .map(|p| (p.file, p.pos.map(|(line, _)| line)))
+            .collect();
+        assert_eq!(
+            &order[..3],
+            &[
+                (diag::ConfigFile::Config, Some(1)),
+                (diag::ConfigFile::Config, Some(2)),
+                (diag::ConfigFile::Config, Some(4)),
+            ]
+        );
+        let files: Vec<_> = order.iter().map(|(f, _)| *f).collect();
+        let mut sorted = files.clone();
+        sorted.sort();
+        assert_eq!(files, sorted, "sorted by file");
+        assert!(files.contains(&diag::ConfigFile::Keymap));
+        assert!(files.contains(&diag::ConfigFile::Theme));
+    }
+
+    #[test]
+    fn unknown_keys_warn_only() {
+        let alone = "sidebar_width = 40\nbogus = 1\n[ui]\nx = 1\n";
+        assert!(load_from_sources(&sources(alone)).is_ok());
+        let with_error = "sidebar_width = 99\nbogus = 1\n[ui]\nx = 1\n";
+        let Err(report) = load_from_sources(&sources(with_error)) else {
+            panic!("expected Err");
+        };
+        assert_eq!(report.errors.len(), 1);
+        let keys: Vec<_> = report
+            .warnings
+            .iter()
+            .map(|p| p.key.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(keys, ["bogus", "ui"]);
+    }
+
+    #[test]
+    fn server_url_is_unknown_key() {
+        let url = "server_url = \"https://chat.example\"\n";
+        assert!(load_from_sources(&sources(url)).is_ok());
+        let Err(report) = load_from_sources(&sources(&format!("{url}history_size = 0\n"))) else {
+            panic!("expected Err");
+        };
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|p| p.key.as_deref() == Some("server_url"))
+        );
+    }
+
+    #[test]
+    fn empty_files_are_absent() {
+        for text in ["", "  \n# c\n"] {
+            let all = Sources {
+                config: Some(text.to_string()),
+                keymap: Some(text.to_string()),
+                theme: Some(text.to_string()),
+                read_errors: Vec::new(),
+            };
+            match load_from_sources(&all) {
+                Ok(config) => assert_eq!(config.settings, Settings::default()),
+                Err(report) => panic!("expected Ok, got {report}"),
+            }
+        }
     }
 }

@@ -188,27 +188,82 @@ impl Reader<'_> {
         );
         None
     }
+
+    /// An integer value in `lo..=hi`.
+    pub fn int_in(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        key: &str,
+        lo: i64,
+        hi: i64,
+    ) -> Option<i64> {
+        let at = value.span().start;
+        match value.get_ref() {
+            DeValue::Integer(i) => match i64::from_str_radix(i.as_str(), i.radix()) {
+                Ok(n) if (lo..=hi).contains(&n) => Some(n),
+                Ok(n) => {
+                    self.error(at, key, format!("must be between {lo} and {hi}, got {n}"));
+                    None
+                }
+                Err(_) => {
+                    self.error(at, key, "integer out of range");
+                    None
+                }
+            },
+            other => {
+                self.error(
+                    at,
+                    key,
+                    format!("expected an integer, found {}", other.type_str()),
+                );
+                None
+            }
+        }
+    }
+
+    /// A warning for every key of `table` that is not in `known`, tables included (D-03: unknown
+    /// keys are never errors, so `deny_unknown_fields` is not used). The reported key is
+    /// `prefix` followed by the key name.
+    pub fn warn_unknown(&mut self, table: &DeTable<'_>, known: &[&str], prefix: &str) {
+        for (name, _) in table.iter() {
+            if !known.contains(&name.get_ref().as_ref()) {
+                let key = format!("{prefix}{}", name.get_ref());
+                self.warning(name.span().start, &key, "unknown key, ignored");
+            }
+        }
+    }
 }
 
-/// Parse one file into a spanned table. On a syntax error the problem is recorded and `None` is
-/// returned. The message comes from `message()` and `span()` only (T-02-01).
+/// Parse one file into a spanned table. Every syntax error found is recorded (the parser
+/// recovers and keeps going), and `None` is returned when there was any: a recovered partial
+/// tree is unreliable, so the semantic pass is skipped for that file. Messages come from
+/// `message()` and `span()` only (T-02-01).
 pub fn parse_table<'s>(
     file: ConfigFile,
     src: &'s str,
     out: &mut Vec<Problem>,
 ) -> Option<Spanned<DeTable<'s>>> {
-    match DeTable::parse(src) {
-        Ok(table) => Some(table),
-        Err(e) => {
-            out.push(Problem {
-                file,
-                pos: e.span().map(|span| line_col(src, span.start)),
-                key: None,
-                message: format!("TOML syntax error: {}", e.message()),
-                severity: Severity::Error,
-            });
-            None
-        }
+    let (table, errors) = DeTable::parse_recoverable(src);
+    if errors.is_empty() {
+        return Some(table);
+    }
+    for e in errors {
+        out.push(Problem {
+            file,
+            pos: e.span().map(|span| line_col(src, span.start)),
+            key: None,
+            message: format!("TOML syntax error: {}", e.message()),
+            severity: Severity::Error,
+        });
+    }
+    None
+}
+
+/// Syntax-check a file whose semantics are not parsed yet (keymap.toml, theme.toml), so its
+/// syntax errors still reach the one report.
+pub fn check_syntax(file: ConfigFile, src: Option<&str>, out: &mut Vec<Problem>) {
+    if let Some(src) = src {
+        let _ = parse_table(file, src, out);
     }
 }
 
@@ -244,5 +299,45 @@ mod tests {
             ..with_all
         };
         assert_eq!(bare.to_string(), "config.toml: warning: bad");
+    }
+
+    fn messages(out: &[Problem]) -> String {
+        out.iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn syntax_errors_recoverable() {
+        let src = "a = \nb = 1\n[unclosed\nc = = 2\n";
+        let mut out = Vec::new();
+        assert!(parse_table(ConfigFile::Keymap, src, &mut out).is_none());
+        let errors: Vec<_> = out
+            .iter()
+            .filter(|p| p.severity == Severity::Error)
+            .collect();
+        assert!(errors.len() >= 2, "{}", messages(&out));
+        assert!(errors.iter().all(|p| p.pos.is_some()), "{}", messages(&out));
+    }
+
+    #[test]
+    fn no_source_echo() {
+        let src = "token = \"SENTINEL-SECRET-4b1d\n";
+        let mut out = Vec::new();
+        assert!(parse_table(ConfigFile::Config, src, &mut out).is_none());
+        assert!(!out.is_empty());
+        let mut report = Report::new(out);
+        report.dir = Some(PathBuf::from("/x"));
+        assert!(
+            !report.to_string().contains("SENTINEL-SECRET-4b1d"),
+            "{report}"
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .all(|p| !p.message.contains("SENTINEL"))
+        );
     }
 }
