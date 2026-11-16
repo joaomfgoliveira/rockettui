@@ -457,8 +457,8 @@ Pruning matters: without it, removing `gg` leaves a valueless `g` node and `look
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
-| A1 | Key-timeout setting is named `key_timeout_ms`, default 1000, accepted range 100-5000 (D-12/D-13 give no name or range for it) | Standard Stack / Settings | Cosmetic; user may want other bounds. Confirm in plan |
-| A2 | Production timestamps should render in the system **local** timezone (Phase 1 shows UTC; message `ts` is Unix seconds) via `chrono::Local`, with tests injecting UTC | Pitfall 8, Code Examples | If the user wants UTC, drop `Local`; or add a `timezone` setting (not in D-12). Needs confirmation |
+| A1 | Key-timeout setting is named `key_timeout_ms`, default 1000, accepted range 100-5000 (D-12/D-13 give no name or range for it) | Standard Stack / Settings | Cosmetic; user may want other bounds. CONFIRMED by the author 2026-11-16 (name and range as stated) |
+| A2 | Production timestamps should render in the system **local** timezone (Phase 1 shows UTC; message `ts` is Unix seconds) via `chrono::Local`, with tests injecting UTC | Pitfall 8, Code Examples | If the user wants UTC, drop `Local`; or add a `timezone` setting (not in D-12). CONFIRMED by the author 2026-11-16: system local, no timezone setting (Open Question 2) |
 | A3 | Add a lockout guard (Insert needs `cancel`; Command needs `cancel` + `execute_command`; Normal needs `enter_command` or a quit binding) as config errors | Pitfall 4 | Adds an error class beyond D-01's list; skipping it risks an unrecoverable session |
 | A4 | Reject multi-chord sequences starting with an unmodified printable char in `[insert]`/`[command]` | Pitfall 5 | Adds an error class; without it typed characters can be silently eaten |
 | A5 | Validate `cmd:<name>` against `COMMANDS` at load time (error on unknown command) | Code Examples | Otherwise the error appears only at keypress time as "Unknown command" |
@@ -470,23 +470,27 @@ Pruning matters: without it, removing `gg` leaves a valueless `g` node and `look
 | A11 | `chrono` is preferred over `time`/jiff; `time` cannot do strftime syntax natively (training knowledge, not verified this session) | Alternatives | If wrong, `time` could also work; decision is already within discretion |
 | A12 | Unbinding a key that is not bound (`"<C-x>" = "none"`) is a silent no-op | Keymap | Could be a warning instead |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **CONF-07 says "server URL" but D-12 excludes it.**
    - What we know: REQUIREMENTS.md CONF-07 text lists "server URL"; 02-CONTEXT.md D-12 locks "No `server_url`/credentials yet (Phase 3)"; ROADMAP success criterion 4 lists only sidebar width, timestamp format, history size.
    - What's unclear: whether the traceability table should mark CONF-07 complete after Phase 2.
    - Recommendation: follow the locked decision; plan notes that the server-URL part lands in Phase 3 (AUTH/ROOM work), and the verifier should check CONF-07 against the roadmap criterion, not the requirement text.
+   - **RESOLVED (author decision, 2026-11-16):** follow D-12. CONF-07 is split in REQUIREMENTS.md: in Phase 2 it covers history size, timestamp format and sidebar width, and the server-URL part is recorded on the CONF-07 line as deferred to Phase 3. Plans 02-01 and 02-02 verify CONF-07 against that text, which matches ROADMAP success criterion 4. `server_url` in config.toml stays an unknown key (warning only) in Phase 2.
 
 2. **Timezone behavior (A2).**
    - What we know: Phase 1 displays UTC `HH:MM`; the code comment calls it a placeholder "until a time crate arrives in Phase 2".
    - What's unclear: local vs UTC, and whether a `timezone` setting is wanted.
    - Recommendation: local time via `chrono::Local`; ask the author once during plan review.
+   - **RESOLVED (author decision, 2026-11-16):** system local time. The binary uses `chrono::Local` (set once in `run()`, plan 02-02 task 3); `App::new`, `App::with_config` and every test keep an injected UTC zone. No `timezone` setting is added.
 
 3. **Lockout guard and insert-sequence rejection (A3, A4).**
    - Recommendation: include both; they are cheap and make "clear error instead of a stuck terminal" true.
+   - **RESOLVED by planner adoption (2026-11-16; the author chose this route):** plan 02-03 task 3 includes both as config errors. The lockout guard requires Insert to bind `cancel`, Command to bind `cancel` and `execute_command`, and Normal to bind `enter_command` or a quit binding. In `[insert]` and `[command]`, a multi-key sequence starting with an unmodified printable key is an error. These are planner choices that the author can change at plan review.
 
 4. **Plain-vs-warning treatment of dead chords (Pitfall 6).**
    - Recommendation: warnings, not errors.
+   - **RESOLVED by planner adoption (2026-11-16; the author chose this route):** plan 02-03 task 3 reports dead chords (a leading count digit in Normal, `<C-i>`, `<C-m>`) as warnings and still applies the rows (02-03 A27). The planner also adopted the other values this research leaves to discretion: load-time `cmd:` validation (A5), border types (A6), marker and timestamp width caps (A7), palette length (A8), the 1 MiB regular-file read cap (A9), no direct serde dependency (A10) and the silent no-op for unbinding an unbound key (A12). Each one is recorded in its plan's Flagged Assumptions table as a planner choice that the author can change at plan review.
 
 ## Environment Availability
 
