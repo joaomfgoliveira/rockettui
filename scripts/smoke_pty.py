@@ -8,14 +8,18 @@ seeded rooms were applied before the first draw (general precedes NORMAL in the 
 Prints `SMOKE OK: <scenario>` and exits 0, or `SMOKE FAIL: <reason>` and exits 1.
 """
 
+import atexit
 import codecs
 import fcntl
 import os
 import pty
+import re
 import select
+import shutil
 import signal
 import struct
 import sys
+import tempfile
 import termios
 import time
 import unicodedata
@@ -112,13 +116,34 @@ class Screen:
         return any(text in r for r in self.rows())
 
 
-def spawn(binary, extra_env=None):
-    """Fork the binary onto a fresh 80x24 pty. Returns (pid, master_fd)."""
+def make_config_dir(files):
+    """Create a temp XDG_CONFIG_HOME holding `rockettui/<name>` for each `name -> text` of `files`.
+
+    Removed at exit. Returns the base directory (the value for XDG_CONFIG_HOME).
+    """
+    base = tempfile.mkdtemp(prefix="rockettui-smoke-")
+    atexit.register(shutil.rmtree, base, ignore_errors=True)
+    config = os.path.join(base, "rockettui")
+    os.mkdir(config)
+    for name, text in files.items():
+        with open(os.path.join(config, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+    return base
+
+
+def spawn(binary, extra_env=None, config_files=None):
+    """Fork the binary onto a fresh 80x24 pty. Returns (pid, master_fd).
+
+    XDG_CONFIG_HOME always points at a fresh temp dir (empty unless `config_files` is given), so
+    the developer's real config never changes a scenario.
+    """
+    config_home = make_config_dir(config_files or {})
     pid, fd = pty.fork()
     if pid == 0:
         try:
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             os.environ["TERM"] = "xterm-256color"
+            os.environ["XDG_CONFIG_HOME"] = config_home
             for key, value in (extra_env or {}).items():
                 os.environ[key] = value
             os.execv(binary, [binary])
@@ -266,10 +291,38 @@ def scenario_insert(binary):
         raise SmokeFail("alternate screen not left")
 
 
+def scenario_config_layout(binary):
+    pid, fd = spawn(binary, config_files={"config.toml": 'message_layout = "two_line"\n'})
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+
+    def screen_of(b):
+        screen = Screen()
+        screen.feed(b)
+        return screen
+
+    two_line = lambda b: any(
+        re.search(r"[┃│][a-z]+  \d\d:\d\d", row) for row in screen_of(b).rows()
+    )
+    if not read_until(fd, buf, two_line, 5):
+        raise SmokeFail("two-line message header never appeared")
+    if any(re.search(r"[┃│]\d\d:\d\d [a-z]", row) for row in screen_of(buf).rows()):
+        raise SmokeFail("compact message row shown with message_layout = two_line")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if ALT_OFF not in bytes(buf):
+        raise SmokeFail("alternate screen not left")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
     "insert": scenario_insert,
+    "config_layout": scenario_config_layout,
 }
 
 

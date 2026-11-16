@@ -3,6 +3,7 @@
 use crate::action::Action;
 use crate::app::App;
 use crate::app::update::update;
+use crate::config::Config;
 use crate::input::key::parse_keys;
 use crate::ui;
 use crossterm::event::KeyEvent;
@@ -39,4 +40,25 @@ pub(crate) fn render_to_string(app: &App, w: u16, h: u16) -> String {
         }
     }
     out
+}
+
+/// A fresh directory `<temp>/rockettui-test-<tag>-<pid>` holding the given `(name, contents)`
+/// files. Any earlier directory of that name is removed first; the caller removes it at the end.
+pub(crate) fn temp_config_dir(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rockettui-test-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp config dir");
+    for (name, contents) in files {
+        std::fs::write(dir.join(name), contents).expect("write temp config file");
+    }
+    dir
+}
+
+/// An app built from `config`, with the fake data loaded through the reducer.
+pub(crate) fn app_with_config(config: Config, w: u16, h: u16) -> App {
+    let mut app = App::with_config(Size::new(w, h), config);
+    for action in crate::data::fake::seed() {
+        update(&mut app, action);
+    }
+    app
 }

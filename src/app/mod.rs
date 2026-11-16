@@ -10,7 +10,7 @@ pub mod sidebar;
 pub mod update;
 
 use crate::data::{Folder, Message, Room, RoomId};
-use crate::input::keymap::{Keymap, default_keymap};
+use crate::input::keymap::Keymap;
 use crate::input::matcher::Matcher;
 use ratatui::layout::Size;
 use std::collections::HashMap;
@@ -66,8 +66,11 @@ pub struct App {
     pub current_room: Option<RoomId>,
     /// Per-room message cursor and scroll position; a room with no entry shows its newest message.
     pub msg_views: HashMap<RoomId, messages::MsgView>,
-    /// How messages are laid out (D-10); Compact until Phase 2 adds the config selector.
+    /// The runtime message layout (D-10). Set from `message_layout` in config.toml (D-12); kept as
+    /// its own field so the reducer and the renderer read the layout in one place.
     pub message_layout: crate::ui::wrap::MessageLayout,
+    /// The values of config.toml (D-12). `history_size` is stored for Phase 3 and read by nothing yet.
+    pub settings: crate::config::Settings,
     pub sidebar: sidebar::SidebarState,
     pub cmdline: String,
     /// The multiline draft of the input bar (D-14).
@@ -82,8 +85,13 @@ pub struct App {
 }
 
 impl App {
-    /// An empty app in Normal mode with the sidebar focused and the built-in keymap.
+    /// An empty app in Normal mode with the sidebar focused and the built-in defaults.
     pub fn new(size: Size) -> Self {
+        App::with_config(size, crate::config::Config::default())
+    }
+
+    /// An empty app in Normal mode with the sidebar focused, configured from the config files.
+    pub fn with_config(size: Size, config: crate::config::Config) -> Self {
         App {
             mode: Mode::Normal,
             focus: Focus::Sidebar,
@@ -95,13 +103,14 @@ impl App {
             messages: HashMap::new(),
             current_room: None,
             msg_views: HashMap::new(),
-            message_layout: crate::ui::wrap::MessageLayout::default(),
+            message_layout: config.settings.message_layout,
+            settings: config.settings,
             sidebar: sidebar::SidebarState::default(),
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
             local_seq: 0,
             status_msg: None,
-            keymap: default_keymap(),
+            keymap: config.keymap,
             matcher: Matcher::default(),
             should_quit: false,
         }

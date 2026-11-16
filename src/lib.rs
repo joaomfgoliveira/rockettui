@@ -3,6 +3,7 @@
 
 pub mod action;
 pub mod app;
+pub mod config;
 pub mod data;
 pub mod event;
 pub mod input;
@@ -38,7 +39,10 @@ fn unix_now() -> i64 {
 
 /// The run loop: seed the channel, queue input, then repeatedly apply a batch of Actions through
 /// the single reducer call site, draw once, and wait for the next Action.
-pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> {
+pub async fn run(
+    mut terminal: ratatui::DefaultTerminal,
+    config: config::Config,
+) -> std::io::Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Action>(CHANNEL_CAPACITY);
     // The D-13 seam: Phase 3 sends the same Actions from REST tasks.
     for action in data::fake::seed() {
@@ -49,7 +53,7 @@ pub async fn run(mut terminal: ratatui::DefaultTerminal) -> std::io::Result<()> 
     event::spawn_input_task(tx.clone());
     drop(tx);
 
-    let mut app = App::new(terminal.size()?);
+    let mut app = App::with_config(terminal.size()?, config);
     // Drain the seed before the first draw so the first frame already lists the rooms.
     let mut batch: Vec<Action> = Vec::new();
     while let Ok(action) = rx.try_recv() {
