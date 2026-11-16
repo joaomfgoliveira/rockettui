@@ -1,7 +1,8 @@
 //! Per-room message cursor and row-based scroll model (D-04).
 //!
 //! Heights come from `ui::wrap::message_rows` at the width of `layout::areas`, the same function
-//! and geometry the renderer uses, so scroll math and drawing never disagree.
+//! and geometry the renderer uses, so scroll math and drawing never disagree. Both pass the same
+//! room author column (`wrap::author_column`), so heights use exactly the column that is drawn.
 
 use crate::action::Action;
 use crate::app::App;
@@ -31,8 +32,9 @@ pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let mut starts = vec![0];
     let mut total = 0;
     if let Some(msgs) = app.messages.get(room) {
+        let author_col = wrap::author_column(msgs);
         for msg in msgs {
-            total += wrap::message_rows(msg, width, app.message_layout);
+            total += wrap::message_rows(msg, width, app.message_layout, author_col);
             starts.push(total);
         }
     }

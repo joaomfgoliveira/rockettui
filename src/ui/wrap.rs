@@ -13,7 +13,8 @@ use unicode_width::UnicodeWidthStr;
 /// arrives in Phase 2.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageLayout {
-    /// `HH:MM author  text`, continuation rows hang under the text.
+    /// `HH:MM author  text`. The author is padded to the room's shared author column, so every
+    /// body starts at the same x, and continuation rows hang under the body.
     #[default]
     Compact,
     /// An `author  HH:MM` header row, then the body indented by 2.
@@ -37,8 +38,26 @@ pub fn wrap_body(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
+/// Display width of the widest author among `msgs`, or 0 for an empty slice. Authors are
+/// sanitized before the width is measured (threat T-01-16), so the column matches what is drawn.
+pub fn author_column(msgs: &[Message]) -> usize {
+    msgs.iter()
+        .map(|m| sanitize_line(&m.author).width())
+        .max()
+        .unwrap_or(0)
+}
+
 /// The styled rows of one message at `width` columns in the given layout.
-pub fn render_rows(msg: &Message, width: u16, layout: MessageLayout) -> Vec<Line<'static>> {
+///
+/// `author_col` is the room's author column (see `author_column`). Compact pads every author to
+/// it so all bodies start at the same x; TwoLine ignores it, because its body already sits at a
+/// shared column 2.
+pub fn render_rows(
+    msg: &Message,
+    width: u16,
+    layout: MessageLayout,
+    author_col: usize,
+) -> Vec<Line<'static>> {
     let time = hhmm(msg.ts);
     let author = sanitize_line(&msg.author).into_owned();
     let dim = Style::new().add_modifier(Modifier::DIM);
@@ -46,7 +65,9 @@ pub fn render_rows(msg: &Message, width: u16, layout: MessageLayout) -> Vec<Line
     let width = usize::from(width);
     match layout {
         MessageLayout::Compact => {
-            let prefix_width = time.width() + 1 + author.width() + 2;
+            let col = author_col.max(author.width());
+            let pad = " ".repeat(col - author.width() + 2);
+            let prefix_width = time.width() + 1 + col + 2;
             let body_width = width.saturating_sub(prefix_width).max(MIN_BODY);
             let indent = " ".repeat(prefix_width);
             wrap_body(&msg.body, body_width)
@@ -58,7 +79,7 @@ pub fn render_rows(msg: &Message, width: u16, layout: MessageLayout) -> Vec<Line
                             Span::styled(time.clone(), dim),
                             Span::raw(" "),
                             Span::styled(author.clone(), bold),
-                            Span::raw("  "),
+                            Span::raw(pad.clone()),
                             Span::raw(row),
                         ])
                     } else {
@@ -86,8 +107,8 @@ pub fn render_rows(msg: &Message, width: u16, layout: MessageLayout) -> Vec<Line
 }
 
 /// Number of rows `render_rows` produces for this message.
-pub fn message_rows(msg: &Message, width: u16, layout: MessageLayout) -> usize {
-    render_rows(msg, width, layout).len()
+pub fn message_rows(msg: &Message, width: u16, layout: MessageLayout, author_col: usize) -> usize {
+    render_rows(msg, width, layout, author_col).len()
 }
 
 #[cfg(test)]
@@ -127,20 +148,73 @@ mod tests {
         }
     }
 
+    /// The author column a room holding only `m` would have.
+    fn solo(m: &Message) -> usize {
+        author_column(std::slice::from_ref(m))
+    }
+
+    #[test]
+    fn author_column_is_widest_sanitized() {
+        let authors =
+            |names: &[&str]| -> Vec<Message> { names.iter().map(|n| msg(n, "x")).collect() };
+        assert_eq!(author_column(&authors(&["alice", "bob", "dave"])), 5);
+        assert_eq!(
+            author_column(&authors(&["alice", "\u{202e}mallory\u{1b}"])),
+            7
+        );
+        assert_eq!(author_column(&authors(&["日本語"])), 6);
+        assert_eq!(author_column(&[]), 0);
+    }
+
+    #[test]
+    fn short_author_padded_to_column() {
+        let bob = render_rows(&msg("bob", "hi"), 60, MessageLayout::Compact, 5);
+        assert_eq!(texts(&bob), vec!["00:00 bob    hi".to_string()]);
+        let alice = render_rows(&msg("alice", "hello"), 60, MessageLayout::Compact, 5);
+        assert_eq!(texts(&alice), vec!["00:00 alice  hello".to_string()]);
+    }
+
+    #[test]
+    fn short_author_hangs_at_shared_column() {
+        let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
+        let rows = texts(&render_rows(
+            &msg("bob", body),
+            30,
+            MessageLayout::Compact,
+            5,
+        ));
+        assert!(rows.len() > 2, "{rows:?}");
+        assert!(rows[0].starts_with("00:00 bob    "), "{:?}", rows[0]);
+        for row in &rows {
+            assert!(row.width() <= 30, "{row:?}");
+        }
+        for row in &rows[1..] {
+            assert!(row.starts_with(&" ".repeat(13)), "{row:?}");
+            assert!(!row[13..].starts_with(' '), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn two_line_ignores_author_col() {
+        let m = msg("alice", "the quick brown fox jumps over the lazy dog");
+        assert_eq!(
+            texts(&render_rows(&m, 30, MessageLayout::TwoLine, 0)),
+            texts(&render_rows(&m, 30, MessageLayout::TwoLine, 20))
+        );
+    }
+
     #[test]
     fn compact_single_line() {
-        let rows = render_rows(&msg("alice", "hello"), 60, MessageLayout::Compact);
+        let m = msg("alice", "hello");
+        let rows = render_rows(&m, 60, MessageLayout::Compact, solo(&m));
         assert_eq!(texts(&rows), vec!["00:00 alice  hello".to_string()]);
     }
 
     #[test]
     fn compact_hanging_indent() {
         let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
-        let rows = texts(&render_rows(
-            &msg("alice", body),
-            30,
-            MessageLayout::Compact,
-        ));
+        let m = msg("alice", body);
+        let rows = texts(&render_rows(&m, 30, MessageLayout::Compact, solo(&m)));
         assert!(rows.len() > 2, "{rows:?}");
         let prefix_width = "00:00 alice  ".len();
         for row in &rows {
@@ -154,11 +228,8 @@ mod tests {
 
     #[test]
     fn long_token_splits() {
-        let rows = texts(&render_rows(
-            &msg("bob", &"x".repeat(80)),
-            40,
-            MessageLayout::Compact,
-        ));
+        let m = msg("bob", &"x".repeat(80));
+        let rows = texts(&render_rows(&m, 40, MessageLayout::Compact, solo(&m)));
         assert!(rows.len() >= 3, "{rows:?}");
         for row in &rows {
             assert!(row.width() <= 40, "{row:?}");
@@ -173,7 +244,8 @@ mod tests {
     #[test]
     fn cjk_width() {
         let body = "これはラップの確認に使う日本語のテストメッセージです。";
-        let rows = texts(&render_rows(&msg("dave", body), 30, MessageLayout::Compact));
+        let m = msg("dave", body);
+        let rows = texts(&render_rows(&m, 30, MessageLayout::Compact, solo(&m)));
         assert!(rows.len() > 1, "{rows:?}");
         for row in &rows {
             assert!(row.width() <= 30, "{row:?} is {} wide", row.width());
@@ -188,21 +260,20 @@ mod tests {
     #[test]
     fn empty_body_one_row() {
         assert_eq!(wrap_body("", 20), vec![String::new()]);
-        let rows = render_rows(&msg("alice", ""), 40, MessageLayout::Compact);
+        let m = msg("alice", "");
+        let rows = render_rows(&m, 40, MessageLayout::Compact, solo(&m));
         assert_eq!(rows.len(), 1);
-        assert_eq!(
-            message_rows(&msg("alice", ""), 40, MessageLayout::Compact),
-            1
-        );
+        assert_eq!(message_rows(&m, 40, MessageLayout::Compact, solo(&m)), 1);
     }
 
     #[test]
     fn tiny_width_no_panic() {
         for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
             for width in [0u16, 1, 5] {
-                let rows = render_rows(&msg("alice", "hello wide world"), width, layout);
+                let m = msg("alice", "hello wide world");
+                let rows = render_rows(&m, width, layout, solo(&m));
                 assert!(!rows.is_empty(), "{layout:?} width {width}");
-                assert!(message_rows(&msg("alice", "hello wide world"), width, layout) >= 1);
+                assert!(message_rows(&m, width, layout, solo(&m)) >= 1);
             }
         }
         assert!(!wrap_body("hello", 0).is_empty());
@@ -216,6 +287,7 @@ mod tests {
             &msg("alice", body),
             30,
             MessageLayout::TwoLine,
+            0,
         ));
         assert_eq!(rows[0], "alice  00:00");
         assert!(rows.len() > 2, "{rows:?}");
@@ -235,11 +307,8 @@ mod tests {
         assert!(joined.contains("red"), "{joined:?}");
         assert!(joined.contains("eviltext"), "{joined:?}");
         assert!(joined.contains("text    here"), "{joined:?}");
-        let rendered = texts(&render_rows(
-            &msg("\u{202e}mallory\u{1b}", body),
-            60,
-            MessageLayout::Compact,
-        ));
+        let m = msg("\u{202e}mallory\u{1b}", body);
+        let rendered = texts(&render_rows(&m, 60, MessageLayout::Compact, solo(&m)));
         assert_clean(&rendered);
     }
 
@@ -253,7 +322,12 @@ mod tests {
             })
             .expect("general is seeded");
         let long = &general[30];
-        let rows = texts(&render_rows(long, 50, MessageLayout::Compact));
+        let rows = texts(&render_rows(
+            long,
+            50,
+            MessageLayout::Compact,
+            author_column(&general),
+        ));
         assert!(rows.len() > 5, "{} rows", rows.len());
         for row in &rows {
             assert!(row.width() <= 50, "{row:?}");

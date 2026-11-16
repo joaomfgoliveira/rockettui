@@ -3,22 +3,22 @@ source: src/ui/mod.rs
 expression: draw_80x24(&app).backend()
 ---
 "┌ Rooms ───────────────────┐┌ general ─────────────────────────────────────────┐"
-"│  Unread                  ││09:34 dave  I'll take a look after the meeting    │"
-"│> * #general              ││09:36 alice  nice catch, thanks!                  │"
-"│  * &dev-team             ││09:38 bob  the deploy finished without errors     │"
-"│  * @alice                ││09:40 carol  heads up: maintenance window tonight │"
-"│  Folders                 ││             at 22:00                             │"
-"│  ▾ Work (1)              ││09:42 dave  👍                                    │" Hidden by multi-width symbols: [(42, " ")]
-"│      ~design-review      ││09:44 alice  let's sync on this tomorrow          │"
-"│      +platform           ││09:46 bob  morning, anyone seen the build status? │"
+"│  Unread                  ││09:36 alice  nice catch, thanks!                  │"
+"│> * #general              ││09:38 bob    the deploy finished without errors   │"
+"│  * &dev-team             ││09:40 carol  heads up: maintenance window tonight │"
+"│  * @alice                ││             at 22:00                             │"
+"│  Folders                 ││09:42 dave   👍                                   │" Hidden by multi-width symbols: [(43, " ")]
+"│  ▾ Work (1)              ││09:44 alice  let's sync on this tomorrow          │"
+"│      ~design-review      ││09:46 bob    morning, anyone seen the build       │"
+"│      +platform           ││             status?                              │"
 "│  ▾ People (1)            ││09:48 carol  build is green on main               │"
-"│  Recent                  ││09:50 dave  can someone review my PR when they get│"
-"│    #random               ││            a chance?                             │"
+"│  Recent                  ││09:50 dave   can someone review my PR when they   │"
+"│    #random               ││             get a chance?                        │"
 "│    &secrets [e2e]        ││09:52 alice  standup moved to 10:30 today         │"
-"│    #quiet                ││09:54 bob  lunch? 🍕                              │" Hidden by multi-width symbols: [(48, " ")]
+"│    #quiet                ││09:54 bob    lunch? 🍕                            │" Hidden by multi-width symbols: [(50, " ")]
 "│                          ││09:56 carol  これはラップの確認に使う日本語のテス │" Hidden by multi-width symbols: [(43, " "), (45, " "), (47, " "), (49, " "), (51, " "), (53, " "), (55, " "), (57, " "), (59, " "), (61, " "), (63, " "), (65, " "), (67, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " ")]
 "│                          ││             トメッセージです。                   │" Hidden by multi-width symbols: [(43, " "), (45, " "), (47, " "), (49, " "), (51, " "), (53, " "), (55, " "), (57, " "), (59, " ")]
-"│                          ││09:58 dave  I'll take a look after the meeting    │"
+"│                          ││09:58 dave   I'll take a look after the meeting   │"
 "│                          │└──────────────────────────────────────────────────┘"
 "│                          │┏ Input ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
 "│                          │┃hello                                             ┃"
