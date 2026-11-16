@@ -4,16 +4,13 @@ use crate::app::{App, Mode, StatusMsg};
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
-    let badge = Span::styled(
-        format!(" {} ", app.mode.label()),
-        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
-    );
+    let badge = Span::styled(format!(" {} ", app.mode.label()), app.theme.status_mode);
     let room = match app.current_room_name() {
         Some(name) => sanitize_line(name).into_owned(),
         None => "-".to_string(),

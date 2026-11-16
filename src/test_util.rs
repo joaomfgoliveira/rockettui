@@ -42,6 +42,14 @@ pub(crate) fn render_to_string(app: &App, w: u16, h: u16) -> String {
     out
 }
 
+/// Draw `ui::view` on a `TestBackend` of the given size and return the cell buffer, for tests that
+/// assert styles and colors rather than text.
+pub(crate) fn render_buffer(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test backend");
+    terminal.draw(|f| ui::view(f, app)).expect("draw");
+    terminal.backend().buffer().clone()
+}
+
 /// A fresh directory `<temp>/rockettui-test-<tag>-<pid>` holding the given `(name, contents)`
 /// files. Any earlier directory of that name is removed first; the caller removes it at the end.
 pub(crate) fn temp_config_dir(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {

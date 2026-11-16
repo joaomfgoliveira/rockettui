@@ -8,17 +8,20 @@ pub mod diag;
 pub mod keymap;
 pub mod paths;
 pub mod settings;
+pub mod theme;
 
 use crate::input::keymap::{Keymap, default_keymap};
 use std::path::Path;
 
 pub use diag::{Problem, Report};
 pub use settings::Settings;
+pub use theme::Theme;
 
 /// Everything the app needs from the config files.
 pub struct Config {
     pub settings: Settings,
     pub keymap: Keymap,
+    pub theme: Theme,
 }
 
 impl Default for Config {
@@ -26,6 +29,7 @@ impl Default for Config {
         Config {
             settings: Settings::default(),
             keymap: default_keymap(),
+            theme: Theme::default(),
         }
     }
 }
@@ -48,16 +52,14 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
         sources.keymap.as_deref(),
         &mut problems,
     );
-    // theme.toml gets a real parser in plan 02-04; until then its syntax errors still land in the
-    // one report.
-    diag::check_syntax(
-        diag::ConfigFile::Theme,
-        sources.theme.as_deref(),
-        &mut problems,
-    );
+    let theme = theme::parse(sources.theme.as_deref(), &mut problems);
     let report = Report::new(problems);
     if report.errors.is_empty() {
-        Ok(Config { settings, keymap })
+        Ok(Config {
+            settings,
+            keymap,
+            theme,
+        })
     } else {
         Err(report)
     }

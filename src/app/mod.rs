@@ -82,6 +82,8 @@ pub struct App {
     pub local_seq: u64,
     pub status_msg: Option<StatusMsg>,
     pub keymap: Keymap,
+    /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
+    pub theme: crate::config::Theme,
     /// Pending count and key sequence between keys (D-05, D-06).
     pub matcher: Matcher,
     pub should_quit: bool,
@@ -115,6 +117,7 @@ impl App {
             local_seq: 0,
             status_msg: None,
             keymap: config.keymap,
+            theme: config.theme,
             matcher: Matcher::default(),
             should_quit: false,
         }
