@@ -7,9 +7,7 @@
 use crate::action::Action;
 use crate::app::App;
 use crate::data::RoomId;
-use crate::ui::layout;
 use crate::ui::wrap;
-use ratatui::layout::Rect;
 
 /// Where a room's message pane is looking: the selected message and the first visible row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20,8 +18,7 @@ pub struct MsgView {
 
 /// Inner (width, height) of the messages pane for the app's current size, borders removed.
 pub fn viewport(app: &App) -> (u16, u16) {
-    let area = Rect::new(0, 0, app.size.width, app.size.height);
-    let pane = layout::areas(area, app.input_rows()).messages;
+    let pane = app.areas().messages;
     (pane.width.saturating_sub(2), pane.height.saturating_sub(2))
 }
 
@@ -164,10 +161,22 @@ mod tests {
     use super::*;
     use crate::app::Focus;
     use crate::app::update::update;
-    use crate::test_util::{app_80x24, press};
+    use crate::test_util::{app_80x24, app_with_config, config_from_toml, press};
 
     fn general() -> RoomId {
         RoomId("general".to_string())
+    }
+
+    #[test]
+    fn viewport_follows_sidebar_width() {
+        for (toml, width) in [
+            ("sidebar_width = 40\n", 38),
+            ("sidebar_width = 10\n", 68),
+            ("", 50),
+        ] {
+            let app = app_with_config(config_from_toml(toml), 80, 24);
+            assert_eq!(viewport(&app).0, width, "config {toml:?}");
+        }
     }
 
     fn open_general() -> App {

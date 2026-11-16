@@ -54,6 +54,18 @@ pub(crate) fn temp_config_dir(tag: &str, files: &[(&str, &str)]) -> std::path::P
     dir
 }
 
+/// The `Config` parsed from the text of a config.toml; panics with the report if it is invalid.
+pub(crate) fn config_from_toml(toml: &str) -> Config {
+    let sources = crate::config::Sources {
+        config: Some(toml.to_string()),
+        ..Default::default()
+    };
+    match crate::config::load_from_sources(&sources) {
+        Ok(config) => config,
+        Err(report) => panic!("test config is invalid: {} problem(s)", report.errors.len()),
+    }
+}
+
 /// An app built from `config`, with the fake data loaded through the reducer.
 pub(crate) fn app_with_config(config: Config, w: u16, h: u16) -> App {
     let mut app = App::with_config(Size::new(w, h), config);

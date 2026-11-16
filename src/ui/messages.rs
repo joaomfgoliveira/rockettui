@@ -81,7 +81,6 @@ mod tests {
     use crate::app::messages::{row_starts, view};
     use crate::data::{Message, RoomId};
     use crate::test_util::{app_80x24, press};
-    use crate::ui::layout;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::{Rect, Size};
@@ -94,8 +93,7 @@ mod tests {
     /// The app's own messages pane rect: `view()` derives its viewport from `app.size`, so every
     /// render test draws on a backend of exactly this size.
     fn pane_rect(app: &App) -> Rect {
-        let area = Rect::new(0, 0, app.size.width, app.size.height);
-        layout::areas(area, app.input_rows()).messages
+        app.areas().messages
     }
 
     fn render_pane(app: &App) -> Terminal<TestBackend> {

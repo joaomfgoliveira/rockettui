@@ -62,16 +62,12 @@ mod tests {
     use super::*;
     use crate::app::Mode;
     use crate::test_util::{app_80x24, press};
-    use crate::ui::{self, layout};
+    use crate::ui;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     fn input_area(app: &App) -> Rect {
-        layout::areas(
-            Rect::new(0, 0, app.size.width, app.size.height),
-            app.input_rows(),
-        )
-        .input
+        app.areas().input
     }
 
     #[test]

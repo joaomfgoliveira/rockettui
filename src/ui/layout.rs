@@ -3,7 +3,8 @@
 
 use ratatui::layout::{Constraint, Layout, Rect};
 
-/// Width of the sidebar column in cells, borders included (D-13).
+/// Default width of the sidebar column in cells, borders included (D-13); config.toml
+/// `sidebar_width` overrides it.
 pub const SIDEBAR_WIDTH: u16 = 28;
 
 /// The five regions of the screen.
@@ -16,9 +17,10 @@ pub struct Areas {
     pub cmdline: Rect,
 }
 
-/// Split `area` into the five regions. `input_rows` is the number of content rows of the input
-/// bar; the bar itself is two rows taller (borders).
-pub fn areas(area: Rect, input_rows: u16) -> Areas {
+/// Split `area` into the five regions. `sidebar_width` is the sidebar column width in cells; it is
+/// not clamped, so a width beyond the terminal leaves the main column narrow or empty. `input_rows`
+/// is the number of content rows of the input bar; the bar itself is two rows taller (borders).
+pub fn areas(area: Rect, sidebar_width: u16, input_rows: u16) -> Areas {
     let [body, status, cmdline] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(1),
@@ -26,7 +28,7 @@ pub fn areas(area: Rect, input_rows: u16) -> Areas {
     ])
     .areas(area);
     let [sidebar, main] =
-        Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)]).areas(body);
+        Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(0)]).areas(body);
     let [messages, input] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_rows.saturating_add(2)),
@@ -47,7 +49,7 @@ mod tests {
 
     #[test]
     fn areas_80x24() {
-        let a = areas(Rect::new(0, 0, 80, 24), 1);
+        let a = areas(Rect::new(0, 0, 80, 24), SIDEBAR_WIDTH, 1);
         assert_eq!((a.sidebar.x, a.sidebar.width), (0, 28));
         assert_eq!((a.status.y, a.status.height), (22, 1));
         assert_eq!((a.cmdline.y, a.cmdline.height), (23, 1));
@@ -63,13 +65,28 @@ mod tests {
         for (w, h) in [(0u16, 0u16), (1, 1), (10, 3)] {
             let outer = Rect::new(0, 0, w, h);
             for rows in [1u16, 5] {
-                let a = areas(outer, rows);
+                let a = areas(outer, SIDEBAR_WIDTH, rows);
                 for r in [a.sidebar, a.messages, a.input, a.status, a.cmdline] {
                     assert!(r.x >= outer.x && r.y >= outer.y, "{w}x{h} rows {rows}");
                     assert!(r.right() <= outer.right(), "{w}x{h} rows {rows}");
                     assert!(r.bottom() <= outer.bottom(), "{w}x{h} rows {rows}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn areas_custom_sidebar_width() {
+        let a = areas(Rect::new(0, 0, 80, 24), 40, 1);
+        assert_eq!((a.sidebar.x, a.sidebar.width), (0, 40));
+        assert_eq!(a.messages.x, 40);
+        assert_eq!(a.messages.width, 40);
+        let outer = Rect::new(0, 0, 40, 8);
+        let a = areas(outer, 60, 1);
+        for r in [a.sidebar, a.messages, a.input, a.status, a.cmdline] {
+            assert!(r.x >= outer.x && r.y >= outer.y);
+            assert!(r.right() <= outer.right());
+            assert!(r.bottom() <= outer.bottom());
         }
     }
 }

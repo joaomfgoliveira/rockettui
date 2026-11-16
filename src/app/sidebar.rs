@@ -5,8 +5,6 @@
 use crate::action::Action;
 use crate::app::App;
 use crate::data::{FolderId, Room, RoomId};
-use crate::ui::layout;
-use ratatui::layout::Rect;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,11 +178,7 @@ fn selectable_indices(rows: &[SidebarRow]) -> Vec<usize> {
 
 /// Rows a half-page motion moves: half the sidebar's inner height, at least one.
 fn half_page(app: &App) -> usize {
-    let area = Rect::new(0, 0, app.size.width, app.size.height);
-    let inner = layout::areas(area, app.input_rows())
-        .sidebar
-        .height
-        .saturating_sub(2);
+    let inner = app.areas().sidebar.height.saturating_sub(2);
     usize::from(inner / 2).max(1)
 }
 

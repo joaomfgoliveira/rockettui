@@ -125,11 +125,18 @@ impl App {
         app
     }
 
+    /// The five screen regions for the current size, sidebar width and input height. The renderer
+    /// and every reducer computation take their geometry from here, so they cannot disagree.
+    pub fn areas(&self) -> crate::ui::layout::Areas {
+        let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
+        crate::ui::layout::areas(area, self.settings.sidebar_width, self.input_rows())
+    }
+
     /// Rows the input bar occupies: the draft's visual rows, from 1 up to `MAX_INPUT_ROWS`.
     pub fn input_rows(&self) -> u16 {
         let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
         // The input pane's width does not depend on its own height.
-        let width = crate::ui::layout::areas(area, 1)
+        let width = crate::ui::layout::areas(area, self.settings.sidebar_width, 1)
             .input
             .width
             .saturating_sub(2);
@@ -141,8 +148,7 @@ impl App {
 
     /// Inner (width, height) of the input pane, borders removed; shared by reducer and renderer.
     pub fn input_viewport(&self) -> (u16, u16) {
-        let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
-        let pane = crate::ui::layout::areas(area, self.input_rows()).input;
+        let pane = self.areas().input;
         (pane.width.saturating_sub(2), pane.height.saturating_sub(2))
     }
 

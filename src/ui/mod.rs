@@ -28,7 +28,7 @@ pub fn view(frame: &mut Frame, app: &App) {
         frame.render_widget(Paragraph::new(notice), area);
         return;
     }
-    let areas = layout::areas(area, app.input_rows());
+    let areas = layout::areas(area, app.settings.sidebar_width, app.input_rows());
     sidebar::render(frame, areas.sidebar, app);
     messages::render(frame, areas.messages, app);
     input::render(frame, areas.input, app);
@@ -50,7 +50,7 @@ pub fn pane_block(title: &str, focused: bool) -> Block<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_util::{app_80x24, press, render_to_string};
+    use crate::test_util::{app_80x24, app_with_config, config_from_toml, press, render_to_string};
     use crate::ui::status;
     use ratatui::layout::Position;
 
@@ -192,6 +192,26 @@ mod tests {
     }
 
     #[test]
+    fn layout_80x24_sidebar_40() {
+        let mut app = app_with_config(config_from_toml("sidebar_width = 40\n"), 80, 24);
+        let at = crate::data::fake::FAKE_EPOCH + 43_200;
+        crate::app::update::update(&mut app, crate::action::Action::Clock(at));
+        insta::assert_snapshot!(draw_80x24(&app).backend());
+    }
+
+    #[test]
+    fn sidebar_wider_than_terminal() {
+        let mut app = app_with_config(config_from_toml("sidebar_width = 60\n"), 80, 24);
+        app.current_room = Some(app.rooms[0].id.clone());
+        for (w, h) in [(40u16, 8u16), (61, 10), (80, 24), (39, 7)] {
+            app.size = ratatui::layout::Size::new(w, h);
+            let _ = render_to_string(&app, w, h);
+        }
+        app.size = ratatui::layout::Size::new(80, 24);
+        assert_eq!(app.areas().messages.width, 20);
+    }
+
+    #[test]
     fn layout_80x24_normal() {
         let app = fixed_clock_app();
         insta::assert_snapshot!(draw_80x24(&app).backend());
@@ -214,16 +234,14 @@ mod tests {
 
     #[test]
     fn input_grows_to_five_rows() {
-        use crate::ui::layout;
-        use ratatui::layout::Rect;
         let mut app = fixed_clock_app();
-        let one = layout::areas(Rect::new(0, 0, 80, 24), app.input_rows());
+        let one = app.areas();
         assert_eq!(one.input.height, 3);
         let draft: Vec<String> = (0..7).map(|i| format!("line {i}")).collect();
         press(&mut app, "i");
         app.input.insert_str(&draft.join("\n"));
         assert_eq!(app.input_rows(), 5);
-        let seven = layout::areas(Rect::new(0, 0, 80, 24), app.input_rows());
+        let seven = app.areas();
         assert_eq!(seven.input.height, 7);
         assert_eq!(one.messages.height - seven.messages.height, 4);
         // The border row of the grown input pane is drawn where the layout says.
