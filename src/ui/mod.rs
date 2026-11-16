@@ -12,8 +12,9 @@ pub mod timefmt;
 pub mod wrap;
 
 use crate::app::App;
+use crate::config::Theme;
 use ratatui::Frame;
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Narrowest terminal the panes are laid out in.
 pub const MIN_WIDTH: u16 = 40;
@@ -37,21 +38,28 @@ pub fn view(frame: &mut Frame, app: &App) {
     status::render_cmdline(frame, areas.cmdline, app);
 }
 
-/// A bordered pane block; the border is thick when the pane has focus.
-pub fn pane_block(title: &str, focused: bool) -> Block<'_> {
+/// A bordered pane block. Border type and style come from the theme (D-11): thick for the
+/// focused pane and plain for the others unless theme.toml says otherwise. The border style also
+/// styles the title.
+pub fn pane_block<'a>(title: &'a str, focused: bool, theme: &Theme) -> Block<'a> {
+    let (border_type, style) = if focused {
+        (theme.border_type_focused, theme.border_focused)
+    } else {
+        (theme.border_type_unfocused, theme.border_unfocused)
+    };
     Block::default()
         .borders(Borders::ALL)
-        .border_type(if focused {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        })
+        .border_type(border_type)
+        .border_style(style)
+        .title_style(style)
         .title(title)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_util::{app_80x24, app_with_config, config_from_toml, press, render_to_string};
+    use crate::test_util::{
+        app_80x24, app_with_config, config_from_theme, config_from_toml, press, render_to_string,
+    };
     use crate::ui::status;
     use ratatui::layout::Position;
 
@@ -190,6 +198,57 @@ mod tests {
         let at = crate::data::fake::FAKE_EPOCH + 43_200;
         crate::app::update::update(&mut app, crate::action::Action::Clock(at));
         app
+    }
+
+    #[test]
+    fn themed_border_corners() {
+        let toml = "[border.focused]\ntype = \"rounded\"\n[border.unfocused]\ntype = \"double\"\n";
+        let mut app = app_with_config(config_from_theme(toml), 80, 24);
+        let corners = |app: &crate::app::App| {
+            let out = render_to_string(app, 80, 24);
+            let row = out.lines().next().unwrap_or_default().to_string();
+            (
+                row.chars().next().unwrap_or(' '),
+                row.chars().nth(28).unwrap_or(' '),
+            )
+        };
+        assert_eq!(corners(&app), ('\u{256d}', '\u{2554}'));
+        press(&mut app, "<C-w>l");
+        assert_eq!(corners(&app), ('\u{2554}', '\u{256d}'));
+    }
+
+    #[test]
+    fn border_style_colors_border_and_title() {
+        let toml = "[border.focused]\nfg = 6\n[border.unfocused]\nfg = 8\n";
+        let app = app_with_config(config_from_theme(toml), 80, 24);
+        let buffer = crate::test_util::render_buffer(&app, 80, 24);
+        // Focused sidebar: corner and title letters; unfocused messages pane: corner and title.
+        assert_eq!(buffer[(0, 0)].fg, ratatui::style::Color::Indexed(6));
+        assert_eq!(
+            buffer[(2, 0)].fg,
+            ratatui::style::Color::Indexed(6),
+            "title"
+        );
+        assert_eq!(buffer[(28, 0)].fg, ratatui::style::Color::Indexed(8));
+        assert_eq!(
+            buffer[(30, 0)].fg,
+            ratatui::style::Color::Indexed(8),
+            "title"
+        );
+    }
+
+    #[test]
+    fn layout_80x24_themed_chrome() {
+        let toml = "[border.focused]\ntype = \"rounded\"\n[border.unfocused]\ntype = \"double\"\n[markers]\nfold_open = \"v \"\nfold_closed = \"> \"\nunread = \"! \"\ncursor = \"\\u00bb \"\n";
+        let mut app = app_with_config(config_from_theme(toml), 80, 24);
+        let at = crate::data::fake::FAKE_EPOCH + 43_200;
+        crate::app::update::update(&mut app, crate::action::Action::Clock(at));
+        // Collapse Work so both fold markers show.
+        app.sidebar
+            .collapsed
+            .insert(crate::data::FolderId("work".to_string()));
+        crate::app::sidebar::on_rows_changed(&mut app);
+        insta::assert_snapshot!(draw_80x24(&app).backend());
     }
 
     #[test]

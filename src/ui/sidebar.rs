@@ -10,9 +10,11 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, ListState};
+use unicode_width::UnicodeWidthStr;
 
-/// The glyph drawn before a room name for its kind. The app draws it; it never comes from the
-/// name, so a room cannot pose as another kind (T-01-14).
+/// The default glyph drawn before a room name for its kind; `Markers::default` takes its glyphs
+/// from here. The app draws it; it never comes from the name, so a room cannot pose as another
+/// kind (T-01-14).
 pub fn kind_glyph(kind: RoomKind) -> &'static str {
     match kind {
         RoomKind::Channel => "#",
@@ -37,7 +39,11 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
                 .find(|folder| folder.id == *id)
                 .map(|folder| sanitize_line(&folder.name))
                 .unwrap_or_default();
-            let marker = if *open { "\u{25be} " } else { "\u{25b8} " };
+            let marker = if *open {
+                &app.theme.markers.fold_open
+            } else {
+                &app.theme.markers.fold_closed
+            };
             let count = if *unread > 0 {
                 format!(" ({unread})")
             } else {
@@ -53,10 +59,19 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
                 return ListItem::new("");
             };
             let indent = "  ".repeat(usize::from(*indent));
-            let unread = if room.unread { "* " } else { "  " };
-            let glyph = kind_glyph(room.kind);
+            // The placeholder is as wide as the unread marker, so read rooms stay aligned.
+            let unread = if room.unread {
+                app.theme.markers.unread.clone()
+            } else {
+                " ".repeat(app.theme.markers.unread.width())
+            };
+            let glyph = app.theme.markers.glyph(room.kind);
             let name = sanitize_line(&room.name);
-            let tag = if room.encrypted { " [e2e]" } else { "" };
+            let tag = if room.encrypted {
+                app.theme.markers.encrypted.as_str()
+            } else {
+                ""
+            };
             let style = if room.unread {
                 app.theme.sidebar_unread
             } else {
@@ -80,8 +95,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         app.theme.sidebar_cursor_unfocused
     };
     let list = List::new(items)
-        .block(pane_block(" Rooms ", focused))
-        .highlight_symbol("> ")
+        .block(pane_block(" Rooms ", focused, &app.theme))
+        .highlight_symbol(app.theme.markers.cursor.as_str())
         .highlight_style(highlight);
     let mut state = ListState::default();
     if !rows.is_empty() {
@@ -269,5 +284,53 @@ mod tests {
             u16::try_from(random).expect("y"),
         )];
         assert_eq!(cell.fg, Color::Reset);
+    }
+
+    #[test]
+    fn themed_markers() {
+        let config = config_from_theme("[markers]\nunread = \"!!! \"\n");
+        let app = app_with_config(config, 28, 20);
+        let rows = screen_rows(&draw(&app));
+        let general = rows.iter().find(|r| r.contains("general")).expect("row");
+        assert!(general.contains("!!! #general"), "{general:?}");
+        let random = rows.iter().find(|r| r.contains("random")).expect("row");
+        assert!(!random.contains('!'), "{random:?}");
+        // The read room's glyph sits under the unread room's glyph: the placeholder is as wide as
+        // the unread marker, and neither row has an indent.
+        let glyph_col = |row: &str, glyph: char| row.chars().position(|c| c == glyph);
+        assert_eq!(glyph_col(general, '#'), glyph_col(random, '#'));
+
+        let config = config_from_theme("[markers]\nchannel = \"c\"\nunread = \"\"\n");
+        let app = app_with_config(config, 28, 20);
+        let text = screen_rows(&draw(&app)).join("\n");
+        assert!(text.contains("cgeneral"), "{text}");
+        assert!(text.contains("crandom"), "{text}");
+        assert!(text.contains("&dev-team"), "other kinds keep their glyph");
+
+        let config = config_from_theme(
+            "[markers]\nfold_open = \"v \"\nfold_closed = \"> \"\ncursor = \"\\u00bb \"\nencrypted = \" (e2e)\"\n",
+        );
+        let mut app = app_with_config(config, 28, 20);
+        let text = screen_rows(&draw(&app)).join("\n");
+        assert!(text.contains("v Work (1)"), "{text}");
+        assert!(text.contains("\u{bb} "), "{text}");
+        assert!(text.contains("(e2e)") && !text.contains("[e2e]"), "{text}");
+        app.sidebar.collapsed.insert(FolderId("work".to_string()));
+        sidebar::on_rows_changed(&mut app);
+        let text = screen_rows(&draw(&app)).join("\n");
+        assert!(text.contains("> Work (1)"), "{text}");
+
+        for kind in [
+            RoomKind::Channel,
+            RoomKind::PrivateGroup,
+            RoomKind::Discussion,
+            RoomKind::Team,
+            RoomKind::DirectMessage,
+        ] {
+            assert_eq!(
+                crate::config::Theme::default().markers.glyph(kind),
+                kind_glyph(kind)
+            );
+        }
     }
 }

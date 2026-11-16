@@ -15,7 +15,7 @@ use ratatui::widgets::Paragraph;
 pub fn cursor_position(app: &App, area: Rect) -> Option<Position> {
     let editing =
         app.mode == Mode::Insert || (app.mode == Mode::Normal && app.focus == Focus::Input);
-    let inner = pane_block("", false).inner(area);
+    let inner = pane_block("", false, &app.theme).inner(area);
     if !editing || inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -28,7 +28,7 @@ pub fn cursor_position(app: &App, area: Rect) -> Option<Position> {
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = pane_block(" Input ", app.focus == Focus::Input);
+    let block = pane_block(" Input ", app.focus == Focus::Input, &app.theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

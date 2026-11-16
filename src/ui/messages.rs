@@ -17,7 +17,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Some(name) => format!(" {} ", sanitize_line(name)),
         None => " Messages ".to_string(),
     };
-    let block = pane_block(&title, focused);
+    let block = pane_block(&title, focused, &app.theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

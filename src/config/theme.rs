@@ -5,10 +5,14 @@
 //! unset field inherits the built-in default.
 
 use super::diag::{ConfigFile, Problem, Reader, parse_table};
+use crate::data::RoomKind;
+use crate::ui::sanitize::sanitize_line;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::BorderType;
 use std::str::FromStr;
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
+use unicode_width::UnicodeWidthStr;
 
 /// Every styled element a theme.toml may set, as `pane.element`. Grows with each task of plan
 /// 02-04 and with plan 02-05; the names are the user-facing vocabulary of theme.toml.
@@ -27,7 +31,13 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "cmdline.text",
     "input.text",
     "input.hint",
+    "border.focused",
+    "border.unfocused",
 ];
+
+/// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
+pub const MAX_MARKER_WIDTH: usize = 4;
+pub const MAX_TAG_WIDTH: usize = 12;
 
 /// Modifier names accepted in `modifiers = [..]` (D-09).
 pub const MODIFIER_NAMES: &[(&str, Modifier)] = &[
@@ -42,8 +52,97 @@ pub const MODIFIER_NAMES: &[(&str, Modifier)] = &[
     ("crossed_out", Modifier::CROSSED_OUT),
 ];
 
-/// The keys an element table accepts.
+/// The keys an element table accepts; `[border.*]` tables also take `type`.
 const STYLE_KEYS: &[&str] = &["fg", "bg", "modifiers"];
+const BORDER_KEYS: &[&str] = &["fg", "bg", "modifiers", "type"];
+
+/// The keys of the `[markers]` table.
+const MARKER_KEYS: &[&str] = &[
+    "fold_open",
+    "fold_closed",
+    "unread",
+    "cursor",
+    "encrypted",
+    "channel",
+    "private_group",
+    "discussion",
+    "team",
+    "direct_message",
+];
+
+/// Border types a `type` key accepts (A6).
+const BORDER_TYPES: &[(&str, BorderType)] = &[
+    ("plain", BorderType::Plain),
+    ("rounded", BorderType::Rounded),
+    ("double", BorderType::Double),
+    ("thick", BorderType::Thick),
+];
+
+/// The strings drawn in the sidebar: fold, unread and cursor markers, the encrypted tag and the
+/// room-kind glyphs (D-11). They are drawn and measured in every row, so each one is checked
+/// when it is read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Markers {
+    pub fold_open: String,
+    pub fold_closed: String,
+    pub unread: String,
+    pub cursor: String,
+    pub encrypted: String,
+    pub channel: String,
+    pub private_group: String,
+    pub discussion: String,
+    pub team: String,
+    pub direct_message: String,
+}
+
+impl Default for Markers {
+    fn default() -> Self {
+        let glyph = |kind| crate::ui::sidebar::kind_glyph(kind).to_string();
+        Markers {
+            fold_open: "\u{25be} ".to_string(),
+            fold_closed: "\u{25b8} ".to_string(),
+            unread: "* ".to_string(),
+            cursor: "> ".to_string(),
+            encrypted: " [e2e]".to_string(),
+            channel: glyph(RoomKind::Channel),
+            private_group: glyph(RoomKind::PrivateGroup),
+            discussion: glyph(RoomKind::Discussion),
+            team: glyph(RoomKind::Team),
+            direct_message: glyph(RoomKind::DirectMessage),
+        }
+    }
+}
+
+impl Markers {
+    /// The glyph drawn before a room name of this kind.
+    pub fn glyph(&self, kind: RoomKind) -> &str {
+        match kind {
+            RoomKind::Channel => &self.channel,
+            RoomKind::PrivateGroup => &self.private_group,
+            RoomKind::Discussion => &self.discussion,
+            RoomKind::Team => &self.team,
+            RoomKind::DirectMessage => &self.direct_message,
+        }
+    }
+
+    /// The marker field behind a `[markers]` key and its width cap.
+    fn slot_mut(&mut self, key: &str) -> Option<(&mut String, usize)> {
+        let slot = match key {
+            "fold_open" => &mut self.fold_open,
+            "fold_closed" => &mut self.fold_closed,
+            "unread" => &mut self.unread,
+            "cursor" => &mut self.cursor,
+            "encrypted" => return Some((&mut self.encrypted, MAX_TAG_WIDTH)),
+            "channel" => &mut self.channel,
+            "private_group" => &mut self.private_group,
+            "discussion" => &mut self.discussion,
+            "team" => &mut self.team,
+            "direct_message" => &mut self.direct_message,
+            _ => return None,
+        };
+        Some((slot, MAX_MARKER_WIDTH))
+    }
+}
 
 /// Longest user-written name echoed back in a problem (T-02-01).
 const MAX_ECHO: usize = 32;
@@ -65,6 +164,12 @@ pub struct Theme {
     pub cmdline_text: Style,
     pub input_text: Style,
     pub input_hint: Style,
+    /// Border and title style of the focused and the other panes.
+    pub border_focused: Style,
+    pub border_unfocused: Style,
+    pub border_type_focused: BorderType,
+    pub border_type_unfocused: BorderType,
+    pub markers: Markers,
 }
 
 impl Default for Theme {
@@ -85,6 +190,11 @@ impl Default for Theme {
             cmdline_text: plain,
             input_text: plain,
             input_hint: plain.add_modifier(Modifier::DIM),
+            border_focused: plain,
+            border_unfocused: plain,
+            border_type_focused: BorderType::Thick,
+            border_type_unfocused: BorderType::Plain,
+            markers: Markers::default(),
         }
     }
 }
@@ -107,6 +217,8 @@ impl Theme {
             ("cmdline", "text") => Some(&mut self.cmdline_text),
             ("input", "text") => Some(&mut self.input_text),
             ("input", "hint") => Some(&mut self.input_hint),
+            ("border", "focused") => Some(&mut self.border_focused),
+            ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
         }
     }
@@ -211,8 +323,8 @@ fn parse_modifiers(
     ok.then_some(all)
 }
 
-/// Read `fg`, `bg` and `modifiers` of the element table at `path`.
-fn read_spec(reader: &mut Reader<'_>, fields: &DeTable<'_>, path: &str) -> StyleSpec {
+/// Read `fg`, `bg` and `modifiers` of the element table at `path`; unknown keys warn.
+fn read_spec(reader: &mut Reader<'_>, fields: &DeTable<'_>, pane: &str, path: &str) -> StyleSpec {
     let mut spec = StyleSpec::default();
     if let Some(value) = fields.get("fg") {
         spec.fg = parse_color(reader, value, &format!("{path}.fg"));
@@ -223,8 +335,87 @@ fn read_spec(reader: &mut Reader<'_>, fields: &DeTable<'_>, path: &str) -> Style
     if let Some(value) = fields.get("modifiers") {
         spec.modifiers = parse_modifiers(reader, value, &format!("{path}.modifiers"));
     }
-    reader.warn_unknown(fields, STYLE_KEYS, &format!("{path}."));
+    let known = if pane == "border" {
+        BORDER_KEYS
+    } else {
+        STYLE_KEYS
+    };
+    reader.warn_unknown(fields, known, &format!("{path}."));
     spec
+}
+
+/// The `type` of a `[border.*]` table.
+fn parse_border_type(
+    reader: &mut Reader<'_>,
+    value: &Spanned<DeValue<'_>>,
+    key: &str,
+) -> Option<BorderType> {
+    let text = reader.string(value, key)?;
+    let found = BORDER_TYPES.iter().find(|(name, _)| *name == text);
+    if found.is_none() {
+        reader.error(
+            value.span().start,
+            key,
+            "border type must be one of plain, rounded, double, thick",
+        );
+    }
+    found.map(|(_, border)| *border)
+}
+
+/// Read the `[markers]` table over `markers`. Each marker must survive `sanitize_line` unchanged
+/// (T-02-14) and fit its width cap (A7); an empty string is allowed.
+fn parse_markers(reader: &mut Reader<'_>, value: &Spanned<DeValue<'_>>, markers: &mut Markers) {
+    let DeValue::Table(table) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            "markers",
+            format!("expected a table, found {}", value.get_ref().type_str()),
+        );
+        return;
+    };
+    let mut fold_at = None;
+    for (name_key, entry) in table.iter() {
+        let name: &str = name_key.get_ref();
+        let key = format!("markers.{}", cap(name));
+        // Unknown keys are reported by `warn_unknown` below.
+        let Some((slot, max_width)) = markers.slot_mut(name) else {
+            continue;
+        };
+        let Some(text) = reader.string(entry, &key) else {
+            continue;
+        };
+        if sanitize_line(&text) != text.as_str() {
+            reader.error(
+                entry.span().start,
+                &key,
+                "must not contain control or bidi characters",
+            );
+            continue;
+        }
+        let width = text.width();
+        if width > max_width {
+            reader.error(
+                entry.span().start,
+                &key,
+                format!("must be at most {max_width} columns wide, got {width}"),
+            );
+            continue;
+        }
+        *slot = text;
+        if name.starts_with("fold_") {
+            fold_at.get_or_insert(entry.span().start);
+        }
+    }
+    if let Some(at) = fold_at
+        && markers.fold_open.width() != markers.fold_closed.width()
+    {
+        reader.warning(
+            at,
+            "markers.fold_open",
+            "fold markers have different widths; folder rows shift when toggled",
+        );
+    }
+    reader.warn_unknown(table, MARKER_KEYS, "markers.");
 }
 
 fn is_pane(name: &str) -> bool {
@@ -250,6 +441,10 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Theme {
     };
     for (pane_key, pane_value) in root.get_ref().iter() {
         let pane: &str = pane_key.get_ref();
+        if pane == "markers" {
+            parse_markers(&mut reader, pane_value, &mut theme.markers);
+            continue;
+        }
         if !is_pane(pane) {
             reader.warning(pane_key.span().start, &cap(pane), "unknown key, ignored");
             continue;
@@ -287,9 +482,18 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Theme {
                 );
                 continue;
             };
-            let spec = read_spec(&mut reader, fields, &path);
+            let spec = read_spec(&mut reader, fields, pane, &path);
             if let Some(slot) = theme.style_slot_mut(pane, element) {
                 *slot = spec.resolve(*slot);
+            }
+            if pane == "border"
+                && let Some(value) = fields.get("type")
+                && let Some(border) = parse_border_type(&mut reader, value, &format!("{path}.type"))
+            {
+                match element {
+                    "focused" => theme.border_type_focused = border,
+                    _ => theme.border_type_unfocused = border,
+                }
             }
         }
     }
@@ -463,7 +667,11 @@ mod tests {
 
     #[test]
     fn chrome_elements_parse() {
-        assert_eq!(ELEMENT_PATHS.len(), 14);
+        assert_eq!(
+            ELEMENT_PATHS.len(),
+            16,
+            "14 chrome paths plus the two borders"
+        );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
             let (pane, element) = path.split_once('.').expect("pane.element");
@@ -515,6 +723,183 @@ mod tests {
             t.input_text,
         ] {
             assert_eq!(plain, Style::default());
+        }
+    }
+
+    #[test]
+    fn border_types() {
+        for (name, want) in [
+            ("plain", BorderType::Plain),
+            ("rounded", BorderType::Rounded),
+            ("double", BorderType::Double),
+            ("thick", BorderType::Thick),
+        ] {
+            let (theme, out) = parse_str(&format!(
+                "[border.focused]\ntype = \"{name}\"\n[border.unfocused]\ntype = \"{name}\"\n"
+            ));
+            assert!(out.is_empty(), "{name}: {out:?}");
+            assert_eq!(theme.border_type_focused, want, "{name}");
+            assert_eq!(theme.border_type_unfocused, want, "{name}");
+        }
+        let (theme, out) = parse_str("[border.focused]\ntype = \"dashed\"\n");
+        assert_eq!(theme, Theme::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].key.as_deref(), Some("border.focused.type"));
+        assert!(out[0].message.contains("rounded"), "{}", out[0].message);
+        let (_, out) = parse_str("[border.focused]\ntype = 3\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.starts_with("expected a string"));
+
+        // `type` is only a key of [border.*]; elsewhere it is an unknown key.
+        let (theme, out) = parse_str("[sidebar.cursor]\ntype = \"rounded\"\n");
+        assert_eq!(theme, Theme::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, Severity::Warning);
+        assert_eq!(out[0].key.as_deref(), Some("sidebar.cursor.type"));
+
+        // The border style also applies.
+        let (theme, out) = parse_str("[border.focused]\nfg = \"cyan\"\ntype = \"rounded\"\n");
+        assert!(out.is_empty());
+        assert_eq!(theme.border_focused.fg, Some(Color::Cyan));
+        assert_eq!(theme.border_type_unfocused, BorderType::Plain);
+    }
+
+    fn marker_problems(src: &str) -> Vec<Problem> {
+        parse_str(src).1
+    }
+
+    #[test]
+    fn markers_validation() {
+        for bad in ["\\u001b[2J", "a\\u202eb", "a\\nb", "a\\tb", "\\u007f"] {
+            let out = marker_problems(&format!("[markers]\nunread = \"{bad}\"\n"));
+            assert_eq!(out.len(), 1, "{bad}: {out:?}");
+            assert_eq!(out[0].severity, Severity::Error);
+            assert_eq!(out[0].key.as_deref(), Some("markers.unread"));
+            assert!(out[0].message.contains("control"), "{}", out[0].message);
+        }
+        // A 4-column marker fits, a 5-column one does not.
+        assert!(
+            marker_problems("[markers]\nfold_open = \"vvv \"\nfold_closed = \">>> \"\n").is_empty()
+        );
+        let out = marker_problems("[markers]\nfold_open = \"vvvvv\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert!(out[0].message.contains("4 columns"), "{}", out[0].message);
+        // Wide characters count by display width: two wide glyphs are four columns.
+        assert!(marker_problems("[markers]\nchannel = \"\u{4e2d}\u{6587}\"\n").is_empty());
+        let out = marker_problems("[markers]\nchannel = \"\u{4e2d}\u{6587}\u{5b57}\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        // The encrypted tag may be 12 columns, not 13.
+        assert!(marker_problems("[markers]\nencrypted = \"123456789012\"\n").is_empty());
+        let out = marker_problems("[markers]\nencrypted = \"1234567890123\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].message.contains("12 columns"), "{}", out[0].message);
+        // An empty marker is a legitimate choice.
+        let (theme, out) = parse_str("[markers]\nunread = \"\"\nchannel = \"\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.markers.unread, "");
+        assert_eq!(theme.markers.glyph(RoomKind::Channel), "");
+        // A non-string value and a non-table `markers`.
+        let out = marker_problems("[markers]\nunread = 1\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.starts_with("expected a string"));
+        let out = marker_problems("markers = 1\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.starts_with("expected a table"));
+        // Unequal fold widths only warn.
+        let out = marker_problems("[markers]\nfold_open = \"v \"\nfold_closed = \">>> \"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Warning);
+        assert!(out[0].message.contains("different widths"));
+        // Unknown marker keys warn once.
+        let out = marker_problems("[markers]\nbogus = \"x\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Warning);
+        assert_eq!(out[0].key.as_deref(), Some("markers.bogus"));
+        // A rejected marker keeps its default.
+        let (theme, _) = parse_str("[markers]\nunread = \"\\u202e\"\n");
+        assert_eq!(theme.markers.unread, "* ");
+    }
+
+    #[test]
+    fn marker_defaults_match_phase1() {
+        let m = Markers::default();
+        for kind in [
+            RoomKind::Channel,
+            RoomKind::PrivateGroup,
+            RoomKind::Discussion,
+            RoomKind::Team,
+            RoomKind::DirectMessage,
+        ] {
+            assert_eq!(m.glyph(kind), crate::ui::sidebar::kind_glyph(kind));
+        }
+        assert_eq!(m.fold_open, "\u{25be} ");
+        assert_eq!(m.fold_closed, "\u{25b8} ");
+        assert_eq!(m.unread, "* ");
+        assert_eq!(m.cursor, "> ");
+        assert_eq!(m.encrypted, " [e2e]");
+        assert_eq!(Theme::default().border_type_focused, BorderType::Thick);
+        assert_eq!(Theme::default().border_type_unfocused, BorderType::Plain);
+    }
+
+    #[test]
+    fn equal_values_allowed() {
+        // Two elements with the same color, and fg equal to bg.
+        let (theme, out) = parse_str(
+            "[sidebar.cursor]\nfg = 4\nbg = 4\n[status.mode]\nfg = 4\n[status.error]\nfg = \"red\"\nbg = \"red\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.sidebar_cursor.fg, theme.sidebar_cursor.bg);
+        assert_eq!(theme.status_mode.fg, theme.sidebar_cursor.fg);
+
+        // Every value spelled out at its default equals leaving it unset.
+        let mut defaults = Theme::default();
+        let mut toml = String::new();
+        for path in ELEMENT_PATHS {
+            let (pane, element) = path.split_once('.').expect("pane.element");
+            let style = *defaults.style_slot_mut(pane, element).expect("slot");
+            toml.push_str(&format!("[{path}]\n"));
+            if let Some(fg) = style.fg {
+                toml.push_str(&format!("fg = \"{fg}\"\n"));
+            }
+            if let Some(bg) = style.bg {
+                toml.push_str(&format!("bg = \"{bg}\"\n"));
+            }
+            let names: Vec<String> = MODIFIER_NAMES
+                .iter()
+                .filter(|(_, m)| style.add_modifier.contains(*m))
+                .map(|(n, _)| format!("\"{n}\""))
+                .collect();
+            toml.push_str(&format!("modifiers = [{}]\n", names.join(", ")));
+            match *path {
+                "border.focused" => toml.push_str("type = \"thick\"\n"),
+                "border.unfocused" => toml.push_str("type = \"plain\"\n"),
+                _ => {}
+            }
+        }
+        let m = Markers::default();
+        toml.push_str(&format!(
+            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\n",
+            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message
+        ));
+        let (theme, out) = parse_str(&toml);
+        assert!(out.is_empty(), "{out:?}\n{toml}");
+        assert_eq!(theme, Theme::default());
+    }
+
+    #[test]
+    fn empty_tables_inherit() {
+        for src in [
+            "",
+            "# nothing\n",
+            "[sidebar.cursor]\n",
+            "[sidebar]\n",
+            "[border.focused]\n[markers]\n",
+        ] {
+            let (theme, out) = parse_str(src);
+            assert!(out.is_empty(), "{src:?}: {out:?}");
+            assert_eq!(theme, Theme::default(), "{src:?}");
         }
     }
 
