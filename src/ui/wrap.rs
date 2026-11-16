@@ -6,7 +6,6 @@ use crate::data::Message;
 use crate::ui::palette::author_color;
 use crate::ui::sanitize::{sanitize, sanitize_line};
 use crate::ui::timefmt::{Zone, format_ts};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
@@ -109,9 +108,10 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 /// start at the same x; TwoLine ignores both, because its body already sits at a shared column 2
 /// (and its header keeps the full-length author and the unpadded time).
 ///
-/// In both layouts the author name, and only the name, is bold and colored by
-/// `palette::author_color`, keyed on the full sanitized name, so truncation never changes a
-/// user's color.
+/// In both layouts the author name, and only the name, takes `theme.messages_author` (bold by
+/// default) with its color from `palette::author_color` over `theme.author_palette`, keyed on the
+/// full sanitized name, so truncation never changes a user's color. The time takes
+/// `theme.messages_time` and body text `theme.messages_body`; padding and indent stay raw spans.
 ///
 /// Compact caps the author column at `width - (time_col + 1 + 2 + MIN_BODY)` (saturating), so the
 /// body keeps at least `MIN_BODY` columns. An author wider than the capped column is cut on a
@@ -121,11 +121,17 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>> {
     let time = format_ts(ctx.time_format, msg.ts, ctx.zone);
     let author = sanitize_line(&msg.author).into_owned();
-    let dim = Style::new().add_modifier(Modifier::DIM);
-    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let time_style = ctx.theme.messages_time;
+    let body_style = ctx.theme.messages_body;
     // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
-    // at every width.
-    let name = bold.fg(author_color(&author, &ctx.theme.author_palette));
+    // at every width. An explicit fg on messages.author wins over the palette for every author.
+    let name = if ctx.theme.messages_author.fg.is_some() {
+        ctx.theme.messages_author
+    } else {
+        ctx.theme
+            .messages_author
+            .fg(author_color(&author, &ctx.theme.author_palette))
+    };
     let width = usize::from(width);
     match ctx.layout {
         MessageLayout::Compact => {
@@ -147,14 +153,17 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
                 .map(|(i, row)| {
                     if i == 0 {
                         Line::from(vec![
-                            Span::styled(time.clone(), dim),
+                            Span::styled(time.clone(), time_style),
                             Span::raw(" "),
                             Span::styled(author.clone(), name),
                             Span::raw(pad.clone()),
-                            Span::raw(row),
+                            Span::styled(row, body_style),
                         ])
                     } else {
-                        Line::from(vec![Span::raw(indent.clone()), Span::raw(row)])
+                        Line::from(vec![
+                            Span::raw(indent.clone()),
+                            Span::styled(row, body_style),
+                        ])
                     }
                 })
                 .collect()
@@ -164,13 +173,13 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             let header = Line::from(vec![
                 Span::styled(author, name),
                 Span::raw("  "),
-                Span::styled(time, dim),
+                Span::styled(time, time_style),
             ]);
             std::iter::once(header)
                 .chain(
-                    wrap_body(&msg.body, body_width)
-                        .into_iter()
-                        .map(|row| Line::from(vec![Span::raw("  "), Span::raw(row)])),
+                    wrap_body(&msg.body, body_width).into_iter().map(|row| {
+                        Line::from(vec![Span::raw("  "), Span::styled(row, body_style)])
+                    }),
                 )
                 .collect()
         }
@@ -189,6 +198,7 @@ mod tests {
     use crate::config::Theme;
     use crate::data::{RoomId, fake};
     use crate::ui::palette::{DEFAULT_AUTHOR_PALETTE, author_color};
+    use ratatui::style::{Color, Modifier, Style};
 
     fn msg(author: &str, body: &str) -> Message {
         Message {
@@ -216,6 +226,25 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+        };
+        render_rows(m, width, &ctx)
+    }
+
+    /// `render_rows` with `theme` in place of the default one.
+    fn rows_themed(
+        m: &Message,
+        width: u16,
+        layout: MessageLayout,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout,
+            author_col: solo(m),
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme,
         };
         render_rows(m, width, &ctx)
     }
@@ -322,6 +351,46 @@ mod tests {
         assert_eq!(spans[4].style, Style::default());
         assert_eq!(spans[0].style.fg, None);
         assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn themed_time_author_body() {
+        let theme = crate::test_util::config_from_theme(
+            "[messages.time]\nfg = 1\n[messages.body]\nfg = 2\n[messages.author]\nfg = 3\n",
+        )
+        .theme;
+        let m = msg("bob", "hi");
+        let rows = rows_themed(&m, 60, MessageLayout::Compact, &theme);
+        let spans = &rows[0].spans;
+        assert_eq!(spans[0].style.fg, Some(Color::Indexed(1)), "time");
+        assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(spans[2].style.fg, Some(Color::Indexed(3)), "author");
+        assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[4].style.fg, Some(Color::Indexed(2)), "body");
+        // An explicit author fg colors every author the same.
+        let other = rows_themed(&msg("alice", "hi"), 60, MessageLayout::Compact, &theme);
+        assert_eq!(other[0].spans[2].style.fg, Some(Color::Indexed(3)));
+        // Without messages.author fg the author keeps the palette color.
+        let theme = crate::test_util::config_from_theme("[messages.time]\nfg = 1\n").theme;
+        let rows = rows_themed(&m, 60, MessageLayout::Compact, &theme);
+        assert_eq!(
+            rows[0].spans[2].style.fg,
+            Some(author_color("bob", &DEFAULT_AUTHOR_PALETTE))
+        );
+
+        // The continuation and TwoLine body rows take the body style too, padding stays raw.
+        let theme = crate::test_util::config_from_theme("[messages.body]\nfg = 2\n").theme;
+        let long = msg(
+            "bob",
+            "the quick brown fox jumps over the lazy dog and keeps on running far away",
+        );
+        let rows = rows_themed(&long, 30, MessageLayout::Compact, &theme);
+        assert!(rows.len() > 2);
+        assert_eq!(rows[1].spans[0].style, Style::default(), "indent");
+        assert_eq!(rows[1].spans[1].style.fg, Some(Color::Indexed(2)));
+        let rows = rows_themed(&long, 30, MessageLayout::TwoLine, &theme);
+        assert_eq!(rows[1].spans[0].style, Style::default(), "indent");
+        assert_eq!(rows[1].spans[1].style.fg, Some(Color::Indexed(2)));
     }
 
     #[test]

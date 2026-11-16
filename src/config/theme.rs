@@ -15,8 +15,9 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 use unicode_width::UnicodeWidthStr;
 
-/// Every styled element a theme.toml may set, as `pane.element`. Grows with each task of plan
-/// 02-04 and with plan 02-05; the names are the user-facing vocabulary of theme.toml.
+/// Every styled element a theme.toml may set, as `pane.element`: the complete list (D-09). The
+/// pre-App config error screen is the one styled thing without a key (A30). The names are the
+/// user-facing vocabulary of theme.toml.
 pub const ELEMENT_PATHS: &[&str] = &[
     "sidebar.header",
     "sidebar.folder",
@@ -34,6 +35,12 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "input.hint",
     "border.focused",
     "border.unfocused",
+    "messages.cursor",
+    "messages.cursor_unfocused",
+    "messages.time",
+    "messages.author",
+    "messages.body",
+    "messages.notice",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -168,6 +175,16 @@ pub struct Theme {
     pub cmdline_text: Style,
     pub input_text: Style,
     pub input_hint: Style,
+    /// The highlight over the cursor message's rows, focused and not. A foreground set here
+    /// overrides the author colors on those rows (RESEARCH Pitfall 13).
+    pub messages_cursor: Style,
+    pub messages_cursor_unfocused: Style,
+    pub messages_time: Style,
+    /// The author name. A foreground set here replaces the palette color for every author (A31).
+    pub messages_author: Style,
+    pub messages_body: Style,
+    /// The "No room open" and "No messages yet" lines.
+    pub messages_notice: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -197,6 +214,12 @@ impl Default for Theme {
             cmdline_text: plain,
             input_text: plain,
             input_hint: plain.add_modifier(Modifier::DIM),
+            messages_cursor: plain.add_modifier(Modifier::REVERSED),
+            messages_cursor_unfocused: plain.bg(Color::DarkGray),
+            messages_time: plain.add_modifier(Modifier::DIM),
+            messages_author: plain.add_modifier(Modifier::BOLD),
+            messages_body: plain,
+            messages_notice: plain.add_modifier(Modifier::DIM),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -225,6 +248,12 @@ impl Theme {
             ("cmdline", "text") => Some(&mut self.cmdline_text),
             ("input", "text") => Some(&mut self.input_text),
             ("input", "hint") => Some(&mut self.input_hint),
+            ("messages", "cursor") => Some(&mut self.messages_cursor),
+            ("messages", "cursor_unfocused") => Some(&mut self.messages_cursor_unfocused),
+            ("messages", "time") => Some(&mut self.messages_time),
+            ("messages", "author") => Some(&mut self.messages_author),
+            ("messages", "body") => Some(&mut self.messages_body),
+            ("messages", "notice") => Some(&mut self.messages_notice),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -719,11 +748,11 @@ mod tests {
     }
 
     #[test]
-    fn chrome_elements_parse() {
+    fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            16,
-            "14 chrome paths plus the two borders"
+            22,
+            "16 chrome and border paths plus the six messages elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -743,6 +772,59 @@ mod tests {
             Modifier::BOLD | Modifier::DIM
         );
         assert_eq!(theme.status_error.fg, Some(Color::Indexed(10)));
+        assert_eq!(theme.messages_author.add_modifier, Modifier::BOLD);
+        assert_eq!(theme.messages_cursor.add_modifier, Modifier::REVERSED);
+    }
+
+    #[test]
+    fn messages_defaults_match_phase1() {
+        let t = Theme::default();
+        assert_eq!(
+            t.messages_cursor,
+            Style::default().add_modifier(Modifier::REVERSED)
+        );
+        assert_eq!(
+            t.messages_cursor_unfocused,
+            Style::default().bg(Color::DarkGray)
+        );
+        assert_eq!(
+            t.messages_time,
+            Style::default().add_modifier(Modifier::DIM)
+        );
+        assert_eq!(
+            t.messages_author,
+            Style::default().add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(
+            t.messages_notice,
+            Style::default().add_modifier(Modifier::DIM)
+        );
+        assert_eq!(t.messages_body, Style::default());
+    }
+
+    #[test]
+    fn palette_order_defines_mapping() {
+        use crate::ui::palette::author_color;
+        let (red_blue, out) = parse_str("author_palette = [\"red\", \"blue\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        let (blue_red, out) = parse_str("author_palette = [\"blue\", \"red\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        let mut swapped = 0;
+        for name in ["alice", "bob", "carol", "dave"] {
+            let a = author_color(name, &red_blue.author_palette);
+            let b = author_color(name, &blue_red.author_palette);
+            assert_ne!(
+                a, b,
+                "{name}: reversing a two-color palette swaps the color"
+            );
+            swapped += 1;
+        }
+        assert_eq!(swapped, 4);
+        let (all_red, out) = parse_str("author_palette = [\"red\", \"red\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        for name in ["alice", "bob", "carol", "dave"] {
+            assert_eq!(author_color(name, &all_red.author_palette), Color::Red);
+        }
     }
 
     #[test]

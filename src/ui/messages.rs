@@ -6,7 +6,6 @@ use crate::ui::sanitize::sanitize_line;
 use crate::ui::{pane_block, wrap};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
@@ -21,14 +20,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let dim = Style::new().add_modifier(Modifier::DIM);
+    let notice = app.theme.messages_notice;
     let Some(room) = app.current_room.as_ref() else {
-        frame.render_widget(Paragraph::new(Line::styled("No room open", dim)), inner);
+        frame.render_widget(Paragraph::new(Line::styled("No room open", notice)), inner);
         return;
     };
     let msgs = app.messages.get(room).map_or(&[][..], Vec::as_slice);
     if msgs.is_empty() {
-        frame.render_widget(Paragraph::new(Line::styled("No messages yet", dim)), inner);
+        frame.render_widget(
+            Paragraph::new(Line::styled("No messages yet", notice)),
+            inner,
+        );
         return;
     }
 
@@ -43,12 +45,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
         lines.extend(rows);
     }
-    // Neither highlight sets a foreground, so author colors survive on the cursor rows (REVERSED
-    // swaps them into the background).
+    // The default highlights set no foreground, so author colors survive on the cursor rows
+    // (REVERSED swaps them into the background). A theme.toml fg on messages.cursor or
+    // messages.cursor_unfocused is applied with set_style over the row and so overrides the
+    // author colors there (RESEARCH Pitfall 13); that is documented, not prevented.
     let highlight = if focused {
-        Style::new().add_modifier(Modifier::REVERSED)
+        app.theme.messages_cursor
     } else {
-        Style::new().bg(Color::DarkGray)
+        app.theme.messages_cursor_unfocused
     };
     // The rows are pre-wrapped, so the Paragraph does no wrapping of its own.
     let window: Vec<Line> = lines
@@ -78,7 +82,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::{Rect, Size};
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
 
     fn general() -> RoomId {
         RoomId("general".to_string())
@@ -258,6 +262,38 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert!(!buffer[(2, 1)].modifier.contains(Modifier::REVERSED));
         assert_eq!(buffer[(2, 1)].bg, ratatui::style::Color::DarkGray);
+    }
+
+    #[test]
+    fn themed_cursor_highlight() {
+        let config = crate::test_util::config_from_theme(
+            "[messages.cursor]\nbg = 6\n[messages.cursor_unfocused]\nbg = 2\n",
+        );
+        let mut app = crate::test_util::app_with_config(config, 80, 24);
+        app.open_room(general());
+        press(&mut app, "gg");
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        // Row 1 is the first row of the cursor message; its whole width carries the highlight.
+        for x in [2u16, 20, 40] {
+            assert_eq!(buffer[(x, 1)].bg, Color::Indexed(6), "focused x {x}");
+        }
+        press(&mut app, "<C-w>h");
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        for x in [2u16, 20, 40] {
+            assert_eq!(buffer[(x, 1)].bg, Color::Indexed(2), "unfocused x {x}");
+        }
+    }
+
+    #[test]
+    fn themed_notices() {
+        let config = crate::test_util::config_from_theme("[messages.notice]\nfg = 5\n");
+        let app = crate::test_util::app_with_config(config, 80, 24);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].symbol(), "N", "No room open");
+        assert_eq!(buffer[(1, 1)].fg, Color::Indexed(5));
     }
 
     #[test]
