@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Configuration System
-status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-11-16T15:50:13.218Z"
+status: verifying
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-11-16T15:53:44.068Z"
 last_activity: 2026-11-16
 last_activity_desc: Phase 02 execution started
-state_head: dda8e0982350c1a2f1016ff5cfc120e5d589d1a5
+state_head: 67b34ce7be4f2248c78e690af051d9c4810ad6f7
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 17
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 
 Phase: 02 (Configuration System) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-11-16 — Phase 02 execution started
 
 Progress: [██░░░░░░░░] 17%
@@ -51,6 +51,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: theme.toml element names (sidebar.cursor, status.error, input.hint, border.focused, ...) and the [markers] keys are the user-facing vocabulary; renaming one silently drops a user's setting
 - [Phase 02]: Config error screen keeps fixed built-in styles and never reads the user theme (A30)
 - [Phase 02]: Marker strings are rejected, not sanitized, when sanitize_line would change them; width caps 4 columns (encrypted 12)
+- [Phase 02]: author_palette is a trusted user list (1-64 colors, validated as colors only); explicit fg on messages.author beats the palette, fg on messages.cursor overrides author colors on the cursor row
+- [Phase 02]: author_color returns Color::Reset for an empty palette (defense in depth behind load-time validation, T-02-17)
 
 ### Pending Todos
 
@@ -69,8 +71,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-16T15:50:13.100Z
-**Stopped at:** Completed 02-04-PLAN.md
+**Last session:** 2026-11-16T15:53:43.955Z
+**Stopped at:** Completed 02-05-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -81,3 +83,4 @@ None yet.
 | Phase 02 P02 | 15 min | 3 tasks | 13 files |
 | Phase 02 P03 | 5 min | 3 tasks | 9 files |
 | Phase 02 P04 | 6 min | 3 tasks | 10 files |
+| Phase 02 P05 | 4 min | 2 tasks | 5 files |
