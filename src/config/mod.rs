@@ -5,6 +5,7 @@
 //! terminal starts, and held in `App`; the reducer never reads files (TEA).
 
 pub mod diag;
+pub mod keymap;
 pub mod paths;
 pub mod settings;
 
@@ -42,13 +43,13 @@ pub struct Sources {
 pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
     let mut problems = sources.read_errors.clone();
     let settings = settings::parse(sources.config.as_deref(), &mut problems);
-    // keymap.toml and theme.toml get real parsers in plans 02-03 and 02-04; until then their
-    // syntax errors still land in the one report.
-    diag::check_syntax(
-        diag::ConfigFile::Keymap,
+    let keymap = keymap::build(
+        settings.keymap_preset,
         sources.keymap.as_deref(),
         &mut problems,
     );
+    // theme.toml gets a real parser in plan 02-04; until then its syntax errors still land in the
+    // one report.
     diag::check_syntax(
         diag::ConfigFile::Theme,
         sources.theme.as_deref(),
@@ -56,10 +57,7 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
     );
     let report = Report::new(problems);
     if report.errors.is_empty() {
-        Ok(Config {
-            settings,
-            keymap: default_keymap(),
-        })
+        Ok(Config { settings, keymap })
     } else {
         Err(report)
     }

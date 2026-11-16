@@ -318,6 +318,30 @@ def scenario_config_layout(binary):
         raise SmokeFail("alternate screen not left")
 
 
+def scenario_config_keymap(binary):
+    # keymap.toml rebinds ";" to enter_command, so ";q<CR>" must quit through Command mode.
+    pid, fd = spawn(binary, config_files={"keymap.toml": '[normal]\n";" = "enter_command"\n'})
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b";")
+
+    def command_mode(b):
+        screen = Screen()
+        screen.feed(b)
+        return screen.contains("COMMAND")
+
+    # ratatui redraws only changed cells, so the badge is read from the screen model.
+    if not read_until(fd, buf, command_mode, 5):
+        raise SmokeFail("Command mode was never entered through the rebound key")
+    type_keys(fd, buf, b"q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if ALT_OFF not in bytes(buf):
+        raise SmokeFail("alternate screen not left")
+
+
 def scenario_config_error(binary):
     files = {
         "config.toml": 'sidebar_width = 99\ntimestamp_format = "%Q"\n',
@@ -354,6 +378,7 @@ SCENARIOS = {
     "panic": scenario_panic,
     "insert": scenario_insert,
     "config_layout": scenario_config_layout,
+    "config_keymap": scenario_config_keymap,
     "config_error": scenario_config_error,
 }
 
