@@ -7,6 +7,7 @@ use crate::ui::sanitize::{sanitize, sanitize_line};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// How a message is laid out (D-10). Compact is the built-in default; the config.toml selector
@@ -21,7 +22,9 @@ pub enum MessageLayout {
     TwoLine,
 }
 
-/// Narrowest body column the wrapper will use, however narrow the pane gets (A9).
+/// Narrowest body column the wrapper will use, however narrow the pane gets (A9). The Compact
+/// author column is capped so the body keeps this many columns; below an inner width of 19 that
+/// leaves no author column at all.
 pub const MIN_BODY: usize = 10;
 
 /// Wrap `text` to `width` display columns. Sanitized first, so width math matches what is drawn.
@@ -38,6 +41,32 @@ pub fn wrap_body(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
+/// Fit an already-sanitized `author` into `col` display columns. An author that fits is returned
+/// unchanged; `col == 0` yields an empty string; otherwise whole grapheme clusters are kept while
+/// they fit in `col - 1` columns and an ellipsis is appended. A wide cluster straddling the limit
+/// is dropped, never split, so the result is at most `col` wide.
+fn fit_author(author: &str, col: usize) -> Cow<'_, str> {
+    if author.width() <= col {
+        return Cow::Borrowed(author);
+    }
+    if col == 0 {
+        return Cow::Borrowed("");
+    }
+    let limit = col - 1;
+    let mut out = String::new();
+    let mut used = 0;
+    for cluster in author.graphemes(true) {
+        let w = cluster.width();
+        if used + w > limit {
+            break;
+        }
+        out.push_str(cluster);
+        used += w;
+    }
+    out.push('\u{2026}');
+    Cow::Owned(out)
+}
+
 /// Display width of the widest author among `msgs`, or 0 for an empty slice. Authors are
 /// sanitized before the width is measured (threat T-01-16), so the column matches what is drawn.
 pub fn author_column(msgs: &[Message]) -> usize {
@@ -51,7 +80,13 @@ pub fn author_column(msgs: &[Message]) -> usize {
 ///
 /// `author_col` is the room's author column (see `author_column`). Compact pads every author to
 /// it so all bodies start at the same x; TwoLine ignores it, because its body already sits at a
-/// shared column 2.
+/// shared column 2 (and its header keeps the full-length author).
+///
+/// Compact caps the column at `width - (5 + 1 + 2 + MIN_BODY)` (saturating), so the body keeps at
+/// least `MIN_BODY` columns. An author wider than the capped column is cut on a grapheme boundary
+/// and ends in an ellipsis. Below an inner width of 19 the column is 0 and the author is omitted;
+/// the body keeps `MIN_BODY` and the paragraph clips any overflow. The cap lives here, so the
+/// renderer and the reducer's row model always use the same value.
 pub fn render_rows(
     msg: &Message,
     width: u16,
@@ -65,7 +100,8 @@ pub fn render_rows(
     let width = usize::from(width);
     match layout {
         MessageLayout::Compact => {
-            let col = author_col.max(author.width());
+            let col = author_col.min(width.saturating_sub(time.width() + 1 + 2 + MIN_BODY));
+            let author = fit_author(&author, col).into_owned();
             let pad = " ".repeat(col - author.width() + 2);
             let prefix_width = time.width() + 1 + col + 2;
             let body_width = width.saturating_sub(prefix_width).max(MIN_BODY);
@@ -266,14 +302,83 @@ mod tests {
         assert_eq!(message_rows(&m, 40, MessageLayout::Compact, solo(&m)), 1);
     }
 
+    const LONG: &str = "firstname.lastname.contractor";
+
+    #[test]
+    fn column_capped_keeps_min_body() {
+        let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
+        let rows = texts(&render_rows(
+            &msg(LONG, body),
+            30,
+            MessageLayout::Compact,
+            29,
+        ));
+        assert!(rows.len() > 2, "{rows:?}");
+        assert!(
+            rows[0].starts_with("00:00 firstname.l\u{2026}  "),
+            "{:?}",
+            rows[0]
+        );
+        for row in &rows {
+            assert!(row.width() <= 30, "{row:?}");
+        }
+        for row in &rows[1..] {
+            assert!(row.starts_with(&" ".repeat(20)), "{row:?}");
+            assert!(row[20..].width() <= MIN_BODY, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn short_author_padded_when_capped() {
+        let rows = texts(&render_rows(
+            &msg("bob", "hi"),
+            30,
+            MessageLayout::Compact,
+            29,
+        ));
+        assert_eq!(rows, vec![format!("00:00 bob{}hi", " ".repeat(11))]);
+    }
+
+    #[test]
+    fn wide_author_truncates_on_grapheme_boundary() {
+        let rows = texts(&render_rows(
+            &msg("日本語のユーザー", "x"),
+            26,
+            MessageLayout::Compact,
+            16,
+        ));
+        assert_eq!(rows, vec!["00:00 日本語\u{2026}   x".to_string()]);
+
+        let accented = "e\u{301}".repeat(12);
+        let rows = texts(&render_rows(
+            &msg(&accented, "x"),
+            23,
+            MessageLayout::Compact,
+            12,
+        ));
+        let head = rows[0]
+            .strip_prefix("00:00 ")
+            .and_then(|r| r.split_once('\u{2026}'))
+            .map(|(h, _)| h.to_string())
+            .expect("ellipsis present");
+        assert_eq!(head, "e\u{301}".repeat(4));
+        assert!(head.ends_with('\u{301}'));
+    }
+
     #[test]
     fn tiny_width_no_panic() {
         for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
             for width in [0u16, 1, 5] {
-                let m = msg("alice", "hello wide world");
-                let rows = render_rows(&m, width, layout, solo(&m));
-                assert!(!rows.is_empty(), "{layout:?} width {width}");
-                assert!(message_rows(&m, width, layout, solo(&m)) >= 1);
+                for author_col in [0usize, 5, 40] {
+                    let m = msg("alice", "hello wide world");
+                    let rows = render_rows(&m, width, layout, author_col);
+                    assert!(!rows.is_empty(), "{layout:?} width {width}");
+                    assert_eq!(
+                        message_rows(&m, width, layout, author_col),
+                        rows.len(),
+                        "{layout:?} width {width} col {author_col}"
+                    );
+                }
             }
         }
         assert!(!wrap_body("hello", 0).is_empty());

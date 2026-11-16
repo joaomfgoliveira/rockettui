@@ -276,6 +276,34 @@ mod tests {
     }
 
     #[test]
+    fn long_author_truncated_and_aligned() {
+        let mut app = app_80x24();
+        app.open_room(general());
+        app.messages
+            .get_mut(&general())
+            .expect("general")
+            .push(Message {
+                id: "long-author".to_string(),
+                room_id: general(),
+                author: "firstname.lastname.contractor.external".to_string(),
+                ts: 0,
+                body: "short".to_string(),
+            });
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(
+            text.contains("firstname.lastname.contractor.e\u{2026}"),
+            "{text}"
+        );
+        let buffer = terminal.backend().buffer();
+        for y in 1..=17u16 {
+            assert_eq!(buffer[(39, y)].symbol(), " ", "row {y} x=39");
+            assert_eq!(buffer[(40, y)].symbol(), " ", "row {y} x=40");
+            assert_ne!(buffer[(41, y)].symbol().trim(), "", "row {y} x=41");
+        }
+    }
+
+    #[test]
     fn hostile_message_sanitized() {
         let mut app = app_80x24();
         app.open_room(general());

@@ -374,6 +374,42 @@ mod tests {
     }
 
     #[test]
+    fn rows_match_render_with_long_author() {
+        let mut app = open_general();
+        press(&mut app, "G");
+        app.messages
+            .get_mut(&general())
+            .expect("general")
+            .push(crate::data::Message {
+                id: "long-author".to_string(),
+                room_id: general(),
+                author: "firstname.lastname.contractor.external".to_string(),
+                ts: 0,
+                body: "a fairly long message body that has to wrap on narrow panes".to_string(),
+            });
+        for (w, h) in [(80u16, 24u16), (50, 12), (40, 8)] {
+            update(&mut app, Action::Resize(w, h));
+            let (width, _) = viewport(&app);
+            let msgs = &app.messages[&general()];
+            let author_col = wrap::author_column(msgs);
+            let expected: usize = msgs
+                .iter()
+                .map(|m| wrap::render_rows(m, width, app.message_layout, author_col).len())
+                .sum();
+            let starts = row_starts(&app, &general());
+            assert_eq!(starts.last().copied(), Some(expected), "{w}x{h}");
+            let v = view(&app, &general());
+            assert_eq!(v.cursor, 59, "{w}x{h}");
+            assert_cursor_visible(&app, v);
+            press(&mut app, "G");
+            let v = view(&app, &general());
+            assert_eq!(v.cursor, 60, "{w}x{h}");
+            assert_cursor_visible(&app, v);
+            press(&mut app, "60gg");
+        }
+    }
+
+    #[test]
     fn motion_h_l_noop() {
         let mut app = open_general();
         let before = view(&app, &general());
