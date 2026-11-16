@@ -17,9 +17,6 @@ use crate::app::update::update;
 /// Capacity of the one bounded Action channel.
 pub const CHANNEL_CAPACITY: usize = 256;
 
-/// How long a count or key sequence may wait for its next key (~1 s, D-06; configurable in Phase 2).
-pub const KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
-
 /// Show the config errors and wait for a key press (D-02). Reads crossterm events directly.
 ///
 /// ARCHITECTURE EXCEPTION, accepted by the author on 2026-11-16: the CLAUDE.md constraint says
@@ -83,6 +80,9 @@ pub async fn run(
     drop(tx);
 
     let mut app = App::with_config(terminal.size()?, config);
+    // The binary shows local time (RESEARCH A2, confirmed by the author on 2026-11-16). `App::new`
+    // and the tests stay on UTC, and the reducer still never reads a clock or a zone.
+    app.zone = ui::timefmt::Zone::Local;
     // Drain the seed before the first draw so the first frame already lists the rooms.
     let mut batch: Vec<Action> = Vec::new();
     while let Ok(action) = rx.try_recv() {
@@ -105,7 +105,7 @@ pub async fn run(
         if saw_key {
             key_deadline = app
                 .keys_pending()
-                .then(|| tokio::time::Instant::now() + KEY_TIMEOUT);
+                .then(|| tokio::time::Instant::now() + app.key_timeout());
         }
         terminal.draw(|f| ui::view(f, &app))?;
         // Debug-only hook so the pty smoke harness and the manual UAT can prove that a panic

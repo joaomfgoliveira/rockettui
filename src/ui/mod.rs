@@ -201,6 +201,17 @@ mod tests {
     }
 
     #[test]
+    fn layout_80x24_custom_config() {
+        let toml =
+            "sidebar_width = 34\nmessage_layout = \"two_line\"\ntimestamp_format = \"%a %H:%M\"\n";
+        let mut app = app_with_config(config_from_toml(toml), 80, 24);
+        let at = crate::data::fake::FAKE_EPOCH + 43_200;
+        crate::app::update::update(&mut app, crate::action::Action::Clock(at));
+        press(&mut app, "<CR>");
+        insta::assert_snapshot!(draw_80x24(&app).backend());
+    }
+
+    #[test]
     fn sidebar_wider_than_terminal() {
         let mut app = app_with_config(config_from_toml("sidebar_width = 60\n"), 80, 24);
         app.current_room = Some(app.rooms[0].id.clone());

@@ -179,6 +179,12 @@ impl App {
         self.focus = Focus::Messages;
     }
 
+    /// How long a count or key sequence may wait for its next key: config.toml `key_timeout_ms`
+    /// (D-12; Phase 1 D-06 fixed it at one second).
+    pub fn key_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.settings.key_timeout_ms)
+    }
+
     /// True while a count or the start of a key sequence is waiting for more keys.
     pub fn keys_pending(&self) -> bool {
         self.matcher.is_pending()
@@ -196,5 +202,30 @@ impl App {
             .iter()
             .find(|r| &r.id == id)
             .map(|r| r.name.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::{app_with_config, config_from_toml};
+    use crate::ui::timefmt::Zone;
+    use std::time::Duration;
+
+    #[test]
+    fn key_timeout_from_settings() {
+        assert_eq!(
+            App::new(Size::new(80, 24)).key_timeout(),
+            Duration::from_millis(1000)
+        );
+        let app = app_with_config(config_from_toml("key_timeout_ms = 250\n"), 80, 24);
+        assert_eq!(app.key_timeout(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn with_config_defaults_to_utc() {
+        assert_eq!(App::new(Size::new(80, 24)).zone, Zone::Utc);
+        let app = app_with_config(config_from_toml("sidebar_width = 30\n"), 80, 24);
+        assert_eq!(app.zone, Zone::Utc);
     }
 }
