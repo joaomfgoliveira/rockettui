@@ -90,6 +90,8 @@ pub struct RowCtx<'a> {
     pub time_col: usize,
     pub time_format: &'a TimeFormat,
     pub zone: Zone,
+    /// The theme: the author palette now, the messages element styles next (D-09, D-10).
+    pub theme: &'a crate::config::Theme,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -123,7 +125,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
     let bold = Style::new().add_modifier(Modifier::BOLD);
     // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
     // at every width.
-    let name = bold.fg(author_color(&author));
+    let name = bold.fg(author_color(&author, &ctx.theme.author_palette));
     let width = usize::from(width);
     match ctx.layout {
         MessageLayout::Compact => {
@@ -184,8 +186,9 @@ pub fn message_rows(msg: &Message, width: u16, ctx: &RowCtx) -> usize {
 mod tests {
     use super::*;
     use crate::action::Action;
+    use crate::config::Theme;
     use crate::data::{RoomId, fake};
-    use crate::ui::palette::author_color;
+    use crate::ui::palette::{DEFAULT_AUTHOR_PALETTE, author_color};
 
     fn msg(author: &str, body: &str) -> Message {
         Message {
@@ -205,12 +208,14 @@ mod tests {
         author_col: usize,
     ) -> Vec<Line<'static>> {
         let format = TimeFormat::default();
+        let theme = Theme::default();
         let ctx = RowCtx {
             layout,
             author_col,
             time_col: 5,
             time_format: &format,
             zone: Zone::Utc,
+            theme: &theme,
         };
         render_rows(m, width, &ctx)
     }
@@ -259,12 +264,14 @@ mod tests {
         let msgs = [jan, may];
         assert_eq!(time_column(&msgs, &format, Zone::Utc), 10);
         assert_eq!(time_column(&[], &format, Zone::Utc), 0);
+        let theme = Theme::default();
         let ctx = RowCtx {
             layout: MessageLayout::Compact,
             author_col: 3,
             time_col: 10,
             time_format: &format,
             zone: Zone::Utc,
+            theme: &theme,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -284,12 +291,14 @@ mod tests {
             ..msg("bob", "hi")
         };
         let msgs = std::slice::from_ref(&m);
+        let theme = Theme::default();
         let ctx = RowCtx {
             layout: MessageLayout::Compact,
             author_col: author_column(msgs),
             time_col: time_column(msgs, &format, Zone::Utc),
             time_format: &format,
             zone: Zone::Utc,
+            theme: &theme,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -304,7 +313,10 @@ mod tests {
         assert_eq!(texts(&rows), vec!["00:00 bob    hi".to_string()]);
         let spans = &rows[0].spans;
         assert_eq!(spans[2].content, "bob");
-        assert_eq!(spans[2].style.fg, Some(author_color("bob")));
+        assert_eq!(
+            spans[2].style.fg,
+            Some(author_color("bob", &DEFAULT_AUTHOR_PALETTE))
+        );
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(spans[3].style, Style::default());
         assert_eq!(spans[4].style, Style::default());
@@ -318,7 +330,10 @@ mod tests {
         let rows = rows_at(&msg("alice", body), 30, MessageLayout::TwoLine, 0);
         assert_eq!(text(&rows[0]), "alice  00:00");
         let spans = &rows[0].spans;
-        assert_eq!(spans[0].style.fg, Some(author_color("alice")));
+        assert_eq!(
+            spans[0].style.fg,
+            Some(author_color("alice", &DEFAULT_AUTHOR_PALETTE))
+        );
         assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(spans[1].style, Style::default());
         assert_eq!(spans[2].style.fg, None);
@@ -334,8 +349,14 @@ mod tests {
         let rows = rows_at(&msg(LONG, "x"), 30, MessageLayout::Compact, 29);
         let span = &rows[0].spans[2];
         assert_eq!(span.content, "firstname.l\u{2026}");
-        assert_eq!(span.style.fg, Some(author_color(LONG)));
-        assert_ne!(author_color(LONG), author_color("firstname.l\u{2026}"));
+        assert_eq!(
+            span.style.fg,
+            Some(author_color(LONG, &DEFAULT_AUTHOR_PALETTE))
+        );
+        assert_ne!(
+            author_color(LONG, &DEFAULT_AUTHOR_PALETTE),
+            author_color("firstname.l\u{2026}", &DEFAULT_AUTHOR_PALETTE)
+        );
     }
 
     #[test]
@@ -344,13 +365,16 @@ mod tests {
         let rows = rows_at(&hostile, 60, MessageLayout::Compact, solo(&hostile));
         let span = &rows[0].spans[2];
         assert_eq!(span.content, "mallory");
-        assert_eq!(span.style.fg, Some(author_color("mallory")));
+        assert_eq!(
+            span.style.fg,
+            Some(author_color("mallory", &DEFAULT_AUTHOR_PALETTE))
+        );
         let plain = msg("mallory", "x");
         let plain_rows = rows_at(&plain, 60, MessageLayout::Compact, solo(&plain));
         assert_eq!(span.style.fg, plain_rows[0].spans[2].style.fg);
         assert_ne!(
-            author_color("mallory"),
-            author_color("\u{202e}mallory\u{1b}")
+            author_color("mallory", &DEFAULT_AUTHOR_PALETTE),
+            author_color("\u{202e}mallory\u{1b}", &DEFAULT_AUTHOR_PALETTE)
         );
     }
 

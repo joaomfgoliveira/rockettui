@@ -6,6 +6,7 @@
 
 use super::diag::{ConfigFile, Problem, Reader, parse_table};
 use crate::data::RoomKind;
+use crate::ui::palette::DEFAULT_AUTHOR_PALETTE;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
@@ -38,6 +39,9 @@ pub const ELEMENT_PATHS: &[&str] = &[
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
 pub const MAX_MARKER_WIDTH: usize = 4;
 pub const MAX_TAG_WIDTH: usize = 12;
+
+/// Most colors an `author_palette` may list (A8).
+pub const MAX_PALETTE: usize = 64;
 
 /// Modifier names accepted in `modifiers = [..]` (D-09).
 pub const MODIFIER_NAMES: &[(&str, Modifier)] = &[
@@ -170,6 +174,9 @@ pub struct Theme {
     pub border_type_focused: BorderType,
     pub border_type_unfocused: BorderType,
     pub markers: Markers,
+    /// The colors authors are hashed onto (D-10). Never empty when it comes from theme.toml;
+    /// `author_color` still tolerates an empty slice.
+    pub author_palette: Vec<Color>,
 }
 
 impl Default for Theme {
@@ -195,6 +202,7 @@ impl Default for Theme {
             border_type_focused: BorderType::Thick,
             border_type_unfocused: BorderType::Plain,
             markers: Markers::default(),
+            author_palette: DEFAULT_AUTHOR_PALETTE.to_vec(),
         }
     }
 }
@@ -418,6 +426,45 @@ fn parse_markers(reader: &mut Reader<'_>, value: &Spanned<DeValue<'_>>, markers:
     reader.warn_unknown(table, MARKER_KEYS, "markers.");
 }
 
+/// Read the top-level `author_palette` array: 1 to `MAX_PALETTE` colors in any D-08 form. Every
+/// entry is checked (so each bad one is reported, named by its index); any problem keeps the
+/// default palette (D-10, A8, T-02-17). Duplicates are allowed.
+fn parse_palette(reader: &mut Reader<'_>, value: &Spanned<DeValue<'_>>) -> Option<Vec<Color>> {
+    let DeValue::Array(items) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            "author_palette",
+            format!("expected an array, found {}", value.get_ref().type_str()),
+        );
+        return None;
+    };
+    if items.is_empty() {
+        reader.error(
+            value.span().start,
+            "author_palette",
+            "must list at least one color",
+        );
+        return None;
+    }
+    if items.len() > MAX_PALETTE {
+        reader.error(
+            value.span().start,
+            "author_palette",
+            format!("at most {MAX_PALETTE} colors"),
+        );
+        return None;
+    }
+    let mut colors = Vec::with_capacity(items.len());
+    let mut ok = true;
+    for (i, item) in items.iter().enumerate() {
+        match parse_color(reader, item, &format!("author_palette[{i}]")) {
+            Some(color) => colors.push(color),
+            None => ok = false,
+        }
+    }
+    ok.then_some(colors)
+}
+
 fn is_pane(name: &str) -> bool {
     ELEMENT_PATHS
         .iter()
@@ -443,6 +490,12 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Theme {
         let pane: &str = pane_key.get_ref();
         if pane == "markers" {
             parse_markers(&mut reader, pane_value, &mut theme.markers);
+            continue;
+        }
+        if pane == "author_palette" {
+            if let Some(colors) = parse_palette(&mut reader, pane_value) {
+                theme.author_palette = colors;
+            }
             continue;
         }
         if !is_pane(pane) {
@@ -914,5 +967,87 @@ mod tests {
         assert_eq!(out[0].key.as_deref(), Some("status.mode"));
         let (_, out) = parse_str("[status.mode\n");
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn tracer_author_palette_from_dir() {
+        let dir = temp_config_dir(
+            "theme-palette",
+            &[("theme.toml", "author_palette = [\"red\"]\n")],
+        );
+        let config = match load_from_dir(&dir) {
+            Ok(config) => config,
+            Err(report) => panic!("expected Ok, got {report}"),
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = app_with_config(config, 80, 25);
+        app.open_room(crate::data::RoomId("general".to_string()));
+        let buffer = render_buffer(&app, 80, 25);
+        // Compact rows inside the pane border: "HH:MM " is 6 columns, so the ':' is at offset 3
+        // and the author name starts at offset 7 from the pane's left edge.
+        let pane = app.areas().messages;
+        let mut names = 0;
+        for y in pane.y + 1..pane.y + pane.height - 1 {
+            if buffer[(pane.x + 3, y)].symbol() == ":" {
+                let cell = &buffer[(pane.x + 7, y)];
+                assert_eq!(cell.fg, Color::Red, "row {y}");
+                names += 1;
+            }
+        }
+        assert!(names >= 4, "only {names} author rows found");
+    }
+
+    #[test]
+    fn palette_validation() {
+        let (theme, out) = parse_str("author_palette = [\"cyan\", \"#ff8800\", 208]\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(
+            theme.author_palette,
+            [Color::Cyan, Color::Rgb(255, 136, 0), Color::Indexed(208)]
+        );
+
+        let default = Theme::default().author_palette;
+        let (theme, out) = parse_str("author_palette = []\n");
+        assert_eq!(theme.author_palette, default);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].key.as_deref(), Some("author_palette"));
+        assert!(
+            out[0].message.contains("at least one"),
+            "{}",
+            out[0].message
+        );
+
+        let many = vec!["\"red\""; MAX_PALETTE + 1].join(", ");
+        let (theme, out) = parse_str(&format!("author_palette = [{many}]\n"));
+        assert_eq!(theme.author_palette, default);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].message.contains("at most 64"), "{}", out[0].message);
+        let max = vec!["\"red\""; MAX_PALETTE].join(", ");
+        let (theme, out) = parse_str(&format!("author_palette = [{max}]\n"));
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.author_palette.len(), MAX_PALETTE);
+
+        let (theme, out) = parse_str("author_palette = [\"cyan\", \"nope\"]\n");
+        assert_eq!(theme.author_palette, default);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].key.as_deref(), Some("author_palette[1]"));
+        assert!(!out[0].message.contains("nope"), "{}", out[0].message);
+
+        let (theme, out) = parse_str("author_palette = \"red\"\n");
+        assert_eq!(theme.author_palette, default);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert!(out[0].message.starts_with("expected an array"));
+
+        let (theme, out) = parse_str("author_palette = [\"red\", \"red\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.author_palette, [Color::Red, Color::Red]);
+    }
+
+    #[test]
+    fn default_palette_is_phase1() {
+        assert_eq!(Theme::default().author_palette, DEFAULT_AUTHOR_PALETTE);
     }
 }

@@ -139,7 +139,7 @@ impl App {
         crate::ui::layout::areas(area, self.settings.sidebar_width, self.input_rows())
     }
 
-    /// The row context for `msgs`: layout, author and time columns, time format and zone. It is
+    /// The row context for `msgs`: layout, author and time columns, time format, zone and theme. It is
     /// the only place a `RowCtx` is built for the app, so the renderer and the reducer's row model
     /// always measure the same rows.
     pub fn row_ctx(&self, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
@@ -153,6 +153,7 @@ impl App {
             ),
             time_format: &self.settings.timestamp_format,
             zone: self.zone,
+            theme: &self.theme,
         }
     }
 

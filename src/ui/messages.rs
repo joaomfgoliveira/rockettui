@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn authors_colored_in_buffer() {
-        use crate::ui::palette::author_color;
+        use crate::ui::palette::{DEFAULT_AUTHOR_PALETTE, author_color};
         let app = open_general_80x25();
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
@@ -204,7 +204,11 @@ mod tests {
                 let name: String = (7..=11u16).map(|x| buffer[(x, y)].symbol()).collect();
                 let name = name.trim();
                 let cell = &buffer[(7, y)];
-                assert_eq!(cell.fg, author_color(name), "row {y} {name:?}");
+                assert_eq!(
+                    cell.fg,
+                    author_color(name, &DEFAULT_AUTHOR_PALETTE),
+                    "row {y} {name:?}"
+                );
                 assert!(cell.modifier.contains(Modifier::BOLD), "row {y}");
                 for x in [12u16, 13, 14] {
                     assert_eq!(buffer[(x, y)].fg, Color::Reset, "row {y} x {x}");
@@ -221,7 +225,7 @@ mod tests {
 
     #[test]
     fn author_color_survives_cursor_highlight() {
-        use crate::ui::palette::author_color;
+        use crate::ui::palette::{DEFAULT_AUTHOR_PALETTE, author_color};
         let mut app = app_80x24();
         app.open_room(general());
         press(&mut app, "gg");
@@ -229,12 +233,18 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let name: String = (7..=11u16).map(|x| buffer[(x, 1)].symbol()).collect();
         let name = name.trim().to_string();
-        assert_eq!(buffer[(7, 1)].fg, author_color(&name));
+        assert_eq!(
+            buffer[(7, 1)].fg,
+            author_color(&name, &DEFAULT_AUTHOR_PALETTE)
+        );
         assert!(buffer[(7, 1)].modifier.contains(Modifier::REVERSED));
         press(&mut app, "<C-w>h");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(7, 1)].fg, author_color(&name));
+        assert_eq!(
+            buffer[(7, 1)].fg,
+            author_color(&name, &DEFAULT_AUTHOR_PALETTE)
+        );
         assert_eq!(buffer[(7, 1)].bg, Color::DarkGray);
     }
 
