@@ -254,4 +254,50 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn report_display_lists_all() {
+        let sources = Sources {
+            config: Some("sidebar_width = 99\nbogus = 1\n".to_string()),
+            keymap: Some("[normal\n".to_string()),
+            ..Sources::default()
+        };
+        let dir = temp_config_dir("display", &[]);
+        let Err(mut report) = load_from_sources(&sources) else {
+            panic!("expected Err");
+        };
+        report.dir = Some(dir.clone());
+        report.errors.push(Problem {
+            file: diag::ConfigFile::Theme,
+            pos: Some((1, 1)),
+            key: Some("k\u{1b}]0;x\u{7}ey".to_string()),
+            message: "bad \u{202e}text".to_string(),
+            severity: diag::Severity::Error,
+        });
+        let text = report.to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[0].starts_with("rockettui: invalid configuration in "),
+            "{text}"
+        );
+        let expected: Vec<String> = report
+            .errors
+            .iter()
+            .chain(&report.warnings)
+            .map(|p| p.to_string())
+            .collect();
+        assert_eq!(&lines[1..], expected.as_slice());
+        assert_eq!(report.errors.len(), 3);
+        assert_eq!(report.warnings.len(), 1);
+        assert!(
+            lines[1].starts_with("config.toml:1:"),
+            "errors come first: {text}"
+        );
+        assert!(
+            lines[lines.len() - 1].contains("bogus"),
+            "warnings come last: {text}"
+        );
+        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}') && !text.contains('\u{202e}'));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

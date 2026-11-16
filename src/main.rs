@@ -4,10 +4,14 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Config is read before the terminal starts, so a problem can be reported on a clean screen.
+    // Config is read before the terminal starts. A bad config shows the error screen, then the
+    // full report goes to stderr once the terminal is restored (D-02).
     let config = match rockettui::config::load() {
         Ok(config) => config,
         Err(report) => {
+            let terminal = rockettui::tui::init();
+            let _ = rockettui::show_config_errors(terminal, &report).await;
+            rockettui::tui::restore();
             eprint!("{report}");
             return ExitCode::from(1);
         }

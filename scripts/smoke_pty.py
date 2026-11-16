@@ -318,11 +318,43 @@ def scenario_config_layout(binary):
         raise SmokeFail("alternate screen not left")
 
 
+def scenario_config_error(binary):
+    files = {
+        "config.toml": 'sidebar_width = 99\ntimestamp_format = "%Q"\n',
+        "keymap.toml": "[normal\n",
+    }
+    pid, fd = spawn(binary, config_files=files)
+    buf = bytearray()
+
+    def shown(b):
+        screen = Screen()
+        screen.feed(b)
+        return all(
+            screen.contains(text)
+            for text in ("invalid configuration", "sidebar_width", "timestamp_format", "keymap.toml")
+        )
+
+    if not read_until(fd, buf, shown, 10):
+        raise SmokeFail("error screen not shown")
+    type_keys(fd, buf, b"x")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 1:
+        raise SmokeFail(f"exit code {code}, expected 1")
+    data = bytes(buf)
+    if not first_before(buf, ALT_ON, ALT_OFF):
+        raise SmokeFail("alternate screen not entered then left")
+    if b"sidebar_width" not in data[data.rfind(ALT_OFF) :]:
+        raise SmokeFail("report not printed to stderr after the terminal was restored")
+    if b"NORMAL" in data:
+        raise SmokeFail("the app started although the config is invalid")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
     "insert": scenario_insert,
     "config_layout": scenario_config_layout,
+    "config_error": scenario_config_error,
 }
 
 

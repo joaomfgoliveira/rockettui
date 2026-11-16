@@ -1,5 +1,6 @@
 //! The view: a pure function of `&App` onto a ratatui `Frame`. It never mutates `App`.
 
+pub mod error_screen;
 pub mod input;
 pub mod layout;
 pub mod messages;

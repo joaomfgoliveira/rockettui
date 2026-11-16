@@ -20,6 +20,35 @@ pub const CHANNEL_CAPACITY: usize = 256;
 /// How long a count or key sequence may wait for its next key (~1 s, D-06; configurable in Phase 2).
 pub const KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1000);
 
+/// Show the config errors and wait for a key press (D-02). Reads crossterm events directly.
+///
+/// ARCHITECTURE EXCEPTION, accepted by the author on 2026-11-16: the CLAUDE.md constraint says
+/// one `App`, one `Action` enum, one channel, one reducer. This screen runs only when
+/// `config::load()` fails, before any `App` exists, so there is no reducer to route input
+/// through. It holds only the `Report`, redraws on resize, returns on a key press, and is never
+/// reached once the config loads: from then on all input goes through the channel and the
+/// reducer as before. It adds no Action variant, channel or App state.
+pub async fn show_config_errors(
+    mut terminal: ratatui::DefaultTerminal,
+    report: &config::Report,
+) -> std::io::Result<()> {
+    use crossterm::event::{Event, EventStream};
+    use futures::StreamExt;
+    terminal.draw(|f| ui::error_screen::render(f, report))?;
+    let mut events = EventStream::new();
+    while let Some(next) = events.next().await {
+        match next {
+            Ok(event) if ui::error_screen::quits_on(&event) => return Ok(()),
+            Ok(Event::Resize(..)) => {
+                terminal.draw(|f| ui::error_screen::render(f, report))?;
+            }
+            Ok(_) => {}
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
 /// Sleep until `deadline`, or never when there is none.
 async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
     match deadline {

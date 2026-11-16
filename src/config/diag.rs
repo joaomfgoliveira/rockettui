@@ -227,7 +227,9 @@ impl Reader<'_> {
     pub fn warn_unknown(&mut self, table: &DeTable<'_>, known: &[&str], prefix: &str) {
         for (name, _) in table.iter() {
             if !known.contains(&name.get_ref().as_ref()) {
-                let key = format!("{prefix}{}", name.get_ref());
+                // At most 32 characters of a user-written name are echoed (T-02-01).
+                let shown: String = name.get_ref().chars().take(32).collect();
+                let key = format!("{prefix}{shown}");
                 self.warning(name.span().start, &key, "unknown key, ignored");
             }
         }
