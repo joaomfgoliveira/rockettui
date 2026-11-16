@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Configuration System
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-11-16T15:31:15.410Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-11-16T15:35:56.636Z"
 last_activity: 2026-11-16
 last_activity_desc: Phase 02 execution started
-state_head: a2d21f48f46beef4bc56d3f43ed7db975869e302
+state_head: 6d83551869fbcadea4a67635b0524a6c1bc6a728
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 11
-  completed_plans: 7
+  completed_plans: 8
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 02 (Configuration System) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-11-16 — Phase 02 execution started
 
@@ -43,6 +43,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Unknown key names echoed at most 32 characters on screen and stderr
 - [Phase 02]: TimeFormat validated via StrftimeItems plus write! sample render; user formats can never panic via to_string
 - [Phase 02]: Pre-App error screen reads crossterm directly (accepted TEA exception, documented in show_config_errors)
+- [Phase 02]: sidebar_width is not clamped to the terminal width; a wide sidebar leaves the main column narrow or empty and never panics (A26)
+- [Phase 02]: The binary shows system local time (chrono::Local set once in run); App::new, with_config and tests stay UTC (A2)
+- [Phase 02]: Reducer geometry and row model go through App::areas and App::row_ctx, the same helpers the renderer uses (Pitfalls 9 and 10)
 
 ### Pending Todos
 
@@ -61,8 +64,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-16T15:31:15.331Z
-**Stopped at:** Completed 02-01-PLAN.md
+**Last session:** 2026-11-16T15:35:56.560Z
+**Stopped at:** Completed 02-02-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -70,3 +73,4 @@ None yet.
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 02 P01 | 25 min | 3 tasks | 14 files |
+| Phase 02 P02 | 15 min | 3 tasks | 13 files |

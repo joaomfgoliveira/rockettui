@@ -41,7 +41,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CONF-04**: User can pick the `vim` or `vim-extras` keymap preset in `config.toml`
 - [ ] **CONF-05**: User can rebind keys per mode in `keymap.toml`, overriding the preset
 - [ ] **CONF-06**: User can set colors and styles for every UI element in `theme.toml`
-- [ ] **CONF-07**: User can set history size, timestamp format and sidebar width in `config.toml` (the server URL setting is deferred to Phase 3, per Phase 2 decision D-12)
+- [x] **CONF-07**: User can set history size, timestamp format and sidebar width in `config.toml` (the server URL setting is deferred to Phase 3, per Phase 2 decision D-12)
 
 ### Delivery
 
@@ -97,7 +97,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONF-04 | Phase 2 | Pending |
 | CONF-05 | Phase 2 | Pending |
 | CONF-06 | Phase 2 | Pending |
-| CONF-07 | Phase 2 | Pending |
+| CONF-07 | Phase 2 | Complete |
 | AUTH-01 | Phase 3 | Pending |
 | AUTH-02 | Phase 3 | Pending |
 | AUTH-03 | Phase 3 | Pending |
