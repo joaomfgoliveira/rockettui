@@ -71,6 +71,9 @@ pub struct App {
     pub message_layout: crate::ui::wrap::MessageLayout,
     /// The values of config.toml (D-12). `history_size` is stored for Phase 3 and read by nothing yet.
     pub settings: crate::config::Settings,
+    /// The zone message times are shown in. UTC unless the binary switches it to the system local
+    /// zone, so tests and snapshots never depend on the machine; the reducer reads no clock.
+    pub zone: crate::ui::timefmt::Zone,
     pub sidebar: sidebar::SidebarState,
     pub cmdline: String,
     /// The multiline draft of the input bar (D-14).
@@ -105,6 +108,7 @@ impl App {
             msg_views: HashMap::new(),
             message_layout: config.settings.message_layout,
             settings: config.settings,
+            zone: crate::ui::timefmt::Zone::Utc,
             sidebar: sidebar::SidebarState::default(),
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
@@ -130,6 +134,23 @@ impl App {
     pub fn areas(&self) -> crate::ui::layout::Areas {
         let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
         crate::ui::layout::areas(area, self.settings.sidebar_width, self.input_rows())
+    }
+
+    /// The row context for `msgs`: layout, author and time columns, time format and zone. It is
+    /// the only place a `RowCtx` is built for the app, so the renderer and the reducer's row model
+    /// always measure the same rows.
+    pub fn row_ctx(&self, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
+        crate::ui::wrap::RowCtx {
+            layout: self.message_layout,
+            author_col: crate::ui::wrap::author_column(msgs),
+            time_col: crate::ui::wrap::time_column(
+                msgs,
+                &self.settings.timestamp_format,
+                self.zone,
+            ),
+            time_format: &self.settings.timestamp_format,
+            zone: self.zone,
+        }
     }
 
     /// Rows the input bar occupies: the draft's visual rows, from 1 up to `MAX_INPUT_ROWS`.

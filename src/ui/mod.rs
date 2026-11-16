@@ -8,6 +8,7 @@ pub mod palette;
 pub mod sanitize;
 pub mod sidebar;
 pub mod status;
+pub mod timefmt;
 pub mod wrap;
 
 use crate::app::App;

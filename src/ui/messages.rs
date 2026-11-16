@@ -10,12 +10,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-/// `HH:MM` in UTC for a Unix timestamp in seconds (A10: until a time crate arrives in Phase 2).
-pub fn hhmm(ts: i64) -> String {
-    let secs = ts.rem_euclid(86_400);
-    format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
-}
-
 /// Draw the messages pane: only the rows of the window `app::messages::view` selects.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Messages;
@@ -41,9 +35,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let v = messages::view(app, room);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
-    let author_col = wrap::author_column(msgs);
+    let ctx = app.row_ctx(msgs);
     for (i, msg) in msgs.iter().enumerate() {
-        let rows = wrap::render_rows(msg, inner.width, app.message_layout, author_col);
+        let rows = wrap::render_rows(msg, inner.width, &ctx);
         if i == v.cursor {
             cursor_rows = lines.len()..lines.len() + rows.len();
         }
@@ -127,13 +121,6 @@ mod tests {
         let pane = pane_rect(&app);
         assert_eq!((pane.width, pane.height), (52, 20), "snapshot geometry");
         app
-    }
-
-    #[test]
-    fn hhmm_formats_utc() {
-        assert_eq!(hhmm(0), "00:00");
-        assert_eq!(hhmm(3600 * 13 + 60 * 5), "13:05");
-        assert_eq!(hhmm(-60), "23:59");
     }
 
     #[test]
@@ -272,10 +259,10 @@ mod tests {
             let pane = pane_rect(&app);
             assert_eq!((pane.width, pane.height), (52, 19));
             let v = view(&app, &general());
-            let author_col = wrap::author_column(&app.messages[&general()]);
+            let ctx = app.row_ctx(&app.messages[&general()]);
             let expected: Vec<String> = app.messages[&general()]
                 .iter()
-                .flat_map(|m| wrap::render_rows(m, 50, app.message_layout, author_col))
+                .flat_map(|m| wrap::render_rows(m, 50, &ctx))
                 .map(|line| {
                     line.spans
                         .iter()

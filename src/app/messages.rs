@@ -1,8 +1,9 @@
 //! Per-room message cursor and row-based scroll model (D-04).
 //!
-//! Heights come from `ui::wrap::message_rows` at the width of `layout::areas`, the same function
-//! and geometry the renderer uses, so scroll math and drawing never disagree. Both pass the same
-//! room author column (`wrap::author_column`), so heights use exactly the column that is drawn.
+//! Heights come from `ui::wrap::message_rows` at the width of `App::areas`, the same function
+//! and geometry the renderer uses, so scroll math and drawing never disagree. Both build their
+//! `RowCtx` with `App::row_ctx` (layout, author and time columns, time format, zone), so heights
+//! use exactly the columns that are drawn.
 
 use crate::action::Action;
 use crate::app::App;
@@ -29,9 +30,9 @@ pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let mut starts = vec![0];
     let mut total = 0;
     if let Some(msgs) = app.messages.get(room) {
-        let author_col = wrap::author_column(msgs);
+        let ctx = app.row_ctx(msgs);
         for msg in msgs {
-            total += wrap::message_rows(msg, width, app.message_layout, author_col);
+            total += wrap::message_rows(msg, width, &ctx);
             starts.push(total);
         }
     }
@@ -177,6 +178,23 @@ mod tests {
             let app = app_with_config(config_from_toml(toml), 80, 24);
             assert_eq!(viewport(&app).0, width, "config {toml:?}");
         }
+    }
+
+    #[test]
+    fn row_model_matches_renderer_custom_format() {
+        let config = config_from_toml("timestamp_format = \"%Y-%m-%d %H:%M\"\n");
+        let mut app = app_with_config(config, 80, 24);
+        app.open_room(general());
+        let (width, _) = viewport(&app);
+        let msgs = &app.messages[&general()];
+        let ctx = app.row_ctx(msgs);
+        let expected: usize = msgs
+            .iter()
+            .map(|m| wrap::render_rows(m, width, &ctx).len())
+            .sum();
+        let starts = row_starts(&app, &general());
+        assert_eq!(starts.last().copied(), Some(expected));
+        assert_eq!(ctx.time_col, 16);
     }
 
     fn open_general() -> App {
@@ -400,10 +418,10 @@ mod tests {
             update(&mut app, Action::Resize(w, h));
             let (width, _) = viewport(&app);
             let msgs = &app.messages[&general()];
-            let author_col = wrap::author_column(msgs);
+            let ctx = app.row_ctx(msgs);
             let expected: usize = msgs
                 .iter()
-                .map(|m| wrap::render_rows(m, width, app.message_layout, author_col).len())
+                .map(|m| wrap::render_rows(m, width, &ctx).len())
                 .sum();
             let starts = row_starts(&app, &general());
             assert_eq!(starts.last().copied(), Some(expected), "{w}x{h}");
