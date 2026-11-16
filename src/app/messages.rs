@@ -1,7 +1,8 @@
 //! Per-room message cursor and row-based scroll model (D-04).
 //!
 //! Heights come from `ui::wrap::message_rows` at the width of `layout::areas`, the same function
-//! and geometry the renderer uses, so scroll math and drawing never disagree.
+//! and geometry the renderer uses, so scroll math and drawing never disagree. Both pass the same
+//! room author column (`wrap::author_column`), so heights use exactly the column that is drawn.
 
 use crate::action::Action;
 use crate::app::App;
@@ -31,8 +32,9 @@ pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let mut starts = vec![0];
     let mut total = 0;
     if let Some(msgs) = app.messages.get(room) {
+        let author_col = wrap::author_column(msgs);
         for msg in msgs {
-            total += wrap::message_rows(msg, width, app.message_layout);
+            total += wrap::message_rows(msg, width, app.message_layout, author_col);
             starts.push(total);
         }
     }
@@ -368,6 +370,42 @@ mod tests {
                     assert_cursor_visible(&app, v);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rows_match_render_with_long_author() {
+        let mut app = open_general();
+        press(&mut app, "G");
+        app.messages
+            .get_mut(&general())
+            .expect("general")
+            .push(crate::data::Message {
+                id: "long-author".to_string(),
+                room_id: general(),
+                author: "firstname.lastname.contractor.external".to_string(),
+                ts: 0,
+                body: "a fairly long message body that has to wrap on narrow panes".to_string(),
+            });
+        for (w, h) in [(80u16, 24u16), (50, 12), (40, 8)] {
+            update(&mut app, Action::Resize(w, h));
+            let (width, _) = viewport(&app);
+            let msgs = &app.messages[&general()];
+            let author_col = wrap::author_column(msgs);
+            let expected: usize = msgs
+                .iter()
+                .map(|m| wrap::render_rows(m, width, app.message_layout, author_col).len())
+                .sum();
+            let starts = row_starts(&app, &general());
+            assert_eq!(starts.last().copied(), Some(expected), "{w}x{h}");
+            let v = view(&app, &general());
+            assert_eq!(v.cursor, 59, "{w}x{h}");
+            assert_cursor_visible(&app, v);
+            press(&mut app, "G");
+            let v = view(&app, &general());
+            assert_eq!(v.cursor, 60, "{w}x{h}");
+            assert_cursor_visible(&app, v);
+            press(&mut app, "60gg");
         }
     }
 

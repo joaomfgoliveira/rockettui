@@ -41,8 +41,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let v = messages::view(app, room);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
+    let author_col = wrap::author_column(msgs);
     for (i, msg) in msgs.iter().enumerate() {
-        let rows = wrap::render_rows(msg, inner.width, app.message_layout);
+        let rows = wrap::render_rows(msg, inner.width, app.message_layout, author_col);
         if i == v.cursor {
             cursor_rows = lines.len()..lines.len() + rows.len();
         }
@@ -225,9 +226,10 @@ mod tests {
             let pane = pane_rect(&app);
             assert_eq!((pane.width, pane.height), (52, 19));
             let v = view(&app, &general());
+            let author_col = wrap::author_column(&app.messages[&general()]);
             let expected: Vec<String> = app.messages[&general()]
                 .iter()
-                .flat_map(|m| crate::ui::wrap::render_rows(m, 50, app.message_layout))
+                .flat_map(|m| wrap::render_rows(m, 50, app.message_layout, author_col))
                 .map(|line| {
                     line.spans
                         .iter()
@@ -256,6 +258,48 @@ mod tests {
                 expected[v.top_row + 16].trim_end(),
                 "{keys:?} last"
             );
+        }
+    }
+
+    #[test]
+    fn bodies_share_one_column() {
+        let app = open_general_80x25();
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        for y in 1..=18u16 {
+            assert_eq!(buffer[(12, y)].symbol(), " ", "row {y} x=12");
+            assert_eq!(buffer[(13, y)].symbol(), " ", "row {y} x=13");
+            assert_ne!(buffer[(14, y)].symbol().trim(), "", "row {y} x=14");
+        }
+        let text = all_text(&terminal);
+        assert!(text.contains("dave   I'll take a look"), "{text}");
+    }
+
+    #[test]
+    fn long_author_truncated_and_aligned() {
+        let mut app = app_80x24();
+        app.open_room(general());
+        app.messages
+            .get_mut(&general())
+            .expect("general")
+            .push(Message {
+                id: "long-author".to_string(),
+                room_id: general(),
+                author: "firstname.lastname.contractor.external".to_string(),
+                ts: 0,
+                body: "short".to_string(),
+            });
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(
+            text.contains("firstname.lastname.contractor.e\u{2026}"),
+            "{text}"
+        );
+        let buffer = terminal.backend().buffer();
+        for y in 1..=17u16 {
+            assert_eq!(buffer[(39, y)].symbol(), " ", "row {y} x=39");
+            assert_eq!(buffer[(40, y)].symbol(), " ", "row {y} x=40");
+            assert_ne!(buffer[(41, y)].symbol().trim(), "", "row {y} x=41");
         }
     }
 
