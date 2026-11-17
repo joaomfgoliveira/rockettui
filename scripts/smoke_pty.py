@@ -353,14 +353,14 @@ def screen_of(buf):
     return screen
 
 
-def wait_ready(fd, buf, room=b"general"):
-    """The shared readiness check: `room` is listed (it arrived from the mock) and NORMAL is drawn.
+def wait_ready(fd, buf, room=b"general", timeout=10):
+    """The shared readiness check: `room` is listed (it arrived from the server) and NORMAL is drawn.
 
     D-05 draws an empty sidebar first, so there is no ordering to check.
     """
     text = room.decode()
     ready = lambda b: screen_of(b).contains(text) and screen_of(b).contains("NORMAL")
-    if not read_until(fd, buf, ready, 10):
+    if not read_until(fd, buf, ready, timeout):
         raise SmokeFail("not ready")
 
 
@@ -825,6 +825,149 @@ def scenario_unauthorized(binary):
         raise SmokeFail("the token appears in the terminal output")
 
 
+def docker_env(project):
+    """The ROCKETTUI_* values `dev/seed.py` wrote for `project`, read in-process.
+
+    The values go only into the child environment: nothing here prints them (T-03-29). A server
+    URL that is not loopback is refused, so the scenario can never reach a real server (T-03-30).
+    """
+    path = os.path.join(REPO, "dev", "state", project, ".env.local")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        raise SmokeFail("docker stack not seeded: run dev/seed.py up and seed") from None
+    values = {}
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() in CREDENTIAL_VARS:
+            values[key.strip()] = value.strip().strip("\"'")
+    if sorted(values) != sorted(CREDENTIAL_VARS) or not all(values.values()):
+        raise SmokeFail("docker stack not seeded: run dev/seed.py up and seed")
+    host = urllib.parse.urlsplit(values["ROCKETTUI_SERVER_URL"]).hostname
+    if host not in ("127.0.0.1", "localhost"):
+        raise SmokeFail("the docker state file does not point at a loopback server")
+    return values
+
+
+SIDEBAR_HEADERS = ("Unread", "Folders", "Recent")
+ROOM_GLYPHS = "#&~+@"
+FOLD_GLYPHS = "\u25be\u25b8"
+SIDEBAR_CURSOR_WIDTH = 2  # the "> " highlight symbol column
+
+
+def sidebar_rows(screen, width=28):
+    """The sidebar text of screen rows 1..nrows-3: between the borders, cursor column dropped,
+    trailing spaces removed."""
+    rows = []
+    for row in screen.rows()[1 : screen.nrows - 2]:
+        inner = row[1 : width - 1][SIDEBAR_CURSOR_WIDTH:]
+        rows.append(inner.rstrip())
+    return rows
+
+
+def room_name_of(row):
+    """The room name drawn on a sidebar room row, or None when the row is not a room row: an
+    optional `* ` unread marker, a kind glyph, the name and an optional ` [e2e]` tag."""
+    text = row.strip()
+    if text.startswith("* "):
+        text = text[2:].lstrip()
+    if not text or text[0] not in ROOM_GLYPHS:
+        return None
+    text = text[1:]
+    if text.endswith(" [e2e]"):
+        text = text[: -len(" [e2e]")]
+    return text
+
+
+def selectable_index(rows, name):
+    """The selectable index (headers and blank rows skipped, folders and rooms counted) of the
+    first room row named `name`; None when absent."""
+    index = 0
+    for row in rows:
+        text = row.strip()
+        if not text or text in SIDEBAR_HEADERS:
+            continue
+        if room_name_of(row) == name:
+            return index
+        index += 1
+    return None
+
+
+def open_room_named(fd, buf, name):
+    """Focus the sidebar, walk to the room named `name` and open it with Enter."""
+    type_keys(fd, buf, b"\x17")
+    type_keys(fd, buf, b"h")
+    type_keys(fd, buf, b"gg")
+    read_until(fd, buf, lambda b: False, 0.3)
+    index = selectable_index(sidebar_rows(screen_of(buf)), name)
+    if index is None:
+        raise SmokeFail(f"room {name!r} is not listed in the sidebar")
+    for _ in range(index):
+        type_keys(fd, buf, b"j")
+    type_keys(fd, buf, b"\r")
+    on_status = lambda b: name in screen_of(b).rows()[22]
+    if not read_until(fd, buf, on_status, 10):
+        raise SmokeFail(f"room {name!r} never opened")
+
+
+def scenario_docker_read(binary):
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    env = docker_env(project)
+    token = env["ROCKETTUI_TOKEN"].encode()
+    pid, fd = spawn(binary, extra_env=env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    wanted = ["rt-public", "rt-private", "alice", "secrets", "rt-team", "rt-discussion", "Favorites"]
+    with open(os.path.join(FIXTURES, "docker", "preferences.json"), encoding="utf-8") as handle:
+        categories = json.load(handle).get("preferences", {}).get("sidebarCategories", [])
+    wanted += [c["name"] for c in categories if c.get("name")]
+    listed = lambda b: all(screen_of(b).contains(text) for text in wanted)
+    if not read_until(fd, buf, listed, 20):
+        missing = [t for t in wanted if not screen_of(buf).contains(t)]
+        raise SmokeFail(f"rooms never listed, missing: {missing}")
+    if selectable_index(sidebar_rows(screen_of(buf)), "bob") is not None:
+        raise SmokeFail("the closed bob DM is listed")
+
+    open_room_named(fd, buf, "rt-public")
+    # The 50-column message pane wraps the attachment tag onto two rows, so check both halves.
+    newest = ("seed message 129", "[attachment:", "report.pdf]")
+    if not read_until(fd, buf, lambda b: all(screen_of(b).contains(t) for t in newest), 10):
+        missing = [t for t in newest if not screen_of(buf).contains(t)]
+        raise SmokeFail(f"the newest history page was not drawn, missing: {missing}")
+    # gg lands on the oldest loaded message, which requests the next older page.
+    for _ in range(6):
+        type_keys(fd, buf, b"gg")
+        if read_until(fd, buf, lambda b: screen_of(b).contains("* joined the room"), 1.5):
+            break
+    else:
+        raise SmokeFail("the join system line never appeared while paging back")
+    type_keys(fd, buf, b"gg")
+    status = lambda b: screen_of(b).rows()[22]
+    if not read_until(fd, buf, lambda b: "Beginning of history" in status(b), 10):
+        raise SmokeFail("the start of history was never reported")
+
+    open_room_named(fd, buf, "secrets")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("encrypted, not supported"), 10):
+        raise SmokeFail("the encrypted placeholder was never shown")
+
+    open_room_named(fd, buf, "alice")
+
+    def alice_drawn(b):
+        screen = screen_of(b)
+        return not screen.contains("Loading") and not screen.contains("No messages yet")
+
+    if not read_until(fd, buf, alice_drawn, 10):
+        raise SmokeFail("the alice DM never showed messages")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if token in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -837,6 +980,7 @@ SCENARIOS = {
     "config_creds": scenario_config_creds,
     "perm_warning": scenario_perm_warning,
     "unauthorized": scenario_unauthorized,
+    "docker_read": scenario_docker_read,
 }
 
 
