@@ -124,7 +124,8 @@ pub struct HistoryResp {
 }
 
 /// One message of a `*.history` response. Message text is untrusted and never printed, so there
-/// is no `Debug`. Plan 03-04 adds the attachment and file fields.
+/// is no `Debug`. `content` is the end-to-end payload of an encrypted message: it is only checked
+/// for presence and never read, copied or printed.
 #[derive(Deserialize)]
 pub struct WireMsg {
     #[serde(rename = "_id")]
@@ -134,6 +135,24 @@ pub struct WireMsg {
     pub ts: ApiDate,
     pub u: WireUser,
     pub t: Option<String>,
+    pub file: Option<WireFile>,
+    #[serde(default)]
+    pub files: Vec<WireFile>,
+    #[serde(default)]
+    pub attachments: Vec<WireAttach>,
+    pub content: Option<serde_json::Value>,
+}
+
+/// An uploaded file of a message; only its name is used.
+#[derive(Deserialize)]
+pub struct WireFile {
+    pub name: Option<String>,
+}
+
+/// An attachment of a message; only its title is used.
+#[derive(Deserialize)]
+pub struct WireAttach {
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize)]

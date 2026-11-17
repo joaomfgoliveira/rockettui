@@ -112,6 +112,7 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 /// default) with its color from `palette::author_color` over `theme.author_palette`, keyed on the
 /// full sanitized name, so truncation never changes a user's color. The time takes
 /// `theme.messages_time` and body text `theme.messages_body`; padding and indent stay raw spans.
+/// A `MessageKind::System` message takes `theme.messages_notice` for its author and its text.
 ///
 /// Compact caps the author column at `width - (time_col + 1 + 2 + MIN_BODY)` (saturating), so the
 /// body keeps at least `MIN_BODY` columns. An author wider than the capped column is cut on a
@@ -122,10 +123,18 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
     let time = format_ts(ctx.time_format, msg.ts, ctx.zone);
     let author = sanitize_line(&msg.author).into_owned();
     let time_style = ctx.theme.messages_time;
-    let body_style = ctx.theme.messages_body;
+    let system = msg.kind == MessageKind::System;
+    let body_style = if system {
+        ctx.theme.messages_notice
+    } else {
+        ctx.theme.messages_body
+    };
     // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
     // at every width. An explicit fg on messages.author wins over the palette for every author.
-    let name = if ctx.theme.messages_author.fg.is_some() {
+    // A system message (D-15) draws its author dim like its text, outside the palette.
+    let name = if system {
+        ctx.theme.messages_notice
+    } else if ctx.theme.messages_author.fg.is_some() {
         ctx.theme.messages_author
     } else {
         ctx.theme

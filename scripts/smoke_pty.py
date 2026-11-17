@@ -161,6 +161,7 @@ HISTORY_ENDPOINTS = {
 }
 HISTORY_COUNT_CAP = 100  # the server's API_Upper_Count_Limit
 HISTORY_BASE = datetime.datetime(2026, 11, 16, 8, 55, 0, tzinfo=datetime.timezone.utc)
+E2E_SENTINEL = "U0VOVElORUwtQ0lQSEVS"  # fake ciphertext of an E2E message; must never be drawn
 
 
 def _subscriptions():
@@ -175,7 +176,9 @@ def _iso(base, index):
 
 def history_messages(rid, name):
     """All messages of a room, oldest first. r-general has 130 (`message 000`..`message 129`,
-    authors alternating alice and bob), every other room 5 (`<name> note N`)."""
+    authors alternating alice and bob, except the last four: g-126 is an E2E leftover, g-127 a
+    `uj` system message by carol, g-128 carries an attachment, g-129 stays `message 129`), every
+    other room 5 (`<name> note N`)."""
     base = HISTORY_BASE
     out = []
     count = 130 if rid == "r-general" else 5
@@ -185,15 +188,22 @@ def history_messages(rid, name):
         else:
             ident, text = f"{rid}-{i}", f"{name} note {i}"
         user = "alice" if i % 2 == 0 else "bob"
-        out.append(
-            {
-                "_id": ident,
-                "rid": rid,
-                "msg": text,
-                "ts": _iso(base, i),
-                "u": {"_id": f"u-{user}", "username": user},
-            }
-        )
+        message = {
+            "_id": ident,
+            "rid": rid,
+            "msg": text,
+            "ts": _iso(base, i),
+            "u": {"_id": f"u-{user}", "username": user},
+        }
+        if rid == "r-general" and i == 126:
+            message.update(t="e2e", msg=E2E_SENTINEL, content={"ciphertext": E2E_SENTINEL})
+        elif rid == "r-general" and i == 127:
+            message.update(
+                t="uj", msg="carol", u={"_id": "u-carol", "username": "carol"}
+            )
+        elif rid == "r-general" and i == 128:
+            message.update(msg="see attached", attachments=[{"title": "report.pdf"}])
+        out.append(message)
     return out
 
 
@@ -594,6 +604,13 @@ def scenario_connect_read(binary):
     type_keys(fd, buf, b"\r")
     if not read_until(fd, buf, lambda b: screen_of(b).contains("message 129"), 10):
         raise SmokeFail("the newest history message never appeared")
+    # D-15: system line, attachment tag and the E2E leftover read as text, never as ciphertext.
+    kinds = ("* joined the room", "[attachment: report.pdf]", "[encrypted message]")
+    if not read_until(fd, buf, lambda b: all(screen_of(b).contains(t) for t in kinds), 5):
+        missing = [t for t in kinds if not screen_of(buf).contains(t)]
+        raise SmokeFail(f"history kinds not drawn as text, missing: {missing}")
+    if E2E_SENTINEL.encode() in bytes(buf):
+        raise SmokeFail("E2E ciphertext appears in the terminal output")
     history_requests = [r for r in mock.requests if r[1] in HISTORY_ENDPOINTS]
     general = [r for r in history_requests if r[2].get("roomId") == "r-general"]
     if len(general) != 1 or general[0][1] != "/api/v1/channels.history":
@@ -648,6 +665,8 @@ def scenario_connect_read(binary):
         raise SmokeFail(f"exit code {code}, expected 0")
     if MOCK_TOKEN.encode() in bytes(buf):
         raise SmokeFail("the token appears in the terminal output")
+    if E2E_SENTINEL.encode() in bytes(buf):
+        raise SmokeFail("E2E ciphertext appears in the terminal output")
 
 
 def scenario_missing_creds(binary):

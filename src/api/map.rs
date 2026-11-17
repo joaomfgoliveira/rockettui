@@ -142,6 +142,58 @@ pub fn folders(subs: &[WireSub], rooms: &[Room], prefs: Option<&WirePrefs>) -> V
     out
 }
 
+/// The text shown for an end-to-end encrypted message found in a room's history (D-12, D-15).
+/// The ciphertext is never copied into a body.
+const ENCRYPTED_TEXT: &str = "[encrypted message]";
+
+/// Kind and body of one wire message (D-15).
+///
+/// - `t` is `e2e`, or a `content` object is present without a system type: an end-to-end
+///   leftover, `Normal` with the fixed text, `msg` and `content` ignored;
+/// - any other `t` is a system message, drawn as a one-liner by type (`au` and `ru` append the
+///   target user the server puts in `msg`);
+/// - otherwise the text, followed by ` [attachment: <name>]` for the file, each listed file and
+///   each attachment title, every name once.
+fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
+    let system_type = msg.t.as_deref().filter(|t| *t != "e2e");
+    if msg.t.as_deref() == Some("e2e") || (system_type.is_none() && msg.content.is_some()) {
+        return (MessageKind::Normal, ENCRYPTED_TEXT.to_string());
+    }
+    if let Some(t) = system_type {
+        let target = msg.msg.trim();
+        let text = match t {
+            "uj" => "* joined the room".to_string(),
+            "ul" => "* left the room".to_string(),
+            "au" => format!("* added {target}").trim_end().to_string(),
+            "ru" => format!("* removed {target}").trim_end().to_string(),
+            "r" => "* renamed the room".to_string(),
+            "room_changed_topic" => "* changed the topic".to_string(),
+            _ => "* system message".to_string(),
+        };
+        return (MessageKind::System, text);
+    }
+    let mut names: Vec<&str> = Vec::new();
+    let candidates = msg
+        .file
+        .iter()
+        .chain(&msg.files)
+        .filter_map(|f| f.name.as_deref())
+        .chain(msg.attachments.iter().filter_map(|a| a.title.as_deref()));
+    for name in candidates {
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    let mut body = msg.msg.clone();
+    for name in names {
+        if !body.is_empty() {
+            body.push(' ');
+        }
+        body.push_str(&format!("[attachment: {name}]"));
+    }
+    (MessageKind::Normal, body)
+}
+
 /// One page of history (the server sends it newest first) as oldest-first messages.
 ///
 /// The order is the server timestamp in milliseconds, then the id, so two messages in the same
@@ -159,6 +211,7 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
         {
             oldest = Some((ms, raw));
         }
+        let (kind, body) = kind_and_body(&msg);
         keyed.push((
             millis.unwrap_or(0),
             Message {
@@ -166,8 +219,8 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
                 room_id: room.clone(),
                 author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
                 ts: msg.ts.secs().unwrap_or(0),
-                body: msg.msg,
-                kind: MessageKind::Normal,
+                body,
+                kind,
             },
         ));
     }
