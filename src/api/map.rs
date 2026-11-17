@@ -561,4 +561,160 @@ mod tests {
         );
         assert_eq!(m.body, "[attachment: t.pdf]");
     }
+
+    // Captured from the real local Rocket.Chat 8.9.1 by `dev/seed.py capture` (plan 03-02). These
+    // pin the mapping to real server output; the captured files are never edited to pass (T-03-31).
+    const DOCKER_SUBS: &str = include_str!("fixtures/docker/subscriptions.json");
+    const DOCKER_ROOMS: &str = include_str!("fixtures/docker/rooms.json");
+    const DOCKER_PREFS: &str = include_str!("fixtures/docker/preferences.json");
+    const DOCKER_RT_PUBLIC: &str = include_str!("fixtures/docker/history_rt_public.json");
+    const DOCKER_DM_ALICE: &str = include_str!("fixtures/docker/history_dm_alice.json");
+
+    fn docker_rooms() -> Vec<Room> {
+        let subs = serde_json::from_str::<SubscriptionsResp>(DOCKER_SUBS)
+            .expect("docker subscriptions")
+            .update;
+        let records = serde_json::from_str::<RoomsResp>(DOCKER_ROOMS)
+            .expect("docker rooms")
+            .update;
+        rooms(&subs, &records)
+    }
+
+    fn docker_room<'a>(mapped: &'a [Room], name: &str) -> &'a Room {
+        mapped
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("room {name} is not listed"))
+    }
+
+    fn docker_history(json: &str) -> Vec<WireMsg> {
+        serde_json::from_str::<crate::api::wire::HistoryResp>(json)
+            .expect("docker history")
+            .messages
+    }
+
+    #[test]
+    fn docker_fixtures_rooms() {
+        let mapped = docker_rooms();
+        let kind_of_name = |name: &str| docker_room(&mapped, name).kind;
+        assert_eq!(kind_of_name("rt-public"), RoomKind::Channel);
+        assert_eq!(kind_of_name("general"), RoomKind::Channel);
+        assert_eq!(kind_of_name("rt-private"), RoomKind::PrivateGroup);
+        assert!(docker_room(&mapped, "rt-private").private);
+        // A9: a direct message is named by the other user's username, not the full name `Alice`.
+        assert_eq!(kind_of_name("alice"), RoomKind::DirectMessage);
+        assert!(mapped.iter().all(|r| r.name != "Alice"));
+        assert_eq!(kind_of_name("secrets"), RoomKind::PrivateGroup);
+        assert!(docker_room(&mapped, "secrets").encrypted);
+        // The discussion subscription's `name` is the room id; the title comes from `fname`.
+        assert_eq!(kind_of_name("rt-discussion"), RoomKind::Discussion);
+        assert_eq!(kind_of_name("rt-team"), RoomKind::Team);
+        // The closed bob DM (open = false) is not listed.
+        assert!(mapped.iter().all(|r| r.name != "bob" && r.name != "Bob"));
+        assert_eq!(mapped.len(), 7);
+        // Only secrets is encrypted.
+        let encrypted: Vec<&str> = mapped
+            .iter()
+            .filter(|r| r.encrypted)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(encrypted, ["secrets"]);
+        // A2: the real ISO dates parse, including for `general`, which has no `lm`.
+        assert!(mapped.iter().all(|r| r.last_activity > 0));
+    }
+
+    #[test]
+    fn docker_fixtures_folders() {
+        let subs = serde_json::from_str::<SubscriptionsResp>(DOCKER_SUBS)
+            .expect("docker subscriptions")
+            .update;
+        let prefs = serde_json::from_str::<PreferencesResp>(DOCKER_PREFS)
+            .expect("docker preferences")
+            .preferences;
+        let mapped = docker_rooms();
+        let made = folders(&subs, &mapped, Some(&prefs));
+        let favorites = made
+            .iter()
+            .find(|f| f.name == "Favorites")
+            .expect("a Favorites folder");
+        assert_eq!(made[0].name, "Favorites", "Favorites comes first");
+        assert_eq!(
+            favorites.room_ids,
+            [docker_room(&mapped, "rt-private").id.clone()]
+        );
+        // The Work folder exists when the captured preferences hold that category.
+        if prefs
+            .sidebar_categories
+            .iter()
+            .any(|c| c.name == "Work" && !c.default)
+        {
+            let work = made.iter().find(|f| f.name == "Work").expect("Work folder");
+            assert_eq!(work.room_ids, [docker_room(&mapped, "rt-team").id.clone()]);
+        }
+        // Assignment is exclusive: no room sits in two folders.
+        let mut all: Vec<&RoomId> = made.iter().flat_map(|f| f.room_ids.iter()).collect();
+        let before = all.len();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), before);
+    }
+
+    #[test]
+    fn docker_fixtures_history() {
+        let room = RoomId("r".to_string());
+        let public = history(&room, docker_history(DOCKER_RT_PUBLIC));
+        assert_eq!(public.messages.len(), 50);
+        assert!(public.messages.iter().all(|m| m.ts > 0));
+        assert!(public.messages.windows(2).all(|w| w[0].ts <= w[1].ts));
+        // oldest_ts is the raw server string of the oldest message, parseable as a real date.
+        let oldest = public.oldest_ts.expect("oldest_ts");
+        let date: crate::api::wire::ApiDate =
+            serde_json::from_str(&format!("\"{oldest}\"")).expect("date json");
+        assert!(date.millis().is_some_and(|ms| ms > 0));
+        assert!(
+            public
+                .messages
+                .iter()
+                .all(|m| m.author == "dev" || m.author == "alice")
+        );
+        // Real attachments carry the file title, listed once.
+        assert!(
+            public
+                .messages
+                .iter()
+                .any(|m| m.body.contains("[attachment: report.pdf]")),
+            "the report.pdf attachment is mapped"
+        );
+        // Every message the server marks with a type `t` is a System line, and the newest page
+        // holds at least one (discussion-created); a `uj` join message maps the same way.
+        let typed: Vec<String> = docker_history(DOCKER_RT_PUBLIC)
+            .into_iter()
+            .chain(docker_history(DOCKER_DM_ALICE))
+            .filter(|m| m.t.is_some())
+            .map(|m| m.id)
+            .collect();
+        assert!(
+            !typed.is_empty(),
+            "the captured pages hold a system message"
+        );
+        let alice = history(&room, docker_history(DOCKER_DM_ALICE));
+        assert!(alice.messages.iter().all(|m| m.ts > 0));
+        assert!(
+            alice
+                .messages
+                .iter()
+                .all(|m| m.author == "dev" || m.author == "alice")
+        );
+        assert!(alice.oldest_ts.is_some());
+        for id in typed {
+            let mapped = public
+                .messages
+                .iter()
+                .chain(&alice.messages)
+                .find(|m| m.id == id)
+                .expect("typed message mapped");
+            assert_eq!(mapped.kind, MessageKind::System, "{id}");
+            assert!(mapped.body.starts_with("* "), "{id}");
+        }
+    }
 }
