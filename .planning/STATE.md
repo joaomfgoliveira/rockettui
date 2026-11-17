@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Connect & Read
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-11-17T11:04:46.863Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-11-17T11:11:29.555Z"
 last_activity: 2026-11-17
 last_activity_desc: Phase 03 execution started
-state_head: 174159478f8ac301c45cc1fca94c080cf697a750
+state_head: e49e96f60b0992c57183513c6a1cb656234b48c2
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 03 (Connect & Read) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-11-17 — Phase 03 execution started
 
@@ -61,6 +61,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 03]: 03-03: fake-source MessagesLoaded marks rooms Loaded+exhausted so Phase 1/2 snapshots stay unchanged; placeholders use messages.notice with no new theme element
 - [Phase 03]: 03-04: an older page that adds no message (empty or all ids held) ends the history; a shorter page never does; paging sends the raw server timestamp of the oldest held message
 - [Phase 03]: 03-04: MessageKind { Normal, System }; E2E leftovers keep kind Normal with the fixed text [encrypted message] and their msg and content are never mapped; attachment names are listed once across file, files and attachment titles
+- [Phase 03]: 03-05: FileConn records keys with a non-string value so a wrong type is reported once; a value given anywhere makes a partial setting an error for the other keys; a bad file URL errors only when the file URL is in use
+- [Phase 03]: 03-05: warnings (chmod 600 when the token comes from the file, cleartext http to non-loopback) travel Config.warnings -> App.warnings, drawn every frame after the connection span and repeated on stderr after restore; an env token over a file token gives no permission warning (A-D04)
 
 ### Pending Todos
 
@@ -79,8 +81,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-17T11:04:46.768Z
-**Stopped at:** Completed 03-04-PLAN.md
+**Last session:** 2026-11-17T11:11:29.431Z
+**Stopped at:** Completed 03-05-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -96,3 +98,4 @@ None yet.
 | Phase 03 P02 | 7 min | 2 tasks | 9 files |
 | Phase 03 P03 | 5 min | 2 tasks | 18 files |
 | Phase 03 P04 | 6 min | 2 tasks | 15 files |
+| Phase 03 P05 | 6 min | 2 tasks | 8 files |

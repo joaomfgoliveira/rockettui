@@ -89,7 +89,7 @@ Plans:
   4. Encrypted rooms show "encrypted, not supported"
   5. App warns about a config file with credentials that is not `chmod 600`, and logs contain no token or message content
 **UI hint**: yes
-**Plans:** 4/7 plans executed
+**Plans:** 5/7 plans executed
 
 Plans:
 **Wave 1**
@@ -103,7 +103,7 @@ Plans:
 - [x] 03-04-PLAN.md — Scroll back: older pages with a stable cursor and end-of-history; D-15 system lines, attachment tags, [encrypted message] (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 03-05-PLAN.md — Credentials in config.toml (env wins per key) and the persistent chmod 600 / cleartext-http warnings (wave 4)
+- [x] 03-05-PLAN.md — Credentials in config.toml (env wins per key) and the persistent chmod 600 / cleartext-http warnings (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 03-06-PLAN.md — :reconnect / :retry, distinct failure messages, no redirect following, GET only, redaction sweep (wave 5)
@@ -149,7 +149,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
-| 3. Connect & Read | 4/7 | In Progress | - |
+| 3. Connect & Read | 5/7 | In Progress | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |
