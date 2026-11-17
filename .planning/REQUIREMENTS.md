@@ -11,7 +11,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **AUTH-01**: User can authenticate with a Personal Access Token (user id + token) from an env var or config file
 - [x] **AUTH-02**: App warns if a config file holding credentials is not `chmod 600`
-- [ ] **AUTH-03**: Token and message contents are never written to logs
+- [x] **AUTH-03**: Token and message contents are never written to logs
 
 ### Rooms
 
@@ -100,7 +100,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONF-07 | Phase 2 | Complete |
 | AUTH-01 | Phase 3 | Pending |
 | AUTH-02 | Phase 3 | Complete |
-| AUTH-03 | Phase 3 | Pending |
+| AUTH-03 | Phase 3 | Complete |
 | ROOM-01 | Phase 3 | Pending |
 | ROOM-02 | Phase 3 | Pending |
 | ROOM-03 | Phase 3 | Pending |
