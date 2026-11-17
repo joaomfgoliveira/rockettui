@@ -1,0 +1,43 @@
+# Throwaway local Rocket.Chat for rockettui development (DLVR-01).
+# Driven by dev/seed.py: `python3 -I dev/seed.py up`. Never point the app's company
+# credentials at anything here, and never point this setup at the company server.
+# The project name comes from `docker compose -p <project>`, so there is no `name:` key.
+services:
+  mongodb:
+    image: docker.io/mongodb/mongodb-community-server:8.0-ubi8
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  rocketchat:
+    image: docker.io/rocketchat/rocket.chat:${RELEASE:-8.9.1}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ROOT_URL: http://localhost:${HOST_PORT:-3100}
+      PORT: "3000"
+      MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
+      ADMIN_USERNAME: admin
+      ADMIN_PASS: ${ADMIN_PASS:?set by dev/seed.py up}
+      ADMIN_EMAIL: admin@example.invalid
+      ADMIN_NAME: Admin
+      OVERWRITE_SETTING_Show_Setup_Wizard: completed
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_Enabled: "false"
+      OVERWRITE_SETTING_API_Enable_Rate_Limiter: "false"
+    ports:
+      # Loopback only: the throwaway server has 2FA and the rate limiter off.
+      - "127.0.0.1:${HOST_PORT:-3100}:3000"
+
+volumes:
+  mongodb_data: {}
