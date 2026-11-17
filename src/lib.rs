@@ -137,4 +137,6 @@ pub async fn run(
 }
 
 #[cfg(test)]
+mod redaction;
+#[cfg(test)]
 pub(crate) mod test_util;

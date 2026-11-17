@@ -169,6 +169,16 @@ impl Client {
     /// Build the client. A user id or token with a control character cannot be a header value:
     /// that is `ApiError::Client` with a fixed message, never the value.
     pub fn new(conn: &Connection) -> Result<Client, ApiError> {
+        Client::with_timeouts(conn, CONNECT_TIMEOUT, REQUEST_TIMEOUT)
+    }
+
+    /// `new` with explicit connect and whole-request deadlines; the tests use short ones. Nothing
+    /// else about the TLS or redirect setup can be changed from here (D-08).
+    pub(crate) fn with_timeouts(
+        conn: &Connection,
+        connect: Duration,
+        total: Duration,
+    ) -> Result<Client, ApiError> {
         let mut user_id =
             HeaderValue::from_str(conn.user_id.expose()).map_err(|_| ApiError::Client)?;
         let mut token = HeaderValue::from_str(conn.token.expose()).map_err(|_| ApiError::Client)?;
@@ -181,8 +191,8 @@ impl Client {
             .default_headers(headers)
             // The token is a custom header and reqwest forwards those across hosts on a redirect.
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(connect)
+            .timeout(total)
             .user_agent(concat!("rockettui/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| ApiError::Client)?;
@@ -709,6 +719,236 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// A request path segment that must never come back in an error.
+    const ROOM_SENTINEL: &str = "SENTINEL-ROOM-5d1e";
+
+    /// A client with a 200 ms connect and total deadline, for the failure-class tests.
+    fn quick_client(url: &str) -> Client {
+        let conn = connection(url, USER, TOKEN);
+        let short = Duration::from_millis(200);
+        Client::with_timeouts(&conn, short, short).expect("client")
+    }
+
+    /// One GET of `subscriptions.get` carrying the sentinel in the query, as the error it gives.
+    async fn mapped_error(client: &Client) -> ApiError {
+        client
+            .get_json::<wire::SubscriptionsResp>(
+                "subscriptions.get",
+                &[("roomId", ROOM_SENTINEL.into())],
+            )
+            .await
+            .map(|_| ())
+            .expect_err("the request must fail")
+    }
+
+    async fn respond_with(template: ResponseTemplate) -> (MockServer, Client) {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/subscriptions.get"))
+            .respond_with(template)
+            .mount(&server)
+            .await;
+        let client = quick_client(&server.uri());
+        (server, client)
+    }
+
+    #[tokio::test]
+    async fn error_mapping() {
+        let json = |code: u16| ResponseTemplate::new(code).set_body_string("{\"success\":false}");
+        let nine_mib = "x".repeat(9 * 1024 * 1024);
+        let cases: Vec<(&str, ResponseTemplate, ApiError, &str)> = vec![
+            (
+                "401",
+                json(401),
+                ApiError::Unauthorized,
+                "unauthorized: check the user id and token",
+            ),
+            (
+                "403",
+                json(403),
+                ApiError::Forbidden,
+                "forbidden: the token lacks permission",
+            ),
+            (
+                "404",
+                json(404),
+                ApiError::NotFound,
+                "not found: check server_url (the Rocket.Chat base URL)",
+            ),
+            (
+                "429",
+                json(429),
+                ApiError::RateLimited,
+                "rate limited by the server: wait a minute, then :reconnect",
+            ),
+            (
+                "307",
+                ResponseTemplate::new(307).insert_header("Location", "http://127.0.0.1:9/x"),
+                ApiError::Redirected,
+                "server redirected: check server_url (http vs https, path)",
+            ),
+            (
+                "500",
+                json(500),
+                ApiError::Server(500),
+                "server error (HTTP 500): try :reconnect later",
+            ),
+            (
+                "502",
+                json(502),
+                ApiError::Server(502),
+                "server error (HTTP 502): try :reconnect later",
+            ),
+            (
+                "418",
+                json(418),
+                ApiError::BadResponse,
+                "unexpected response: is server_url a Rocket.Chat server?",
+            ),
+            (
+                "200 not json",
+                ResponseTemplate::new(200).set_body_raw("not json", "application/json"),
+                ApiError::BadResponse,
+                "unexpected response: is server_url a Rocket.Chat server?",
+            ),
+            (
+                "200 nine MiB",
+                ResponseTemplate::new(200).set_body_raw(nine_mib, "application/json"),
+                ApiError::TooLarge,
+                "server response too large",
+            ),
+            (
+                "slow",
+                ResponseTemplate::new(200)
+                    .set_body_string("{}")
+                    .set_delay(Duration::from_millis(1500)),
+                ApiError::Timeout,
+                "request timed out: check the network",
+            ),
+        ];
+        for (label, template, expected, text) in cases {
+            let (_server, client) = respond_with(template).await;
+            let error = mapped_error(&client).await;
+            assert_eq!(error, expected, "{label}");
+            assert_eq!(error.to_string(), text, "{label}");
+            for shown in [error.to_string(), format!("{error:?}")] {
+                assert!(!shown.contains(ROOM_SENTINEL), "{label}: {shown}");
+                assert!(!shown.contains(TOKEN), "{label}: {shown}");
+            }
+        }
+
+        // A port nothing listens on: the connection is refused.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let client = quick_client(&format!("http://127.0.0.1:{port}"));
+        let error = mapped_error(&client).await;
+        assert_eq!(error, ApiError::Unreachable);
+        assert_eq!(
+            error.to_string(),
+            "cannot connect (unreachable or TLS error): check server_url"
+        );
+        assert!(!format!("{error:?}").contains(ROOM_SENTINEL));
+    }
+
+    /// A body of more than the cap with no Content-Length (chunked) is cut off as TooLarge too.
+    #[tokio::test]
+    async fn chunked_oversized_body_is_too_large() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut head = [0u8; 2048];
+            let _ = stream.read(&mut head);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+            );
+            let chunk = vec![b'x'; 1024 * 1024];
+            for _ in 0..10 {
+                if stream
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .is_err()
+                    || stream.write_all(&chunk).is_err()
+                    || stream.write_all(b"\r\n").is_err()
+                {
+                    return; // the client gave up at the cap, as intended
+                }
+            }
+            let _ = stream.write_all(b"0\r\n\r\n");
+        });
+        let client = Client::with_timeouts(
+            &connection(&format!("http://127.0.0.1:{port}"), USER, TOKEN),
+            Duration::from_secs(2),
+            Duration::from_secs(10),
+        )
+        .expect("client");
+        assert_eq!(mapped_error(&client).await, ApiError::TooLarge);
+        server.join().expect("server thread");
+    }
+
+    #[tokio::test]
+    async fn no_redirect_follow() {
+        let origin_b = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(0)
+            .mount(&origin_b)
+            .await;
+        let origin_a = MockServer::start().await;
+        let target = format!("{}/api/v1/subscriptions.get", origin_b.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", target.as_str()))
+            .mount(&origin_a)
+            .await;
+        let result = client_for(&origin_a).load_rooms().await;
+        assert!(matches!(result, Err(ApiError::Redirected)));
+        let received = origin_b.received_requests().await.expect("recorded");
+        assert!(
+            received.is_empty(),
+            "the second origin got {} request(s): the token must never leave server_url",
+            received.len()
+        );
+        origin_b.verify().await;
+    }
+
+    #[tokio::test]
+    async fn only_get_requests() {
+        let server = MockServer::start().await;
+        mount_rooms(&server).await;
+        mount_ok(&server, "users.getPreferences", PREFS).await;
+        mount_ok(&server, "channels.history", HISTORY).await;
+        let client = client_for(&server);
+        client.load_rooms().await.expect("rooms");
+        client
+            .load_history(
+                &RoomId("r-general".to_string()),
+                RoomKind::Channel,
+                false,
+                50,
+                None,
+            )
+            .await
+            .expect("history");
+        let requests = server.received_requests().await.expect("recorded");
+        assert!(requests.len() >= 4, "{}", requests.len());
+        assert!(
+            requests.iter().all(|r| r.method.as_str() == "GET"),
+            "Phase 3 sends GET only"
+        );
+    }
+
+    #[test]
+    fn client_debug_redacts() {
+        let conn = connection("http://127.0.0.1:3100", "SENTINEL-USER-ID", TOKEN);
+        let client = Client::new(&conn).expect("client");
+        let shown = format!("{client:?}");
+        assert!(!shown.contains(TOKEN), "{shown}");
+        assert!(!shown.contains("SENTINEL-USER-ID"), "{shown}");
+        assert!(!shown.contains("3100"), "{shown}");
     }
 
     #[test]
