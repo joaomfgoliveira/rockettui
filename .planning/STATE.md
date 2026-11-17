@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Connect & Read
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-11-17T10:43:05.184Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-11-17T10:50:39.600Z"
 last_activity: 2026-11-17
 last_activity_desc: Phase 03 execution started
-state_head: 57aa5722a63411403fcead743d2d46b48f088feb
+state_head: 7738d2c9671ba621b0bd22d8fdc52f444d49bcb7
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 12
+  completed_plans: 13
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 03 (Connect & Read) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-11-17 — Phase 03 execution started
 
@@ -55,6 +55,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: author_color returns Color::Reset for an empty palette (defense in depth behind load-time validation, T-02-17)
 - [Phase 03]: 03-01: Folders = Favorites (favorited rooms without a category) then custom categories (A6, awaiting author confirmation); literal D-10 reading is one condition in map::folders
 - [Phase 03]: 03-01: Effect outbox on App drained only by run(); the token lives only in api::Client headers, never in App; reqwest redirects disabled, reqwest::Error never formatted
+- [Phase 03]: 03-02: dev secrets live in dev/state/<project>/ (0700 dir, 0600 files, git-ignored); fixtures are scrubbed of lastMessage and md and guarded by assert_no_secrets
+- [Phase 03]: 03-02: local server facts for mapping: discussion subscription name is the room id (title in fname), channels count only mentions as unread, history carries discussion-created system messages, categories work license-free via setPreferences plus MongoDB
 
 ### Pending Todos
 
@@ -73,8 +75,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-17T10:43:05.088Z
-**Stopped at:** Completed 03-01-PLAN.md
+**Last session:** 2026-11-17T10:50:39.495Z
+**Stopped at:** Completed 03-02-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -87,3 +89,4 @@ None yet.
 | Phase 02 P04 | 6 min | 3 tasks | 10 files |
 | Phase 02 P05 | 4 min | 2 tasks | 5 files |
 | Phase 03 P01 | 8 min | 2 tasks | 19 files |
+| Phase 03 P02 | 7 min | 2 tasks | 9 files |

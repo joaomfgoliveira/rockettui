@@ -89,12 +89,12 @@ Plans:
   4. Encrypted rooms show "encrypted, not supported"
   5. App warns about a config file with credentials that is not `chmod 600`, and logs contain no token or message content
 **UI hint**: yes
-**Plans:** 1/7 plans executed
+**Plans:** 2/7 plans executed
 
 Plans:
 **Wave 1**
 - [x] 03-01-PLAN.md — Tracer: env PAT -> api::Client -> subscriptions.get + rooms.get -> Effect outbox -> real rooms in the sidebar, Favorites + categories folders, mock-backed pty harness, missing-credential error screen (wave 1)
-- [ ] 03-02-PLAN.md — Local Docker Rocket.Chat 8.9.1: compose, seed with every Phase 3 case, PAT in git-ignored 0600 state, scrubbed captured fixtures (wave 1, parallel with 03-01)
+- [x] 03-02-PLAN.md — Local Docker Rocket.Chat 8.9.1: compose, seed with every Phase 3 case, PAT in git-ignored 0600 state, scrubbed captured fixtures (wave 1, parallel with 03-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 03-03-PLAN.md — Open a room: first-open history via channels/groups/im.history, per-room cache, encrypted rooms never fetched, Loading / Could not load / encrypted placeholders (wave 2)
@@ -149,7 +149,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
-| 3. Connect & Read | 1/7 | In Progress | - |
+| 3. Connect & Read | 2/7 | In Progress | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |
