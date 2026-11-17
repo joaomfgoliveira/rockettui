@@ -9,19 +9,19 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Authentication
 
-- [ ] **AUTH-01**: User can authenticate with a Personal Access Token (user id + token) from an env var or config file
+- [x] **AUTH-01**: User can authenticate with a Personal Access Token (user id + token) from an env var or config file
 - [x] **AUTH-02**: App warns if a config file holding credentials is not `chmod 600`
 - [x] **AUTH-03**: Token and message contents are never written to logs
 
 ### Rooms
 
-- [ ] **ROOM-01**: User can see a list of channels, private groups and DMs in the sidebar
-- [ ] **ROOM-02**: User can select a room to open it
-- [ ] **ROOM-03**: Encrypted (E2EE) rooms show as "encrypted, not supported"
+- [x] **ROOM-01**: User can see a list of channels, private groups and DMs in the sidebar
+- [x] **ROOM-02**: User can select a room to open it
+- [x] **ROOM-03**: Encrypted (E2EE) rooms show as "encrypted, not supported"
 
 ### Messages
 
-- [ ] **MSG-01**: User can view message history of the selected room and scroll it
+- [x] **MSG-01**: User can view message history of the selected room and scroll it
 - [ ] **MSG-02**: User can send a message to the selected room
 - [ ] **MSG-03**: User sees new incoming messages in real time without refreshing (DDP over WebSocket)
 - [ ] **MSG-04**: App reconnects to the realtime connection after a drop
@@ -45,7 +45,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Delivery
 
-- [ ] **DLVR-01**: App works against a local Docker Rocket.Chat server
+- [x] **DLVR-01**: App works against a local Docker Rocket.Chat server
 - [ ] **DLVR-02**: App works day to day against the company server
 
 ## v2 Requirements
@@ -98,14 +98,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONF-05 | Phase 2 | Complete |
 | CONF-06 | Phase 2 | Complete |
 | CONF-07 | Phase 2 | Complete |
-| AUTH-01 | Phase 3 | Pending |
+| AUTH-01 | Phase 3 | Complete |
 | AUTH-02 | Phase 3 | Complete |
 | AUTH-03 | Phase 3 | Complete |
-| ROOM-01 | Phase 3 | Pending |
-| ROOM-02 | Phase 3 | Pending |
-| ROOM-03 | Phase 3 | Pending |
-| MSG-01 | Phase 3 | Pending |
-| DLVR-01 | Phase 3 | Pending |
+| ROOM-01 | Phase 3 | Complete |
+| ROOM-02 | Phase 3 | Complete |
+| ROOM-03 | Phase 3 | Complete |
+| MSG-01 | Phase 3 | Complete |
+| DLVR-01 | Phase 3 | Complete |
 | MSG-02 | Phase 4 | Pending |
 | MSG-03 | Phase 5 | Pending |
 | MSG-04 | Phase 5 | Pending |

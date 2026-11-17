@@ -89,7 +89,7 @@ Plans:
   4. Encrypted rooms show "encrypted, not supported"
   5. App warns about a config file with credentials that is not `chmod 600`, and logs contain no token or message content
 **UI hint**: yes
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans executed
 
 Plans:
 **Wave 1**
@@ -109,7 +109,7 @@ Plans:
 - [x] 03-06-PLAN.md — :reconnect / :retry, distinct failure messages, no redirect following, GET only, redaction sweep (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 03-07-PLAN.md — Proof against the Docker server (8.9.1 and 9.0.0), captured-fixture mapping tests, end-of-phase UAT (wave 6)
+- [x] 03-07-PLAN.md — Proof against the Docker server (8.9.1 and 9.0.0), captured-fixture mapping tests, end-of-phase UAT (wave 6)
 
 ### Phase 4: Send Messages
 **Goal**: User composes and sends messages to the open room
@@ -149,7 +149,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
-| 3. Connect & Read | 6/7 | In Progress | - |
+| 3. Connect & Read | 7/7 | In Progress | - |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |
