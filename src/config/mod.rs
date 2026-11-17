@@ -41,7 +41,10 @@ impl Default for Config {
 }
 
 /// The text of each file (`None` = absent) plus the problems met while reading them.
-#[derive(Clone, Debug, Default)]
+///
+/// `Debug` is written by hand: `config` may hold the token, so only byte counts are printed
+/// (D-07), never text.
+#[derive(Clone, Default)]
 pub struct Sources {
     pub config: Option<String>,
     pub keymap: Option<String>,
@@ -51,6 +54,25 @@ pub struct Sources {
     pub env: connection::ConnEnv,
     /// True for the binary: a missing server URL, user id or token is then a config error (D-03).
     pub require_connection: bool,
+}
+
+impl std::fmt::Debug for Sources {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn size(text: &Option<String>) -> String {
+            match text {
+                Some(text) => format!("<{} bytes>", text.len()),
+                None => "absent".to_string(),
+            }
+        }
+        f.debug_struct("Sources")
+            .field("config", &format_args!("{}", size(&self.config)))
+            .field("keymap", &format_args!("{}", size(&self.keymap)))
+            .field("theme", &format_args!("{}", size(&self.theme)))
+            .field("read_errors", &self.read_errors.len())
+            .field("env", &self.env)
+            .field("require_connection", &self.require_connection)
+            .finish()
+    }
 }
 
 /// Build a `Config` from file contents. Warnings are kept only when there is also an error (D-03).
@@ -63,7 +85,13 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
         &mut problems,
     );
     let theme = theme::parse(sources.theme.as_deref(), &mut problems);
-    let connection = connection::resolve(&sources.env, sources.require_connection, &mut problems);
+    let file = connection::parse_file(sources.config.as_deref(), &mut problems);
+    let connection = connection::resolve(
+        &sources.env,
+        &file,
+        sources.require_connection,
+        &mut problems,
+    );
     let report = Report::new(problems);
     if report.errors.is_empty() {
         Ok(Config {
@@ -265,19 +293,55 @@ mod tests {
         assert_eq!(keys, ["bogus", "ui"]);
     }
 
+    const SENTINEL: &str = "SENTINEL-TOKEN-9c41";
+
     #[test]
-    fn server_url_is_unknown_key() {
+    fn server_url_is_known_key() {
+        let all = format!(
+            "server_url = \"https://chat.example\"\nuser_id = \"u1\"\ntoken = \"{SENTINEL}\"\n"
+        );
+        let config = load_from_sources(&sources(&all)).expect("ok");
+        assert!(config.connection.is_some());
+
+        // A partial setting is an error even when nothing is required, and server_url is never
+        // reported as an unknown key.
         let url = "server_url = \"https://chat.example\"\n";
-        assert!(load_from_sources(&sources(url)).is_ok());
+        let Err(report) = load_from_sources(&sources(url)) else {
+            panic!("expected Err");
+        };
+        let keys: Vec<_> = report
+            .errors
+            .iter()
+            .map(|p| p.key.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(keys, ["user_id", "token"]);
+        assert!(report.warnings.is_empty(), "{report}");
+
         let Err(report) = load_from_sources(&sources(&format!("{url}history_size = 0\n"))) else {
             panic!("expected Err");
         };
         assert!(
-            report
+            !report
                 .warnings
                 .iter()
                 .any(|p| p.key.as_deref() == Some("server_url"))
         );
+    }
+
+    #[test]
+    fn token_never_echoed() {
+        for text in [
+            format!("token = \"{SENTINEL}\"\nsidebar_width = 99\n"),
+            format!("token = \"{SENTINEL}\n"),
+        ] {
+            let sources = sources(&text);
+            let Err(report) = load_from_sources(&sources) else {
+                panic!("expected Err for {text:?}");
+            };
+            assert!(!report.to_string().contains(SENTINEL), "{report}");
+            assert!(!format!("{report:?}").contains(SENTINEL));
+            assert!(!format!("{sources:?}").contains(SENTINEL));
+        }
     }
 
     #[test]

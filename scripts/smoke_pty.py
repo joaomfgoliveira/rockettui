@@ -130,10 +130,11 @@ class Screen:
         return any(text in r for r in self.rows())
 
 
-def make_config_dir(files):
+def make_config_dir(files, modes=None):
     """Create a temp XDG_CONFIG_HOME holding `rockettui/<name>` for each `name -> text` of `files`.
 
-    Removed at exit. Returns the base directory (the value for XDG_CONFIG_HOME).
+    `modes` maps a file name to the permission bits to chmod it to after writing (the default is
+    the umask's). Removed at exit. Returns the base directory (the value for XDG_CONFIG_HOME).
     """
     base = tempfile.mkdtemp(prefix="rockettui-smoke-")
     atexit.register(shutil.rmtree, base, ignore_errors=True)
@@ -142,6 +143,8 @@ def make_config_dir(files):
     for name, text in files.items():
         with open(os.path.join(config, name), "w", encoding="utf-8") as handle:
             handle.write(text)
+    for name, mode in (modes or {}).items():
+        os.chmod(os.path.join(config, name), mode)
     return base
 
 
@@ -283,15 +286,16 @@ def start_mock(mode="ok"):
     return server
 
 
-def spawn(binary, extra_env=None, config_files=None, server_url=None):
+def spawn(binary, extra_env=None, config_files=None, server_url=None, config_modes=None):
     """Fork the binary onto a fresh 80x24 pty. Returns (pid, master_fd).
 
     XDG_CONFIG_HOME always points at a fresh temp dir (empty unless `config_files` is given), so
     the developer's real config never changes a scenario. The three ROCKETTUI_* credential
     variables are removed first, so the developer's real credentials never reach a scenario; with
-    `server_url` they are then set to that URL and the mock's user id and token.
+    `server_url` they are then set to that URL and the mock's user id and token. `config_modes`
+    chmods config files (see `make_config_dir`).
     """
-    config_home = make_config_dir(config_files or {})
+    config_home = make_config_dir(config_files or {}, config_modes)
     pid, fd = pty.fork()
     if pid == 0:
         try:
@@ -694,6 +698,36 @@ def scenario_missing_creds(binary):
         raise SmokeFail("the app started although credentials are missing")
 
 
+def scenario_config_creds(binary):
+    # The credentials live in config.toml only (mode 0600): no ROCKETTUI_* variable is set.
+    mock = start_mock()
+    files = {
+        "config.toml": (
+            f'server_url = "{mock.base_url}"\n'
+            f'user_id = "{MOCK_USER_ID}"\n'
+            f'token = "{MOCK_TOKEN}"\n'
+        )
+    }
+    pid, fd = spawn(
+        binary, config_files=files, config_modes={"config.toml": 0o600}
+    )
+    buf = bytearray()
+    wait_ready(fd, buf)
+    if not mock.requests:
+        raise SmokeFail("the mock received no request")
+    if not all(authed for _method, _path, _query, authed in mock.requests):
+        raise SmokeFail("a request reached the server without valid credentials")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -703,6 +737,7 @@ SCENARIOS = {
     "config_error": scenario_config_error,
     "connect_read": scenario_connect_read,
     "missing_creds": scenario_missing_creds,
+    "config_creds": scenario_config_creds,
 }
 
 

@@ -106,6 +106,10 @@ const KNOWN_KEYS: &[&str] = &[
     "timestamp_format",
     "message_layout",
     "key_timeout_ms",
+    // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
+    "server_url",
+    "user_id",
+    "token",
 ];
 
 /// Read `config.toml` (`None` = absent). Each invalid key keeps its default and records one
@@ -174,7 +178,7 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
             settings.key_timeout_ms = u64::try_from(n).unwrap_or(settings.key_timeout_ms);
         }
     }
-    // D-03: unknown keys and tables only warn. `server_url` is one of them until Phase 3 (D-12).
+    // D-03: unknown keys and tables only warn. The connection keys are known (Phase 3, D-01).
     reader.warn_unknown(table, KNOWN_KEYS, "");
     settings
 }
