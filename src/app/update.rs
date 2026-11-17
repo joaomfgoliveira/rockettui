@@ -8,7 +8,7 @@ use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, history, messages,
     sidebar,
 };
-use crate::data::Message;
+use crate::data::{Message, MessageKind};
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
 use crate::ui::sanitize::sanitize_line;
@@ -217,6 +217,7 @@ fn submit_input(app: &mut App) {
         author: LOCAL_AUTHOR.into(),
         ts: app.clock_secs,
         body,
+        kind: MessageKind::Normal,
     };
     app.messages.entry(room.clone()).or_default().push(message);
     messages::follow_newest(app, &room);

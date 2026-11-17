@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn hostile_text_is_sanitized_in_render() {
-        use crate::data::{Message, RoomId};
+        use crate::data::{Message, MessageKind, RoomId};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -90,6 +90,7 @@ mod tests {
                 author: "\u{202e}mallory".to_string(),
                 ts: 0,
                 body: "\u{1b}[2Jclear\u{9b}31m\ttab".to_string(),
+                kind: MessageKind::Normal,
             },
         );
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");

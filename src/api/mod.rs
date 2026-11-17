@@ -281,6 +281,7 @@ mod tests {
     use crate::app::update::update;
     use crate::config::connection::{ConnEnv, EnvValue, Secret};
     use crate::config::{Sources, load_from_sources};
+    use crate::data::MessageKind;
     use crate::effect::{self, Effect};
     use crate::test_util::render_to_string;
     use ratatui::layout::Size;
@@ -719,6 +720,7 @@ mod tests {
                 author: "a".to_string(),
                 ts: 0,
                 body: "SENTINEL-BODY-7f3a".to_string(),
+                kind: MessageKind::Normal,
             }],
             oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
         };

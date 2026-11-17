@@ -178,6 +178,7 @@ impl std::fmt::Debug for Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::MessageKind;
     use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
@@ -199,6 +200,7 @@ mod tests {
             author: "alice".to_string(),
             ts: 0,
             body: "SENTINEL-BODY-7f3a".to_string(),
+            kind: MessageKind::Normal,
         };
         let loaded = format!(
             "{:?}",
@@ -228,6 +230,7 @@ mod tests {
                 author: "alice".to_string(),
                 ts: 0,
                 body: "SENTINEL-BODY-7f3a".to_string(),
+                kind: MessageKind::Normal,
             }],
             oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
             older: false,

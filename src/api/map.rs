@@ -5,7 +5,7 @@
 
 use crate::api::HistoryPage;
 use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
-use crate::data::{Folder, FolderId, Message, Room, RoomId, RoomKind};
+use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -167,6 +167,7 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
                 author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
                 ts: msg.ts.secs().unwrap_or(0),
                 body: msg.msg,
+                kind: MessageKind::Normal,
             },
         ));
     }
@@ -180,11 +181,12 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::wire::{PreferencesResp, RoomsResp, SubscriptionsResp};
+    use crate::api::wire::{HistoryResp, PreferencesResp, RoomsResp, SubscriptionsResp};
 
     const SUBS: &str = include_str!("fixtures/subscriptions.json");
     const ROOMS: &str = include_str!("fixtures/rooms.json");
     const PREFS: &str = include_str!("fixtures/preferences.json");
+    const KINDS: &str = include_str!("fixtures/history_kinds.json");
 
     fn fixture_subs() -> Vec<WireSub> {
         serde_json::from_str::<SubscriptionsResp>(SUBS)
@@ -429,5 +431,81 @@ mod tests {
         assert!(private.contains(&("secrets", true)));
         assert!(private.contains(&("general", false)));
         assert!(private.contains(&("alice", false)));
+    }
+
+    fn mapped(json: &str) -> Vec<Message> {
+        let resp: HistoryResp = serde_json::from_str(json).expect("history json");
+        history(&RoomId("r-general".to_string()), resp.messages).messages
+    }
+
+    fn one(json: &str) -> Message {
+        let mut all = mapped(&format!("{{\"messages\":[{json}]}}"));
+        assert_eq!(all.len(), 1);
+        all.remove(0)
+    }
+
+    #[test]
+    fn history_kinds() {
+        let all = mapped(KINDS);
+        let get = |id: &str| all.iter().find(|m| m.id == id).expect(id);
+        let shape = |id: &str| (get(id).kind, get(id).author.clone(), get(id).body.clone());
+        let sys =
+            |author: &str, body: &str| (MessageKind::System, author.to_string(), body.to_string());
+        let normal =
+            |author: &str, body: &str| (MessageKind::Normal, author.to_string(), body.to_string());
+        assert_eq!(shape("k-joined"), sys("carol", "* joined the room"));
+        assert_eq!(shape("k-added"), sys("alice", "* added bob"));
+        assert_eq!(shape("k-topic"), sys("alice", "* changed the topic"));
+        assert_eq!(shape("k-unknown"), sys("alice", "* system message"));
+        assert_eq!(
+            shape("k-attach"),
+            normal("bob", "see attached [attachment: report.pdf]")
+        );
+        assert_eq!(
+            shape("k-files"),
+            normal("alice", "[attachment: a.png] [attachment: b.txt]")
+        );
+        assert_eq!(shape("k-e2e"), normal("bob", "[encrypted message]"));
+        for m in &all {
+            assert!(
+                !m.body.contains("U0VOVElORUwtQ0lQSEVS"),
+                "ciphertext reached a body"
+            );
+        }
+    }
+
+    #[test]
+    fn system_texts() {
+        let sys = |t: &str, msg: &str| {
+            let m = one(&format!(
+                "{{\"_id\":\"s\",\"t\":\"{t}\",\"msg\":\"{msg}\",\"ts\":\"2026-11-16T10:00:00.000Z\",\"u\":{{\"username\":\"dave\"}}}}"
+            ));
+            assert_eq!(m.kind, MessageKind::System, "{t}");
+            assert_eq!(m.author, "dave");
+            m.body
+        };
+        assert_eq!(sys("ul", "dave"), "* left the room");
+        assert_eq!(sys("ru", "erin"), "* removed erin");
+        assert_eq!(sys("r", "new-name"), "* renamed the room");
+        assert_eq!(sys("au", "erin"), "* added erin");
+        assert_eq!(sys("room_changed_topic", "x"), "* changed the topic");
+        assert_eq!(sys("something-new", "x"), "* system message");
+    }
+
+    #[test]
+    fn content_object_is_encrypted_even_without_type() {
+        let m = one(
+            "{\"_id\":\"c\",\"msg\":\"U0VOVElORUwtQ0lQSEVS\",\"content\":{\"ciphertext\":\"x\"},\"ts\":\"2026-11-16T10:00:00.000Z\",\"u\":{\"username\":\"bob\"}}",
+        );
+        assert_eq!(m.kind, MessageKind::Normal);
+        assert_eq!(m.body, "[encrypted message]");
+    }
+
+    #[test]
+    fn attachment_alone_has_no_leading_space() {
+        let m = one(
+            "{\"_id\":\"a\",\"msg\":\"\",\"attachments\":[{\"title\":\"t.pdf\"},{}],\"ts\":\"2026-11-16T10:00:00.000Z\",\"u\":{\"username\":\"bob\"}}",
+        );
+        assert_eq!(m.body, "[attachment: t.pdf]");
     }
 }

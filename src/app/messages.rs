@@ -413,6 +413,7 @@ mod tests {
                 author: "firstname.lastname.contractor.external".to_string(),
                 ts: 0,
                 body: "a fairly long message body that has to wrap on narrow panes".to_string(),
+                kind: crate::data::MessageKind::Normal,
             });
         for (w, h) in [(80u16, 24u16), (50, 12), (40, 8)] {
             update(&mut app, Action::Resize(w, h));

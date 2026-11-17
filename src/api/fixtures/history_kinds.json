@@ -1,0 +1,66 @@
+{
+  "messages": [
+    {
+      "_id": "k-e2e",
+      "rid": "r-general",
+      "t": "e2e",
+      "msg": "U0VOVElORUwtQ0lQSEVS",
+      "content": { "algorithm": "rc.v1.aes-sha2", "ciphertext": "U0VOVElORUwtQ0lQSEVS" },
+      "ts": "2026-11-16T10:00:07.000Z",
+      "u": { "_id": "u-bob", "username": "bob" }
+    },
+    {
+      "_id": "k-files",
+      "rid": "r-general",
+      "msg": "",
+      "file": { "_id": "f-1", "name": "a.png", "type": "image/png" },
+      "files": [
+        { "_id": "f-1", "name": "a.png", "type": "image/png" },
+        { "_id": "f-2", "name": "b.txt", "type": "text/plain" }
+      ],
+      "ts": "2026-11-16T10:00:06.000Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    },
+    {
+      "_id": "k-attach",
+      "rid": "r-general",
+      "msg": "see attached",
+      "attachments": [{ "title": "report.pdf", "title_link": "/file-upload/f-3/report.pdf" }],
+      "ts": "2026-11-16T10:00:05.000Z",
+      "u": { "_id": "u-bob", "username": "bob" }
+    },
+    {
+      "_id": "k-unknown",
+      "rid": "r-general",
+      "t": "xyz",
+      "msg": "whatever the server put here",
+      "ts": "2026-11-16T10:00:04.000Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    },
+    {
+      "_id": "k-topic",
+      "rid": "r-general",
+      "t": "room_changed_topic",
+      "msg": "a brand new topic",
+      "ts": "2026-11-16T10:00:03.000Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    },
+    {
+      "_id": "k-added",
+      "rid": "r-general",
+      "t": "au",
+      "msg": "bob",
+      "ts": "2026-11-16T10:00:02.000Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    },
+    {
+      "_id": "k-joined",
+      "rid": "r-general",
+      "t": "uj",
+      "msg": "carol",
+      "ts": "2026-11-16T10:00:01.000Z",
+      "u": { "_id": "u-carol", "username": "carol" }
+    }
+  ],
+  "success": true
+}

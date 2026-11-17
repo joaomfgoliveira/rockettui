@@ -46,6 +46,15 @@ pub struct Folder {
     pub room_ids: Vec<RoomId>,
 }
 
+/// What a message is, for drawing: an ordinary message or a server system message (D-15).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageKind {
+    #[default]
+    Normal,
+    /// A server system message (joined, left, topic changed, ...), drawn dim as a one-liner.
+    System,
+}
+
 /// One chat message. Its `Debug` is written by hand and prints no body or author text.
 #[derive(Clone, PartialEq)]
 pub struct Message {
@@ -55,6 +64,8 @@ pub struct Message {
     /// Unix seconds.
     pub ts: i64,
     pub body: String,
+    /// `System` marks a server system message, drawn dim per D-15.
+    pub kind: MessageKind,
 }
 
 /// Redacting `Debug` (T-01-03): only the id, the room id and the body length.
@@ -91,6 +102,7 @@ mod tests {
             author: "SENTINEL-AUTHOR-2b9d".to_string(),
             ts: 0,
             body: "SENTINEL-BODY-7f3a".to_string(),
+            kind: MessageKind::Normal,
         };
         let shown = format!("{message:?}");
         assert!(!shown.contains("SENTINEL-BODY-7f3a"));

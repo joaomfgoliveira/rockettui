@@ -2,7 +2,7 @@
 //! and the renderer (drawing) can never disagree about a message's height.
 
 use crate::config::settings::TimeFormat;
-use crate::data::Message;
+use crate::data::{Message, MessageKind};
 use crate::ui::palette::author_color;
 use crate::ui::sanitize::{sanitize, sanitize_line};
 use crate::ui::timefmt::{Zone, format_ts};
@@ -207,6 +207,7 @@ mod tests {
             author: author.to_string(),
             ts: 0,
             body: body.to_string(),
+            kind: MessageKind::Normal,
         }
     }
 
@@ -674,6 +675,38 @@ mod tests {
         assert!(rows.len() > 5, "{} rows", rows.len());
         for row in &rows {
             assert!(row.width() <= 50, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn system_row_style() {
+        let theme = Theme::default();
+        let notice = theme.messages_notice;
+        assert_ne!(notice, theme.messages_body, "the notice style must differ");
+        let m = Message {
+            kind: MessageKind::System,
+            ..msg("carol", "* joined the room")
+        };
+        for (layout, author_span, body_span) in [
+            (MessageLayout::Compact, 2, 4),
+            (MessageLayout::TwoLine, 0, 1),
+        ] {
+            let rows = rows_themed(&m, 60, layout, &theme);
+            assert_eq!(
+                rows.len(),
+                if layout == MessageLayout::Compact {
+                    1
+                } else {
+                    2
+                }
+            );
+            let line = &rows[rows.len() - 1];
+            let body = line.spans[body_span].clone();
+            assert_eq!(body.content, "* joined the room");
+            assert_eq!(body.style, notice, "{layout:?} body");
+            let head = &rows[0].spans[author_span];
+            assert_eq!(head.content, "carol");
+            assert_eq!(head.style, notice, "{layout:?} author");
         }
     }
 }

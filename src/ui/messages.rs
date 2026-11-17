@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use crate::app::history::HistoryState;
     use crate::app::messages::{row_starts, view};
-    use crate::data::{Message, RoomId};
+    use crate::data::{Message, MessageKind, RoomId};
     use crate::test_util::{app_80x24, press};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -498,6 +498,7 @@ mod tests {
                 author: "firstname.lastname.contractor.external".to_string(),
                 ts: 0,
                 body: "short".to_string(),
+                kind: MessageKind::Normal,
             });
         let terminal = render_pane(&app);
         let text = all_text(&terminal);
@@ -524,6 +525,7 @@ mod tests {
             author: "\u{202e}mal\u{1b}]52;c;ZXZpbA==\u{7}lory\u{9b}".to_string(),
             ts: 0,
             body: "\u{1b}]52;c;ZXZpbA==\u{7}clip\u{9b}2Jboard\u{202e}x\ty".to_string(),
+            kind: MessageKind::Normal,
         });
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
@@ -547,5 +549,65 @@ mod tests {
             }
         }
         assert!(text.contains("clip"), "hostile body not drawn: {text}");
+    }
+
+    #[test]
+    fn message_kinds_52x20() {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        let room = RoomId("quiet".to_string());
+        let msg = |id: &str, author: &str, ts: i64, body: &str, kind: MessageKind| Message {
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: author.to_string(),
+            ts,
+            body: body.to_string(),
+            kind,
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg("1", "alice", 34_440, "hello there", MessageKind::Normal),
+                msg(
+                    "2",
+                    "carol",
+                    34_500,
+                    "* joined the room",
+                    MessageKind::System,
+                ),
+                msg(
+                    "3",
+                    "bob",
+                    34_560,
+                    "see attached [attachment: report.pdf]",
+                    MessageKind::Normal,
+                ),
+                msg(
+                    "4",
+                    "bob",
+                    34_620,
+                    "[encrypted message]",
+                    MessageKind::Normal,
+                ),
+            ],
+        );
+        app.open_room(room);
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("* joined the room"), "{text}");
+        assert!(text.contains("[attachment: report.pdf]"), "{text}");
+        assert!(text.contains("[encrypted message]"), "{text}");
+        // The system line is dim, author included, and not bold.
+        let (y, row) = (0..20u16)
+            .map(|y| (y, row_text(&terminal, y)))
+            .find(|(_, row)| row.contains("joined the room"))
+            .expect("system row");
+        let buffer = terminal.backend().buffer();
+        for needle in ["carol", "joined"] {
+            let x = row.find(needle).expect("text on the row");
+            let cell = &buffer[(x as u16, y)];
+            assert!(cell.modifier.contains(Modifier::DIM), "{needle} not dim");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "{needle} is bold");
+        }
+        insta::assert_snapshot!(terminal.backend());
     }
 }
