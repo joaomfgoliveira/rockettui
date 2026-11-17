@@ -12,7 +12,7 @@ rockettui grows in vertical slices. First a navigable modal TUI with fake data, 
 
 - [x] **Phase 1: Modal TUI Shell** - Navigable sidebar + messages + input layout with fake rooms and vim modes (completed 2026-11-15)
 - [x] **Phase 2: Configuration System** - Config, keymap and theme files with presets and defaults (completed 2026-11-16)
-- [ ] **Phase 3: Connect & Read** - Token login, real room list and message history from a local server
+- [x] **Phase 3: Connect & Read** - Token login, real room list and message history from a local server (completed 2026-11-17)
 - [ ] **Phase 4: Send Messages** - Compose and send messages from Insert mode
 - [ ] **Phase 5: Realtime** - Live incoming messages over DDP with reconnect
 - [ ] **Phase 6: Company Server** - Run day to day against the company Rocket.Chat
@@ -89,7 +89,7 @@ Plans:
   4. Encrypted rooms show "encrypted, not supported"
   5. App warns about a config file with credentials that is not `chmod 600`, and logs contain no token or message content
 **UI hint**: yes
-**Plans:** 7/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
@@ -149,7 +149,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
-| 3. Connect & Read | 7/7 | In Progress | - |
+| 3. Connect & Read | 7/7 | Complete    | 2026-11-17 |
 | 4. Send Messages | 0/TBD | Not started | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |

@@ -12,20 +12,19 @@ Reading and sending Rocket.Chat messages (with live incoming messages) entirely 
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ Authenticate with a Personal Access Token (user id + token) — Phase 3
+- ✓ List rooms (channels, private groups, DMs) — Phase 3
+- ✓ View message history of a room — Phase 3
+- ✓ Vim-style navigation: Normal / Insert / Command modes, `hjkl`, `gg`/`G`, `Ctrl-d`/`Ctrl-u`, `:q` — Phase 1
+- ✓ Layout: sidebar (rooms) + messages + input bar — Phase 1
+- ✓ Config under `~/.config/rockettui/` (XDG, honoring `$XDG_CONFIG_HOME`) split into `config.toml`, `keymap.toml`, `theme.toml`; app runs with built-in defaults if files are absent — Phase 2
+- ✓ Two selectable keymap presets in `config.toml`: `vim` (strict) and `vim-extras` (vim-inspired plus app keys such as `Tab` pane switch, `Ctrl-k` room switch); `keymap.toml` overrides the active preset — Phase 2 (`Ctrl-k` room switch still deferred)
+- ✓ Fully customizable look via `theme.toml` (colors/styles for every UI element) — Phase 2
 
 ### Active
 
-- [ ] Authenticate with a Personal Access Token (user id + token)
-- [ ] List rooms (channels, private groups, DMs)
-- [ ] View message history of a room
 - [ ] Send a message
 - [ ] Receive live incoming messages via the realtime API (DDP over WebSocket)
-- [ ] Vim-style navigation: Normal / Insert / Command modes, `hjkl`, `gg`/`G`, `Ctrl-d`/`Ctrl-u`, `:q`
-- [ ] Layout: sidebar (rooms) + messages + input bar
-- [ ] Config under `~/.config/rockettui/` (XDG, honoring `$XDG_CONFIG_HOME`) split into `config.toml`, `keymap.toml`, `theme.toml`; app runs with built-in defaults if files are absent
-- [ ] Two selectable keymap presets in `config.toml`: `vim` (strict) and `vim-extras` (vim-inspired plus app keys such as `Tab` pane switch, `Ctrl-k` room switch); `keymap.toml` overrides the active preset
-- [ ] Fully customizable look via `theme.toml` (colors/styles for every UI element)
 - [ ] Usable day to day on the company server for basic conversations (v0.1 "done")
 
 ### Out of Scope
@@ -64,6 +63,8 @@ Reading and sending Rocket.Chat messages (with live incoming messages) entirely 
 | PAT auth first | Simplest for v0.1; revocable | — Pending |
 | Custom minimal DDP client over `tokio-tungstenite` | Learning value; Rocket.Chat realtime is DDP | — Pending |
 | Elm/TEA architecture | Clean state/reducer model, good for learning | — Pending |
+| Sidebar folders = Favorites then custom categories (A6) | Judged usable on real servers during Phase 3 UAT | ✓ Good |
+| REST history is a one-shot snapshot; no live updates until DDP | Phase 3 scope; unread state refreshes only on `:reconnect` until Phase 5 | — Pending |
 
 ## Evolution
 
@@ -83,4 +84,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after initialization*
+*Last updated: 2026-11-17 after Phase 3*
