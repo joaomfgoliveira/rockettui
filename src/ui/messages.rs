@@ -76,6 +76,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::history::HistoryState;
     use crate::app::messages::{row_starts, view};
     use crate::data::{Message, RoomId};
     use crate::test_util::{app_80x24, press};
@@ -155,6 +156,116 @@ mod tests {
         app.open_room(RoomId("quiet".to_string()));
         let terminal = render_pane(&app);
         assert!(all_text(&terminal).contains("No messages yet"));
+    }
+
+    /// An 80x25 fake-data app (pane 52x20) with `name` open and `state` as its history state.
+    fn open_with_history(name: &str, state: HistoryState) -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        let id = RoomId(name.to_string());
+        app.open_room(id.clone());
+        app.history.insert(id, state);
+        assert_eq!(pane_rect(&app).width, 52, "snapshot geometry");
+        app
+    }
+
+    /// The pane's inner rows (borders removed) as trimmed text, blank rows dropped.
+    fn pane_lines(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let height = terminal.backend().buffer().area.height;
+        (1..height - 1)
+            .map(|y| {
+                row_text(terminal, y)
+                    .chars()
+                    .skip(1)
+                    .take(50)
+                    .collect::<String>()
+            })
+            .map(|row| row.trim().to_string())
+            .filter(|row| !row.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn placeholder_loading_52x20() {
+        let app = open_with_history("quiet", HistoryState::Loading);
+        let terminal = render_pane(&app);
+        assert_eq!(pane_lines(&terminal), ["Loading…"]);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn placeholder_failed_52x20() {
+        let app = open_with_history("quiet", HistoryState::Failed);
+        let terminal = render_pane(&app);
+        assert_eq!(pane_lines(&terminal), ["Could not load history"]);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn placeholder_encrypted_52x20() {
+        // The fake dataset's secrets room is encrypted and holds 4 messages.
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        let id = RoomId("secrets".to_string());
+        assert!(!app.messages[&id].is_empty());
+        app.open_room(id);
+        let terminal = render_pane(&app);
+        assert_eq!(pane_lines(&terminal), ["encrypted, not supported"]);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn placeholder_precedence() {
+        let loaded = || HistoryState::Loaded {
+            oldest_ts: None,
+            exhausted: true,
+            loading_older: false,
+        };
+        let text = |app: &App| all_text(&render_pane(app));
+
+        // Encrypted wins over Loading and over held messages.
+        let app = open_with_history("secrets", HistoryState::Loading);
+        let shown = text(&app);
+        assert!(shown.contains("encrypted, not supported"), "{shown}");
+        assert!(!shown.contains("Loading…"), "{shown}");
+
+        // Loading and Failed win over held messages (general holds 60).
+        let app = open_with_history("general", HistoryState::Loading);
+        let shown = text(&app);
+        assert!(shown.contains("Loading…"), "{shown}");
+        assert!(!shown.contains("morning, anyone"), "{shown}");
+        let app = open_with_history("general", HistoryState::Failed);
+        let shown = text(&app);
+        assert!(shown.contains("Could not load history"), "{shown}");
+
+        // A Loaded room with no messages shows the Phase 1 line; one with messages shows them.
+        let app = open_with_history("quiet", loaded());
+        assert!(text(&app).contains("No messages yet"));
+        let app = open_with_history("general", loaded());
+        let shown = text(&app);
+        assert!(!shown.contains("Loading…") && !shown.contains("No messages yet"));
+
+        // No room open still says so.
+        let app = App::with_fake_data(Size::new(80, 25));
+        assert!(text(&app).contains("No room open"));
+    }
+
+    #[test]
+    fn placeholder_style() {
+        let app = open_with_history("quiet", HistoryState::Loading);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        // First inner cell: the `L` of `Loading…`.
+        let cell = &buffer[(1, 1)];
+        assert_eq!(cell.symbol(), "L");
+        assert!(cell.modifier.contains(Modifier::DIM), "DIM by default");
+
+        // A theme.toml messages.notice color reaches the placeholder.
+        let config = crate::test_util::config_from_theme("[messages.notice]\nfg = 5\n");
+        let mut themed = crate::test_util::app_with_config(config, 80, 25);
+        let id = RoomId("quiet".to_string());
+        themed.open_room(id.clone());
+        themed.history.insert(id, HistoryState::Failed);
+        let terminal = render_pane(&themed);
+        assert_eq!(terminal.backend().buffer()[(1, 1)].fg, Color::Indexed(5));
     }
 
     #[test]
