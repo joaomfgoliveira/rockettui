@@ -4,7 +4,7 @@
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
 use crate::api::wire::{WirePrefs, WireRoom, WireSub};
-use crate::data::{Folder, Room, RoomId, RoomKind};
+use crate::data::{Folder, FolderId, Room, RoomId, RoomKind};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -89,17 +89,61 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
     out
 }
 
-/// The sidebar folders: a `Favorites` folder first, then the user's custom categories.
+/// The sidebar folders (D-10, flagged assumption A6): a `Favorites` folder first, then the user's
+/// custom categories in the order the server lists them.
+///
+/// `Favorites` holds the favorited rooms that have no category; it is shown only when it has a
+/// room. Each custom category (`default` is false) holds the rooms whose subscription names it.
+/// Assignment is exclusive per room, so no room is in two folders. A room is listed only if it is
+/// in `rooms` (the mapped, non-skipped list), in that list's order, and a folder with no listed
+/// rooms is omitted. Turning this into the literal D-10 reading ("categories, otherwise
+/// Favorites") means dropping `Favorites` when any custom category has a room.
 pub fn folders(subs: &[WireSub], rooms: &[Room], prefs: Option<&WirePrefs>) -> Vec<Folder> {
-    let _ = (subs, rooms, prefs);
-    Vec::new()
+    let mut sub_of: HashMap<&str, &WireSub> = HashMap::new();
+    for sub in subs {
+        sub_of.entry(sub.rid.as_str()).or_insert(sub);
+    }
+    let has_category = |sub: &WireSub| sub.category.as_deref().is_some_and(|c| !c.is_empty());
+    let room_ids = |wanted: &dyn Fn(&WireSub) -> bool| -> Vec<RoomId> {
+        rooms
+            .iter()
+            .filter(|room| {
+                sub_of
+                    .get(room.id.0.as_str())
+                    .is_some_and(|sub| wanted(sub))
+            })
+            .map(|room| room.id.clone())
+            .collect()
+    };
+
+    let mut out = Vec::new();
+    let favorites = room_ids(&|sub| sub.f && !has_category(sub));
+    if !favorites.is_empty() {
+        out.push(Folder {
+            id: FolderId("favorites".to_string()),
+            name: "Favorites".to_string(),
+            room_ids: favorites,
+        });
+    }
+    let categories = prefs.map_or(&[][..], |p| p.sidebar_categories.as_slice());
+    for category in categories.iter().filter(|c| !c.default) {
+        let members = room_ids(&|sub| sub.category.as_deref() == Some(category.id.as_str()));
+        if members.is_empty() {
+            continue;
+        }
+        out.push(Folder {
+            id: FolderId(category.id.clone()),
+            name: category.name.clone(),
+            room_ids: members,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::wire::{PreferencesResp, RoomsResp, SubscriptionsResp};
-    use crate::data::FolderId;
 
     const SUBS: &str = include_str!("fixtures/subscriptions.json");
     const ROOMS: &str = include_str!("fixtures/rooms.json");

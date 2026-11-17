@@ -204,21 +204,24 @@ impl Client {
         serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
     }
 
-    /// Load the user's joined rooms: `subscriptions.get` and `rooms.get` run concurrently and are
-    /// joined on the room id. All or nothing: if either fails the whole load fails, so a room
-    /// list without its `encrypted` flags is never applied.
+    /// Load the user's joined rooms and sidebar folders: `subscriptions.get`, `rooms.get` and
+    /// `users.getPreferences` run concurrently. The rooms are joined on the room id and the load is
+    /// all or nothing: if `subscriptions.get` or `rooms.get` fails the whole load fails, so a room
+    /// list without its `encrypted` flags is never applied. The preferences call is best effort:
+    /// any failure of it (status, transport, decode, size) means no custom categories, and the
+    /// folders degrade to Favorites only (RESEARCH Pitfall 13).
     pub async fn load_rooms(&self) -> Result<RoomList, ApiError> {
-        let (subs, records) = tokio::join!(
+        let (subs, records, prefs) = tokio::join!(
             self.get_json::<wire::SubscriptionsResp>("subscriptions.get", &[]),
             self.get_json::<wire::RoomsResp>("rooms.get", &[]),
+            self.get_json::<wire::PreferencesResp>("users.getPreferences", &[]),
         );
         let subs = subs?.update;
         let records = records?.update;
+        let prefs = prefs.ok().map(|p| p.preferences);
         let rooms = map::rooms(&subs, &records);
-        Ok(RoomList {
-            rooms,
-            folders: Vec::new(),
-        })
+        let folders = map::folders(&subs, &rooms, prefs.as_ref());
+        Ok(RoomList { rooms, folders })
     }
 }
 
@@ -448,7 +451,7 @@ mod tests {
         }
     }
 
-    /// All three endpoints answer; `prefs` mounts users.getPreferences with the given body.
+    /// Mount subscriptions.get and rooms.get with the fixtures.
     async fn mount_rooms(server: &MockServer) {
         mount_ok(server, "subscriptions.get", SUBS).await;
         mount_ok(server, "rooms.get", ROOMS).await;

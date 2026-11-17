@@ -148,6 +148,7 @@ def make_config_dir(files):
 MOCK_ROUTES = {
     "/api/v1/subscriptions.get": "subscriptions.json",
     "/api/v1/rooms.get": "rooms.json",
+    "/api/v1/users.getPreferences": "preferences.json",
 }
 
 
@@ -166,11 +167,14 @@ def start_mock(mode="ok"):
 
         def reply(self, status, body):
             data = json.dumps(body).encode() if not isinstance(body, bytes) else body
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the app quit or panicked while a request was in flight
 
         def handle_any(self):
             parsed = urllib.parse.urlsplit(self.path)
@@ -490,7 +494,17 @@ def scenario_connect_read(binary):
     pid, fd = spawn(binary, server_url=mock.base_url)
     buf = bytearray()
     wait_ready(fd, buf)
-    wanted = ("general", "dev-team", "alice", "random", "platform", "Design review", "secrets")
+    wanted = (
+        "general",
+        "dev-team",
+        "alice",
+        "random",
+        "platform",
+        "Design review",
+        "secrets",
+        "Favorites",
+        "Work",
+    )
     listed = lambda b: all(screen_of(b).contains(text) for text in wanted)
     if not read_until(fd, buf, listed, 10):
         missing = [t for t in wanted if not screen_of(buf).contains(t)]
