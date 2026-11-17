@@ -607,6 +607,9 @@ def scenario_connect_read(binary):
     status_has_secrets = lambda b: "secrets" in screen_of(b).rows()[22]
     if not read_until(fd, buf, status_has_secrets, 10):
         raise SmokeFail("the encrypted room never opened")
+    shows_marker = lambda b: screen_of(b).contains("encrypted, not supported")
+    if not read_until(fd, buf, shows_marker, 5):
+        raise SmokeFail("the encrypted placeholder was never shown")
     read_until(fd, buf, lambda b: False, 0.5)  # a stray request would be sent by now
     if any(r[2].get("roomId") == "r-secrets" for r in mock.requests):
         raise SmokeFail("a request was sent for the encrypted room")

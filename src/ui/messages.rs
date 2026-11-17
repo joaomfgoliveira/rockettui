@@ -1,6 +1,7 @@
 //! Messages pane: the open room's wrapped messages with a cursor highlight. It draws only the
 //! window `app::messages::view` selects, from the same row model the reducer scrolls with.
 
+use crate::app::history::HistoryState;
 use crate::app::{App, Focus, messages};
 use crate::ui::sanitize::sanitize_line;
 use crate::ui::{pane_block, wrap};
@@ -25,6 +26,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(Paragraph::new(Line::styled("No room open", notice)), inner);
         return;
     };
+    // One placeholder line, in precedence order: an encrypted room is never read (D-12), a first
+    // page in flight or failed hides any messages held for the room (D-16).
+    let encrypted = app.rooms.iter().any(|r| &r.id == room && r.encrypted);
+    let placeholder = if encrypted {
+        Some("encrypted, not supported")
+    } else {
+        match app.history.get(room) {
+            Some(HistoryState::Loading) => Some("Loading…"),
+            Some(HistoryState::Failed) => Some("Could not load history"),
+            _ => None,
+        }
+    };
+    if let Some(text) = placeholder {
+        frame.render_widget(
+            Paragraph::new(Line::styled(sanitize_line(text), notice)),
+            inner,
+        );
+        return;
+    }
     let msgs = app.messages.get(room).map_or(&[][..], Vec::as_slice);
     if msgs.is_empty() {
         frame.render_widget(
