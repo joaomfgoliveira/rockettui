@@ -120,7 +120,7 @@ Plans:
   1. User enters Insert mode, types a message and sends it
   2. The sent message appears in the room (verified in the official client)
 **UI hint**: yes
-**Plans:** 8 plans
+**Plans:** 0/8 plans executed
 
 Plans:
 **Wave 1**
@@ -171,6 +171,6 @@ Plans:
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
 | 3. Connect & Read | 7/7 | Complete    | 2026-11-17 |
-| 4. Send Messages | 0/TBD | Not started | - |
+| 4. Send Messages | 0/8 | Planned     | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |

@@ -47,6 +47,8 @@ These override any conflicting wording in D-03, D-04, D-07 and the canonical ref
 - **D-19:** (refines D-01, user-confirmed) While a room's history is Loading or Failed, the messages pane shows its placeholder and **may hide the pending row**; sending still works and failures still reach the status bar. The row appears once history loads. No special rendering is added for this state.
 - **D-20:** (new, user-confirmed) **`:q` with undelivered messages warns**: if any message in any room is Queued, Sending, Failed or Unconfirmed, `:q` shows a one-line status message (without message text) and does not quit; a repeated `:q` or `:q!` quits anyway. Clarification of D-08: `:reconnect` must not touch sends; reloading the username (D-17) is allowed.
 
+- **D-21:** (amends D-13, user-confirmed 2026-11-17 after the second plan check) The message store's dedupe by `_id` is state-aware: incoming `_id` **absent → append**; **present and already Sent → ignore**; **present and still pending (Queued/Sending/Failed/Unconfirmed) → replace in place and mark Sent**. This lets Phase 5's realtime echo confirm a send whose server reply was lost. D-13's "ignore any message whose `_id` is already present" applies only to the already-Sent case.
+
 ### Claude's Discretion
 - `api/` method layout for `chat.sendMessage` (see D-15; the original text said `chat.postMessage`), request/response types, timeouts, serialization mechanism for the per-room send queue, pending-message state representation (e.g. a `MessageKind`/status field vs side map), Effect/Action names (`SendMessage`, `MessageSent`, `SendFailed`), exact marker glyphs and default keys for retry/discard.
 
