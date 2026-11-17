@@ -104,6 +104,9 @@ pub struct App {
     pub effects: Vec<crate::effect::Effect>,
     /// The state of the room load, for the status bar.
     pub conn: ConnState,
+    /// Runtime warnings from the config (D-04), drawn on the status row on every frame. Unlike
+    /// `status_msg` they are never cleared by a key press (Pattern 6). Empty for `App::new`.
+    pub warnings: Vec<String>,
 }
 
 impl App {
@@ -143,6 +146,7 @@ impl App {
             should_quit: false,
             effects: Vec::new(),
             conn: ConnState::Idle,
+            warnings: config.warnings,
         }
     }
 

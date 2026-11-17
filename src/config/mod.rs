@@ -27,6 +27,10 @@ pub struct Config {
     /// binary requires them, `load_from_dir` does not). `App` never receives this: the token
     /// goes into `api::Client` and nowhere else.
     pub connection: Option<connection::Connection>,
+    /// Runtime notices the app shows while it runs (D-04): a config.toml holding the token that
+    /// others can read, or a token sent over http to a remote host. Not config `Report` warnings
+    /// (those appear only next to errors, Phase 2 D-03).
+    pub warnings: Vec<String>,
 }
 
 impl Default for Config {
@@ -36,6 +40,7 @@ impl Default for Config {
             keymap: default_keymap(),
             theme: Theme::default(),
             connection: None,
+            warnings: Vec::new(),
         }
     }
 }
@@ -54,6 +59,9 @@ pub struct Sources {
     pub env: connection::ConnEnv,
     /// True for the binary: a missing server URL, user id or token is then a config error (D-03).
     pub require_connection: bool,
+    /// The permission bits of `config.toml` as `read_sources` saw them (`None` when the file was
+    /// not read, or off Unix). Read once at startup together with the file (D-04).
+    pub config_mode: Option<u32>,
 }
 
 impl std::fmt::Debug for Sources {
@@ -70,6 +78,10 @@ impl std::fmt::Debug for Sources {
             .field("theme", &format_args!("{}", size(&self.theme)))
             .field("read_errors", &self.read_errors.len())
             .field("env", &self.env)
+            .field(
+                "config_mode",
+                &self.config_mode.map(|mode| format!("{mode:o}")),
+            )
             .field("require_connection", &self.require_connection)
             .finish()
     }
@@ -99,6 +111,7 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
             keymap,
             theme,
             connection,
+            warnings: Vec::new(),
         })
     } else {
         Err(report)
@@ -341,6 +354,79 @@ mod tests {
             assert!(!report.to_string().contains(SENTINEL), "{report}");
             assert!(!format!("{report:?}").contains(SENTINEL));
             assert!(!format!("{sources:?}").contains(SENTINEL));
+        }
+    }
+
+    fn file_creds(url: &str) -> String {
+        format!("server_url = \"{url}\"\nuser_id = \"u1\"\ntoken = \"{SENTINEL}\"\n")
+    }
+
+    fn warnings_of(sources: &Sources) -> Vec<String> {
+        load_from_sources(sources).expect("ok").warnings
+    }
+
+    #[test]
+    fn perm_warning_rules() {
+        let creds = file_creds("https://chat.example");
+        for (mode, shown) in [
+            (0o100_644, "mode 0644"),
+            (0o100_640, "mode 0640"),
+            (0o100_604, "mode 0604"),
+        ] {
+            let warnings = warnings_of(&Sources {
+                config_mode: Some(mode),
+                ..sources(&creds)
+            });
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(warnings[0].contains(shown), "{warnings:?}");
+            assert!(warnings[0].contains("chmod 600"), "{warnings:?}");
+            assert!(!warnings[0].contains(SENTINEL));
+        }
+        let owner_only = Sources {
+            config_mode: Some(0o100_600),
+            ..sources(&creds)
+        };
+        assert!(warnings_of(&owner_only).is_empty());
+
+        // A token that comes from the environment gives no warning, whatever the file mode.
+        let env_token = Sources {
+            config_mode: Some(0o100_644),
+            env: connection::ConnEnv {
+                token: connection::EnvValue::Set(connection::Secret::new("env-token".to_string())),
+                ..connection::ConnEnv::default()
+            },
+            ..sources(&creds)
+        };
+        assert!(warnings_of(&env_token).is_empty());
+
+        // No connection at all: nothing to warn about.
+        let none = Sources {
+            config_mode: Some(0o100_644),
+            ..sources("sidebar_width = 30\n")
+        };
+        assert!(warnings_of(&none).is_empty());
+    }
+
+    #[test]
+    fn cleartext_warning() {
+        let text = "server_url uses http:// to a non-local host: the token is sent unencrypted";
+        for (url, warned) in [
+            ("http://chat.example", true),
+            ("http://localhost:3100", false),
+            ("http://127.0.0.1:3100", false),
+            ("http://127.5.6.7:3100", false),
+            ("http://[::1]:3100", false),
+            ("https://chat.example", false),
+        ] {
+            let warnings = warnings_of(&Sources {
+                config_mode: Some(0o100_600),
+                ..sources(&file_creds(url))
+            });
+            if warned {
+                assert_eq!(warnings, [text], "{url}");
+            } else {
+                assert!(warnings.is_empty(), "{url}: {warnings:?}");
+            }
         }
     }
 

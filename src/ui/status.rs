@@ -129,4 +129,31 @@ mod tests {
         let at = u16::try_from(row.find("general").expect("room")).expect("x");
         assert_eq!(buffer[(at, 22)].fg, Color::Indexed(7));
     }
+
+    #[test]
+    fn warning_persists() {
+        let config = crate::config::Config {
+            warnings: vec!["mode 0644: chmod 600 it".to_string()],
+            ..crate::config::Config::default()
+        };
+        let mut app = app_with_config(config, 80, 24);
+        let status_row = |app: &App| -> (String, ratatui::buffer::Buffer) {
+            let buffer = crate::test_util::render_buffer(app, 80, 24);
+            let row: String = (0..80).map(|x| buffer[(x, 22)].symbol()).collect();
+            (row, buffer)
+        };
+        let (row, buffer) = status_row(&app);
+        assert!(row.contains(" warning: mode 0644: chmod 600 it"), "{row}");
+        let at = u16::try_from(row.find("mode 0644").expect("text")).expect("x");
+        assert_eq!(buffer[(at, 22)].fg, Color::Red);
+
+        crate::test_util::press(&mut app, "j");
+        crate::test_util::press(&mut app, ":foo<CR>");
+        let (row, _) = status_row(&app);
+        assert!(row.contains(" warning: mode 0644: chmod 600 it"), "{row}");
+
+        // Positive control: an app without warnings shows none.
+        let app = app_with_config(crate::config::Config::default(), 80, 24);
+        assert!(!status_row(&app).0.contains("warning"));
+    }
 }

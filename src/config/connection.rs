@@ -130,6 +130,12 @@ fn error(key: &str, message: String) -> Problem {
     }
 }
 
+/// Runtime warnings for a resolved connection (D-04, T-03-21). Texts are fixed and never contain
+/// the token, user id or URL.
+pub fn warnings(_conn: Option<&Connection>, _config_mode: Option<u32>) -> Vec<String> {
+    Vec::new()
+}
+
 /// Read `server_url`, `user_id` and `token` from the text of `config.toml` (`None` = absent).
 /// A value of another type is an error naming the key and the found type, never the value; syntax
 /// errors are left to `settings::parse`, which reports them once (a scratch list is used here).

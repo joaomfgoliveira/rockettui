@@ -152,4 +152,42 @@ mod tests {
         });
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn perm_mode_recorded() {
+        use crate::test_util::temp_config_dir;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_config_dir("permmode", &[("config.toml", "sidebar_width = 30\n")]);
+        std::fs::set_permissions(
+            dir.join("config.toml"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let entries = |d: &Path| {
+            let mut names: Vec<_> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = entries(&dir);
+        let sources = read_sources(&dir);
+        assert_eq!(sources.config_mode.map(|mode| mode & 0o777), Some(0o644));
+        assert_eq!(
+            entries(&dir),
+            before,
+            "reading must not create or delete files"
+        );
+        let mode_after = std::fs::metadata(dir.join("config.toml"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode_after & 0o777, 0o644, "reading must not chmod");
+
+        std::fs::remove_file(dir.join("config.toml")).unwrap();
+        assert_eq!(read_sources(&dir).config_mode, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
