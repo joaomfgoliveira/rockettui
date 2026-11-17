@@ -3,8 +3,9 @@
 //! `subscriptions.get` says which rooms the user joined and how they show; `rooms.get` adds what
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
-use crate::api::wire::{WirePrefs, WireRoom, WireSub};
-use crate::data::{Folder, FolderId, Room, RoomId, RoomKind};
+use crate::api::HistoryPage;
+use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
+use crate::data::{Folder, FolderId, Message, Room, RoomId, RoomKind};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -76,6 +77,7 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
             name: display_name(sub, kind),
             kind,
             encrypted: record.encrypted.unwrap_or(false),
+            private: sub.t == "p",
             unread: sub.unread > 0,
             last_activity,
         });
@@ -138,6 +140,41 @@ pub fn folders(subs: &[WireSub], rooms: &[Room], prefs: Option<&WirePrefs>) -> V
         });
     }
     out
+}
+
+/// One page of history (the server sends it newest first) as oldest-first messages.
+///
+/// The order is the server timestamp in milliseconds, then the id, so two messages in the same
+/// second keep their order even though `Message.ts` holds whole seconds. A message with an
+/// unparsable timestamp gets `ts` 0 and sorts first; it is never dropped. `oldest_ts` is the raw
+/// server timestamp string of the message with the smallest milliseconds, kept verbatim for the
+/// `latest` query of the next page (Pitfall 7); it is `None` for an empty page.
+pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
+    let mut keyed: Vec<(i64, Message)> = Vec::with_capacity(msgs.len());
+    let mut oldest: Option<(i64, String)> = None;
+    for msg in msgs {
+        let millis = msg.ts.millis();
+        if let (Some(ms), Some(raw)) = (millis, msg.ts.raw_iso())
+            && oldest.as_ref().is_none_or(|(best, _)| ms < *best)
+        {
+            oldest = Some((ms, raw));
+        }
+        keyed.push((
+            millis.unwrap_or(0),
+            Message {
+                id: msg.id,
+                room_id: room.clone(),
+                author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
+                ts: msg.ts.secs().unwrap_or(0),
+                body: msg.msg,
+            },
+        ));
+    }
+    keyed.sort_by(|(a_ms, a), (b_ms, b)| a_ms.cmp(b_ms).then_with(|| a.id.cmp(&b.id)));
+    HistoryPage {
+        messages: keyed.into_iter().map(|(_, m)| m).collect(),
+        oldest_ts: oldest.map(|(_, raw)| raw),
+    }
 }
 
 #[cfg(test)]
@@ -319,5 +356,78 @@ mod tests {
         let records = [record(r#"{"_id":"r-1"}"#), record(r#"{"_id":"r-2"}"#)];
         let mapped = rooms(&hidden, &records);
         assert!(folders(&hidden, &mapped, None).is_empty());
+    }
+
+    const HISTORY: &str = include_str!("fixtures/history.json");
+
+    fn history_msgs() -> Vec<WireMsg> {
+        serde_json::from_str::<crate::api::wire::HistoryResp>(HISTORY)
+            .expect("history fixture")
+            .messages
+    }
+
+    #[test]
+    fn history_oldest_first() {
+        let room = RoomId("r-devteam".to_string());
+        let page = history(&room, history_msgs());
+        let ids: Vec<&str> = page.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["m1", "m2", "m3", "m4"]);
+        // Two messages in one second keep their order although ts is whole seconds.
+        assert_eq!(page.messages[1].ts, 1_794_823_200);
+        assert_eq!(page.messages[2].ts, 1_794_823_200);
+        assert_eq!(page.messages[0].author, "alice");
+        assert_eq!(page.messages[0].room_id, room);
+        assert_eq!(page.messages[3].body, "fourth and newest message");
+        assert_eq!(page.oldest_ts.as_deref(), Some("2026-11-16T09:59:00.000Z"));
+    }
+
+    #[test]
+    fn history_date_forms_and_edges() {
+        let room = RoomId("r".to_string());
+        let wire = |json: &str| -> Vec<WireMsg> { serde_json::from_str(json).expect("msgs") };
+
+        // An EJSON ts parses to seconds, and its raw form is converted to ISO.
+        let ejson =
+            wire(r#"[{"_id":"e","msg":"x","ts":{"$date":1794823200123},"u":{"username":"a"}}]"#);
+        let page = history(&room, ejson);
+        assert_eq!(page.messages[0].ts, 1_794_823_200);
+        assert_eq!(page.oldest_ts.as_deref(), Some("2026-11-16T10:00:00.123Z"));
+
+        // An unparsable ts gets 0, sorts first and is still returned.
+        let bad = wire(
+            r#"[{"_id":"b","msg":"x","ts":"garbage","u":{}},
+                {"_id":"g","msg":"y","ts":"2026-11-16T10:00:00.000Z","u":{"username":"a"}}]"#,
+        );
+        let page = history(&room, bad);
+        assert_eq!(page.messages.len(), 2);
+        assert_eq!(page.messages[0].id, "b");
+        assert_eq!(page.messages[0].ts, 0);
+        assert_eq!(page.messages[0].author, "unknown");
+        assert_eq!(page.oldest_ts.as_deref(), Some("2026-11-16T10:00:00.000Z"));
+
+        // An empty page has no oldest timestamp.
+        let page = history(&room, Vec::new());
+        assert!(page.messages.is_empty());
+        assert_eq!(page.oldest_ts, None);
+
+        // One message: it is both the newest and the oldest.
+        let one =
+            wire(r#"[{"_id":"o","msg":"x","ts":"2026-11-16T10:00:00.000Z","u":{"username":"a"}}]"#);
+        let page = history(&room, one);
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(page.oldest_ts.as_deref(), Some("2026-11-16T10:00:00.000Z"));
+    }
+
+    #[test]
+    fn rooms_private_flag() {
+        let mapped = rooms(&fixture_subs(), &fixture_rooms());
+        let private: Vec<(&str, bool)> = mapped
+            .iter()
+            .map(|r| (r.name.as_str(), r.private))
+            .collect();
+        assert!(private.contains(&("dev-team", true)));
+        assert!(private.contains(&("secrets", true)));
+        assert!(private.contains(&("general", false)));
+        assert!(private.contains(&("alice", false)));
     }
 }

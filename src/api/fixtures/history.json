@@ -1,0 +1,33 @@
+{
+  "messages": [
+    {
+      "_id": "m4",
+      "rid": "r-devteam",
+      "msg": "fourth and newest message",
+      "ts": "2026-11-16T10:00:01.000Z",
+      "u": { "_id": "u-bob", "username": "bob" }
+    },
+    {
+      "_id": "m3",
+      "rid": "r-devteam",
+      "msg": "third message, same second as the second",
+      "ts": "2026-11-16T10:00:00.300Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    },
+    {
+      "_id": "m2",
+      "rid": "r-devteam",
+      "msg": "second message, same second as the third",
+      "ts": "2026-11-16T10:00:00.000Z",
+      "u": { "_id": "u-bob", "username": "bob" }
+    },
+    {
+      "_id": "m1",
+      "rid": "r-devteam",
+      "msg": "first and oldest message",
+      "ts": "2026-11-16T09:59:00.000Z",
+      "u": { "_id": "u-alice", "username": "alice" }
+    }
+  ],
+  "success": true
+}

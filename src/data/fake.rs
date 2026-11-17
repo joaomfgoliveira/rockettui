@@ -62,6 +62,7 @@ fn rooms() -> Vec<Room> {
             name: name.to_string(),
             kind,
             encrypted,
+            private: kind == RoomKind::PrivateGroup,
             unread,
             last_activity: FAKE_EPOCH + offset,
         })

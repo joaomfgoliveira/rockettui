@@ -33,6 +33,17 @@ impl ApiDate {
     pub fn secs(&self) -> Option<i64> {
         self.millis().map(|ms| ms.div_euclid(1000))
     }
+
+    /// The date as an ISO 8601 string with milliseconds, for the `latest` query of paging: an ISO
+    /// date is returned verbatim (never recomputed from seconds, Pitfall 7), an EJSON date is
+    /// converted from its milliseconds. `None` when the milliseconds are out of range.
+    pub fn raw_iso(&self) -> Option<String> {
+        match self {
+            ApiDate::Iso(text) => Some(text.clone()),
+            ApiDate::Ejson { ms } => chrono::DateTime::<chrono::Utc>::from_timestamp_millis(*ms)
+                .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -106,6 +117,30 @@ pub struct WireCategory {
     pub default: bool,
 }
 
+#[derive(Deserialize)]
+pub struct HistoryResp {
+    #[serde(default)]
+    pub messages: Vec<WireMsg>,
+}
+
+/// One message of a `*.history` response. Message text is untrusted and never printed, so there
+/// is no `Debug`. Plan 03-04 adds the attachment and file fields.
+#[derive(Deserialize)]
+pub struct WireMsg {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(default)]
+    pub msg: String,
+    pub ts: ApiDate,
+    pub u: WireUser,
+    pub t: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct WireUser {
+    pub username: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +155,17 @@ mod tests {
         let bad: ApiDate = serde_json::from_str("\"not a date\"").unwrap();
         assert_eq!(bad.millis(), None);
         assert_eq!(bad.secs(), None);
+    }
+
+    #[test]
+    fn raw_iso_forms() {
+        let iso: ApiDate = serde_json::from_str("\"2026-11-16T10:00:00.300Z\"").unwrap();
+        assert_eq!(iso.raw_iso().as_deref(), Some("2026-11-16T10:00:00.300Z"));
+        let ejson: ApiDate = serde_json::from_str("{\"$date\": 1794823200123}").unwrap();
+        assert_eq!(ejson.raw_iso().as_deref(), Some("2026-11-16T10:00:00.123Z"));
+        let bad: ApiDate = serde_json::from_str("\"not a date\"").unwrap();
+        // An unparsable ISO string is still returned verbatim; the caller decides what to do.
+        assert_eq!(bad.raw_iso().as_deref(), Some("not a date"));
     }
 
     #[test]

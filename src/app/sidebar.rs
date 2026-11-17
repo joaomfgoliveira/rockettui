@@ -257,7 +257,11 @@ pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
                 set_folder_open(app, &id, false);
             }
         }
-        (Action::Select, SidebarRow::Room { id, .. }) => app.open_room(id.clone()),
+        (Action::Select, SidebarRow::Room { id, .. }) => {
+            let id = id.clone();
+            app.open_room(id.clone());
+            crate::app::history::on_open(app, &id);
+        }
         _ => {}
     }
 }

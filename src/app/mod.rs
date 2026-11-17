@@ -4,6 +4,7 @@
 //! `Action`s from a data source (the D-13 seam).
 
 pub mod command;
+pub mod history;
 pub mod input_buf;
 pub mod messages;
 pub mod sidebar;
@@ -73,13 +74,15 @@ pub struct App {
     pub rooms: Vec<Room>,
     pub folders: Vec<Folder>,
     pub messages: HashMap<RoomId, Vec<Message>>,
+    /// Per-room history state (D-13): a room with no entry has never been fetched.
+    pub history: HashMap<RoomId, history::HistoryState>,
     pub current_room: Option<RoomId>,
     /// Per-room message cursor and scroll position; a room with no entry shows its newest message.
     pub msg_views: HashMap<RoomId, messages::MsgView>,
     /// The runtime message layout (D-10). Set from `message_layout` in config.toml (D-12); kept as
     /// its own field so the reducer and the renderer read the layout in one place.
     pub message_layout: crate::ui::wrap::MessageLayout,
-    /// The values of config.toml (D-12). `history_size` is stored for Phase 3 and read by nothing yet.
+    /// The values of config.toml (D-12). `history_size` is the page size of a history request.
     pub settings: crate::config::Settings,
     /// The zone message times are shown in. UTC unless the binary switches it to the system local
     /// zone, so tests and snapshots never depend on the machine; the reducer reads no clock.
@@ -123,6 +126,7 @@ impl App {
             rooms: Vec::new(),
             folders: Vec::new(),
             messages: HashMap::new(),
+            history: HashMap::new(),
             current_room: None,
             msg_views: HashMap::new(),
             message_layout: config.settings.message_layout,

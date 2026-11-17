@@ -5,7 +5,8 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, messages, sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, history, messages,
+    sidebar,
 };
 use crate::data::Message;
 use crate::input::key::normalize;
@@ -50,7 +51,25 @@ pub fn update(app: &mut App, action: Action) {
             sidebar::on_rows_changed(app);
         }
         Action::MessagesLoaded(room_id, messages) => {
+            // The fake source has no paging: its rooms are complete, so they are never fetched.
+            app.history.insert(
+                room_id.clone(),
+                history::HistoryState::Loaded {
+                    oldest_ts: None,
+                    exhausted: true,
+                    loading_older: false,
+                },
+            );
             app.messages.insert(room_id, messages);
+        }
+        Action::HistoryLoaded {
+            room,
+            messages,
+            oldest_ts,
+            older,
+        } => history::on_loaded(app, room, messages, oldest_ts, older),
+        Action::HistoryFailed { room, older, error } => {
+            history::on_failed(app, room, older, error);
         }
         Action::Resize(w, h) => {
             app.size = Size::new(w, h);

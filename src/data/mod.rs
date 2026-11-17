@@ -30,6 +30,9 @@ pub struct Room {
     pub name: String,
     pub kind: RoomKind,
     pub encrypted: bool,
+    /// True when the server room type is `p`; it selects `groups.history`. Private groups are
+    /// always `p`, discussions and teams can be either.
+    pub private: bool,
     pub unread: bool,
     /// Unix seconds of the last activity in the room.
     pub last_activity: i64,

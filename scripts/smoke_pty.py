@@ -13,6 +13,7 @@ Prints `SMOKE OK: <scenario>` and exits 0, or `SMOKE FAIL: <reason>` and exits 1
 
 import atexit
 import codecs
+import datetime
 import fcntl
 import http.server
 import json
@@ -152,6 +153,68 @@ MOCK_ROUTES = {
 }
 
 
+# history endpoint -> the subscription type it serves, like the real server's room-type check.
+HISTORY_ENDPOINTS = {
+    "/api/v1/channels.history": "c",
+    "/api/v1/groups.history": "p",
+    "/api/v1/im.history": "d",
+}
+HISTORY_COUNT_CAP = 100  # the server's API_Upper_Count_Limit
+
+
+def _subscriptions():
+    with open(os.path.join(FIXTURES, "subscriptions.json"), encoding="utf-8") as handle:
+        return {sub["rid"]: sub for sub in json.load(handle)["update"]}
+
+
+def _iso(base, index):
+    when = base + datetime.timedelta(seconds=30 * index)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.") + f"{when.microsecond // 1000:03d}Z"
+
+
+def history_messages(rid, name):
+    """All messages of a room, oldest first. r-general has 130 (`message 000`..`message 129`,
+    authors alternating alice and bob), every other room 5 (`<name> note N`)."""
+    base = datetime.datetime(2026, 11, 16, 8, 55, 0, tzinfo=datetime.timezone.utc)
+    out = []
+    count = 130 if rid == "r-general" else 5
+    for i in range(count):
+        if rid == "r-general":
+            ident, text = f"g-{i:03d}", f"message {i:03d}"
+        else:
+            ident, text = f"{rid}-{i}", f"{name} note {i}"
+        user = "alice" if i % 2 == 0 else "bob"
+        out.append(
+            {
+                "_id": ident,
+                "rid": rid,
+                "msg": text,
+                "ts": _iso(base, i),
+                "u": {"_id": f"u-{user}", "username": user},
+            }
+        )
+    return out
+
+
+def history_reply(path, query):
+    """(status, body) for one history request: 400 error-room-not-found when the endpoint does
+    not match the room type, else the newest `count` (capped) messages strictly older than
+    `latest`, newest first."""
+    sub = _subscriptions().get(query.get("roomId", ""))
+    if sub is None or sub.get("t") != HISTORY_ENDPOINTS[path]:
+        return 400, {"success": False, "error": "error-room-not-found"}
+    msgs = history_messages(sub["rid"], sub.get("name") or sub["rid"])
+    if "latest" in query:
+        msgs = [m for m in msgs if m["ts"] < query["latest"]]
+    try:
+        count = int(query.get("count", "20"))
+    except ValueError:
+        count = 20
+    count = max(0, min(count, HISTORY_COUNT_CAP))
+    page = list(reversed(msgs))[:count]
+    return 200, {"messages": page, "success": True}
+
+
 def start_mock(mode="ok"):
     """Start a mock Rocket.Chat on 127.0.0.1 with an ephemeral port, in a daemon thread.
 
@@ -190,6 +253,8 @@ def start_mock(mode="ok"):
                 self.reply(
                     401, {"success": False, "error": "You must be logged in to do this."}
                 )
+            elif parsed.path in HISTORY_ENDPOINTS:
+                self.reply(*history_reply(parsed.path, query))
             elif parsed.path in MOCK_ROUTES:
                 with open(os.path.join(FIXTURES, MOCK_ROUTES[parsed.path]), "rb") as handle:
                     self.reply(200, handle.read())
@@ -524,6 +589,29 @@ def scenario_connect_read(binary):
         raise SmokeFail("the token appears in the terminal output")
     if b"SENTINEL-LASTMSG" in data:
         raise SmokeFail("a lastMessage body appears in the terminal output")
+    # Enter on the first row (general) opens it and fetches its newest page, once.
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("message 129"), 10):
+        raise SmokeFail("the newest history message never appeared")
+    history_requests = [r for r in mock.requests if r[1] in HISTORY_ENDPOINTS]
+    general = [r for r in history_requests if r[2].get("roomId") == "r-general"]
+    if len(general) != 1 or general[0][1] != "/api/v1/channels.history":
+        raise SmokeFail(f"expected one channels.history request for r-general: {general}")
+    if "latest" in general[0][2]:
+        raise SmokeFail("the first page was requested with `latest`")
+    # Ctrl-w h back to the sidebar, G to the last row (secrets), Enter opens it.
+    type_keys(fd, buf, b"\x17")
+    type_keys(fd, buf, b"h")
+    type_keys(fd, buf, b"G")
+    type_keys(fd, buf, b"\r")
+    status_has_secrets = lambda b: "secrets" in screen_of(b).rows()[22]
+    if not read_until(fd, buf, status_has_secrets, 10):
+        raise SmokeFail("the encrypted room never opened")
+    read_until(fd, buf, lambda b: False, 0.5)  # a stray request would be sent by now
+    if any(r[2].get("roomId") == "r-secrets" for r in mock.requests):
+        raise SmokeFail("a request was sent for the encrypted room")
+    if any(method != "GET" for method, _path, _query, _authed in mock.requests):
+        raise SmokeFail(f"a non-GET request was sent: {mock.requests}")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)

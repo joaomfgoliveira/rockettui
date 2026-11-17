@@ -61,6 +61,20 @@ pub enum Action {
     MessagesLoaded(RoomId, Vec<Message>),
     /// The room load failed; the error is a fixed kind with no payload text.
     LoadFailed(crate::api::ApiError),
+    /// A page of history arrived, oldest first. `oldest_ts` is the raw server timestamp of its
+    /// oldest message; `older` is true for a page requested by scrolling back.
+    HistoryLoaded {
+        room: RoomId,
+        messages: Vec<Message>,
+        oldest_ts: Option<String>,
+        older: bool,
+    },
+    /// A history request failed; the error is a fixed kind with no payload text.
+    HistoryFailed {
+        room: RoomId,
+        older: bool,
+        error: crate::api::ApiError,
+    },
     /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
     KeyTimeout,
     /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
@@ -141,6 +155,20 @@ impl std::fmt::Debug for Action {
                 )
             }
             Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
+            Action::HistoryLoaded {
+                room,
+                messages,
+                older,
+                ..
+            } => write!(
+                f,
+                "HistoryLoaded({:?}, <{} messages>, older={older})",
+                room,
+                messages.len()
+            ),
+            Action::HistoryFailed { room, older, error } => {
+                write!(f, "HistoryFailed({room:?}, older={older}, {error:?})")
+            }
             Action::KeyTimeout => write!(f, "KeyTimeout"),
             Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
@@ -191,5 +219,37 @@ mod tests {
             Action::LoadFailed(crate::api::ApiError::Server(502))
         );
         assert_eq!(failed, "LoadFailed(Server(502))");
+
+        let history = Action::HistoryLoaded {
+            room: RoomId("r-general".to_string()),
+            messages: vec![Message {
+                id: "m1".to_string(),
+                room_id: RoomId("r-general".to_string()),
+                author: "alice".to_string(),
+                ts: 0,
+                body: "SENTINEL-BODY-7f3a".to_string(),
+            }],
+            oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
+            older: false,
+        };
+        let shown = format!("{history:?}");
+        assert!(!shown.contains("SENTINEL-BODY-7f3a"), "{shown}");
+        assert!(!shown.contains("2026-11-16"), "{shown}");
+        assert_eq!(
+            shown,
+            "HistoryLoaded(RoomId(\"r-general\"), <1 messages>, older=false)"
+        );
+        let failed = format!(
+            "{:?}",
+            Action::HistoryFailed {
+                room: RoomId("r-general".to_string()),
+                older: true,
+                error: crate::api::ApiError::Timeout,
+            }
+        );
+        assert_eq!(
+            failed,
+            "HistoryFailed(RoomId(\"r-general\"), older=true, Timeout)"
+        );
     }
 }

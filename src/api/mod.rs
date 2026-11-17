@@ -13,7 +13,7 @@ pub mod map;
 pub mod wire;
 
 use crate::config::connection::Connection;
-use crate::data::{Folder, Room};
+use crate::data::{Folder, Message, Room, RoomId, RoomKind};
 use reqwest::StatusCode;
 use reqwest::Url;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -124,6 +124,34 @@ pub struct RoomList {
     pub folders: Vec<Folder>,
 }
 
+/// One page of history as oldest-first messages. `oldest_ts` is the raw server timestamp string of
+/// the oldest message, the `latest` value of the next older page; `None` for an empty page.
+#[derive(Clone, PartialEq)]
+pub struct HistoryPage {
+    pub messages: Vec<Message>,
+    pub oldest_ts: Option<String>,
+}
+
+/// Redacting `Debug`: the number of messages only, never their text.
+impl fmt::Debug for HistoryPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HistoryPage(<{} messages>)", self.messages.len())
+    }
+}
+
+/// The history endpoint of a room. It follows the server room type, never the name: a direct
+/// message is `im.history`, a room whose server type is `p` (private groups, and private
+/// discussions and teams) is `groups.history`, every other room is `channels.history`.
+pub fn history_method(kind: RoomKind, private: bool) -> &'static str {
+    if kind == RoomKind::DirectMessage {
+        "im.history"
+    } else if private {
+        "groups.history"
+    } else {
+        "channels.history"
+    }
+}
+
 /// An authenticated client for one server. Cheap to clone. It is the only holder of the token.
 #[derive(Clone)]
 pub struct Client {
@@ -222,6 +250,26 @@ impl Client {
         let rooms = map::rooms(&subs, &records);
         let folders = map::folders(&subs, &rooms, prefs.as_ref());
         Ok(RoomList { rooms, folders })
+    }
+
+    /// One page of a room's history, newest `count` messages, or the `count` messages strictly
+    /// older than `before` (a raw server timestamp from `HistoryPage::oldest_ts`, sent verbatim,
+    /// Pitfall 7). The query is `roomId` (never the room name) and `count`; the thread-replies flag
+    /// is not sent, so thread replies stay out of the main flow (Pitfall 11, D-15).
+    pub async fn load_history(
+        &self,
+        room: &RoomId,
+        kind: RoomKind,
+        private: bool,
+        count: u16,
+        before: Option<&str>,
+    ) -> Result<HistoryPage, ApiError> {
+        let mut query = vec![("roomId", room.0.clone()), ("count", count.to_string())];
+        if let Some(latest) = before {
+            query.push(("latest", latest.to_string()));
+        }
+        let resp: wire::HistoryResp = self.get_json(history_method(kind, private), &query).await?;
+        Ok(map::history(room, resp.messages))
     }
 }
 
@@ -497,5 +545,94 @@ mod tests {
         assert_eq!(prefs[0].method.as_str(), "GET");
         assert_eq!(prefs[0].headers.get("x-user-id").unwrap(), USER);
         assert_eq!(prefs[0].headers.get("x-auth-token").unwrap(), TOKEN);
+    }
+
+    const HISTORY: &str = include_str!("fixtures/history.json");
+
+    #[test]
+    fn history_method_by_kind() {
+        assert_eq!(history_method(RoomKind::Channel, false), "channels.history");
+        assert_eq!(
+            history_method(RoomKind::PrivateGroup, true),
+            "groups.history"
+        );
+        assert_eq!(history_method(RoomKind::DirectMessage, false), "im.history");
+        assert_eq!(history_method(RoomKind::Discussion, true), "groups.history");
+        assert_eq!(history_method(RoomKind::Team, false), "channels.history");
+    }
+
+    #[tokio::test]
+    async fn history_query() {
+        let server = MockServer::start().await;
+        mount_ok(&server, "groups.history", HISTORY).await;
+        let room = RoomId("r-devteam".to_string());
+        let page = client_for(&server)
+            .load_history(&room, RoomKind::PrivateGroup, true, 50, None)
+            .await
+            .expect("history loads");
+        let ids: Vec<&str> = page.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["m1", "m2", "m3", "m4"]);
+        assert_eq!(page.oldest_ts.as_deref(), Some("2026-11-16T09:59:00.000Z"));
+
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.method.as_str(), "GET");
+        assert_eq!(request.url.path(), "/api/v1/groups.history");
+        let query: Vec<(String, String)> = request
+            .url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            query,
+            [
+                ("roomId".to_string(), "r-devteam".to_string()),
+                ("count".to_string(), "50".to_string())
+            ]
+        );
+        assert_eq!(request.headers.get("x-user-id").unwrap(), USER);
+        assert_eq!(request.headers.get("x-auth-token").unwrap(), TOKEN);
+    }
+
+    #[tokio::test]
+    async fn history_older_page_sends_latest_verbatim() {
+        let server = MockServer::start().await;
+        mount_ok(&server, "channels.history", HISTORY).await;
+        let room = RoomId("r-general".to_string());
+        client_for(&server)
+            .load_history(
+                &room,
+                RoomKind::Channel,
+                false,
+                25,
+                Some("2026-11-16T09:59:00.000Z"),
+            )
+            .await
+            .expect("history loads");
+        let requests = server.received_requests().await.expect("recorded");
+        let latest = requests[0]
+            .url
+            .query_pairs()
+            .find(|(k, _)| k == "latest")
+            .map(|(_, v)| v.into_owned());
+        assert_eq!(latest.as_deref(), Some("2026-11-16T09:59:00.000Z"));
+    }
+
+    #[test]
+    fn history_page_debug_redacts() {
+        let page = HistoryPage {
+            messages: vec![Message {
+                id: "m".to_string(),
+                room_id: RoomId("r".to_string()),
+                author: "a".to_string(),
+                ts: 0,
+                body: "SENTINEL-BODY-7f3a".to_string(),
+            }],
+            oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
+        };
+        let shown = format!("{page:?}");
+        assert!(!shown.contains("SENTINEL-BODY-7f3a"), "{shown}");
+        assert!(shown.contains('1'));
     }
 }

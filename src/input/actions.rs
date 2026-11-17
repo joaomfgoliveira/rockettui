@@ -126,6 +126,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::FoldersLoaded(_)
         | Action::MessagesLoaded(..)
         | Action::LoadFailed(_)
+        | Action::HistoryLoaded { .. }
+        | Action::HistoryFailed { .. }
         | Action::KeyTimeout
         | Action::Counted(..) => None,
     }
