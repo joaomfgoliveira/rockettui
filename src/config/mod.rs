@@ -4,6 +4,7 @@
 //! filesystem) with a thin IO shell (`load_from_dir`, `load`). Config is loaded once, before the
 //! terminal starts, and held in `App`; the reducer never reads files (TEA).
 
+pub mod connection;
 pub mod diag;
 pub mod keymap;
 pub mod paths;
@@ -22,6 +23,10 @@ pub struct Config {
     pub settings: Settings,
     pub keymap: Keymap,
     pub theme: Theme,
+    /// The validated server URL and credentials, `None` when the environment gave none (the
+    /// binary requires them, `load_from_dir` does not). `App` never receives this: the token
+    /// goes into `api::Client` and nowhere else.
+    pub connection: Option<connection::Connection>,
 }
 
 impl Default for Config {
@@ -30,6 +35,7 @@ impl Default for Config {
             settings: Settings::default(),
             keymap: default_keymap(),
             theme: Theme::default(),
+            connection: None,
         }
     }
 }
@@ -41,6 +47,10 @@ pub struct Sources {
     pub keymap: Option<String>,
     pub theme: Option<String>,
     pub read_errors: Vec<Problem>,
+    /// The three `ROCKETTUI_*` variables, read once by `load` (the only environment reads).
+    pub env: connection::ConnEnv,
+    /// True for the binary: a missing server URL, user id or token is then a config error (D-03).
+    pub require_connection: bool,
 }
 
 /// Build a `Config` from file contents. Warnings are kept only when there is also an error (D-03).
@@ -53,34 +63,65 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
         &mut problems,
     );
     let theme = theme::parse(sources.theme.as_deref(), &mut problems);
+    let connection = connection::resolve(&sources.env, sources.require_connection, &mut problems);
     let report = Report::new(problems);
     if report.errors.is_empty() {
         Ok(Config {
             settings,
             keymap,
             theme,
+            connection,
         })
     } else {
         Err(report)
     }
 }
 
-/// Read the three files of `dir`, then `load_from_sources`.
-pub fn load_from_dir(dir: &Path) -> Result<Config, Report> {
-    load_from_sources(&paths::read_sources(dir)).map_err(|mut report| {
+/// Read the three files of `dir` and take the connection variables from `env`, then
+/// `load_from_sources`.
+pub fn load_from_dir_env(
+    dir: &Path,
+    env: connection::ConnEnv,
+    require: bool,
+) -> Result<Config, Report> {
+    let mut sources = paths::read_sources(dir);
+    sources.env = env;
+    sources.require_connection = require;
+    load_from_sources(&sources).map_err(|mut report| {
         report.dir = Some(dir.to_path_buf());
         report
     })
 }
 
-/// Resolve the config directory from the environment and load it. No directory known: defaults.
+/// Read the three files of `dir` without any connection variables (nothing required).
+pub fn load_from_dir(dir: &Path) -> Result<Config, Report> {
+    load_from_dir_env(dir, connection::ConnEnv::default(), false)
+}
+
+/// The connection variables of the process environment. The only place they are read.
+fn env_from_process() -> connection::ConnEnv {
+    connection::ConnEnv {
+        server_url: connection::EnvValue::from_os(std::env::var_os(connection::ENV_SERVER_URL)),
+        user_id: connection::EnvValue::from_os(std::env::var_os(connection::ENV_USER_ID)),
+        token: connection::EnvValue::from_os(std::env::var_os(connection::ENV_TOKEN)),
+    }
+}
+
+/// Resolve the config directory from the environment and load it, requiring the connection
+/// variables (D-03). With no directory known the defaults apply, but the connection is still
+/// required.
 pub fn load() -> Result<Config, Report> {
+    let env = env_from_process();
     match paths::config_dir(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
     ) {
-        Some(dir) => load_from_dir(&dir),
-        None => Ok(Config::default()),
+        Some(dir) => load_from_dir_env(&dir, env, true),
+        None => load_from_sources(&Sources {
+            env,
+            require_connection: true,
+            ..Sources::default()
+        }),
     }
 }
 
@@ -180,7 +221,7 @@ mod tests {
             ),
             keymap: Some("[normal\n".to_string()),
             theme: Some("x = \n".to_string()),
-            read_errors: Vec::new(),
+            ..Sources::default()
         };
         let Err(report) = load_from_sources(&sources) else {
             panic!("expected Err");
@@ -240,13 +281,47 @@ mod tests {
     }
 
     #[test]
+    fn connection_env_through_sources() {
+        use connection::{ConnEnv, EnvValue, Secret};
+        let set = |text: &str| EnvValue::Set(Secret::new(text.to_string()));
+
+        // The binary's path requires the connection: three errors naming each variable.
+        let required = Sources {
+            require_connection: true,
+            ..Sources::default()
+        };
+        let Err(report) = load_from_sources(&required) else {
+            panic!("expected Err");
+        };
+        assert_eq!(report.errors.len(), 3);
+
+        // Tolerant by default: no connection, no problem.
+        let config = load_from_sources(&Sources::default()).expect("ok");
+        assert!(config.connection.is_none());
+
+        // All three set: the connection is resolved and the Debug of Sources hides the token.
+        let full = Sources {
+            env: ConnEnv {
+                server_url: set("http://127.0.0.1:3100"),
+                user_id: set("u1"),
+                token: set("SENTINEL-TOKEN-9c41"),
+            },
+            require_connection: true,
+            ..Sources::default()
+        };
+        assert!(!format!("{full:?}").contains("SENTINEL-TOKEN-9c41"));
+        let config = load_from_sources(&full).expect("ok");
+        assert!(config.connection.is_some());
+    }
+
+    #[test]
     fn empty_files_are_absent() {
         for text in ["", "  \n# c\n"] {
             let all = Sources {
                 config: Some(text.to_string()),
                 keymap: Some(text.to_string()),
                 theme: Some(text.to_string()),
-                read_errors: Vec::new(),
+                ..Sources::default()
             };
             match load_from_sources(&all) {
                 Ok(config) => assert_eq!(config.settings, Settings::default()),

@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, messages, sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, messages, sidebar,
 };
 use crate::data::Message;
 use crate::input::key::normalize;
@@ -41,8 +41,10 @@ pub fn update(app: &mut App, action: Action) {
         }
         Action::RoomsLoaded(rooms) => {
             app.rooms = rooms;
+            app.conn = ConnState::Ready;
             sidebar::on_rows_changed(app);
         }
+        Action::LoadFailed(err) => app.conn = ConnState::Failed(err),
         Action::FoldersLoaded(folders) => {
             app.folders = folders;
             sidebar::on_rows_changed(app);

@@ -2,17 +2,20 @@
 //! (Elm/TEA: one `App`, one `Action` enum, one reducer) and the terminal layer above it.
 
 pub mod action;
+pub mod api;
 pub mod app;
 pub mod config;
 pub mod data;
+pub mod effect;
 pub mod event;
 pub mod input;
 pub mod tui;
 pub mod ui;
 
 use crate::action::Action;
-use crate::app::App;
 use crate::app::update::update;
+use crate::app::{App, ConnState};
+use crate::effect::Effect;
 
 /// Capacity of the one bounded Action channel.
 pub const CHANNEL_CAPACITY: usize = 256;
@@ -63,31 +66,33 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// The run loop: seed the channel, queue input, then repeatedly apply a batch of Actions through
-/// the single reducer call site, draw once, and wait for the next Action.
+/// The run loop: queue input, then repeatedly apply a batch of Actions through the single reducer
+/// call site, spawn the fetches the reducer asked for, draw once, and wait for the next Action.
+///
+/// There is no fake data: the first frame shows an empty sidebar and `Connecting…` (D-05), and
+/// the rooms arrive from the server as `Action`s sent by the effect tasks (the D-13 seam).
 pub async fn run(
     mut terminal: ratatui::DefaultTerminal,
     config: config::Config,
 ) -> std::io::Result<()> {
+    // The one channel. `tx` stays alive for the whole run: effect tasks need a sender, and the
+    // input task ends the loop with `Action::Quit` when its event stream ends.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Action>(CHANNEL_CAPACITY);
-    // The D-13 seam: Phase 3 sends the same Actions from REST tasks.
-    for action in data::fake::seed() {
-        if tx.send(action).await.is_err() {
-            break;
-        }
-    }
     event::spawn_input_task(tx.clone());
-    drop(tx);
 
+    // The client is built before `App::with_config` consumes the config, so the token reaches
+    // `api::Client` and never `App`. A build failure is reported by the first effect.
+    let client: Result<api::Client, api::ApiError> = match config.connection.as_ref() {
+        Some(connection) => api::Client::new(connection),
+        None => Err(api::ApiError::Client),
+    };
     let mut app = App::with_config(terminal.size()?, config);
     // The binary shows local time (RESEARCH A2, confirmed by the author on 2026-11-16). `App::new`
     // and the tests stay on UTC, and the reducer still never reads a clock or a zone.
     app.zone = ui::timefmt::Zone::Local;
-    // Drain the seed before the first draw so the first frame already lists the rooms.
+    app.conn = ConnState::Connecting;
+    app.effects.push(Effect::LoadRooms);
     let mut batch: Vec<Action> = Vec::new();
-    while let Ok(action) = rx.try_recv() {
-        batch.push(action);
-    }
     // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.
     let mut key_deadline: Option<tokio::time::Instant> = None;
     loop {
@@ -101,6 +106,9 @@ pub async fn run(
         }
         if app.should_quit {
             break;
+        }
+        for effect in app.effects.drain(..) {
+            effect::spawn(client.clone(), tx.clone(), effect);
         }
         if saw_key {
             key_deadline = app

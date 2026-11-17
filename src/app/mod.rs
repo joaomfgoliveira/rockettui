@@ -40,6 +40,16 @@ pub enum Focus {
     Input,
 }
 
+/// Where the room load stands, shown in the status bar (D-05, D-06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnState {
+    /// Nothing requested: tests and an app that never connects.
+    Idle,
+    Connecting,
+    Ready,
+    Failed(crate::api::ApiError),
+}
+
 /// A one-line message for the status bar. No `Debug`: an error can echo the typed command line.
 pub enum StatusMsg {
     Info(String),
@@ -87,6 +97,10 @@ pub struct App {
     /// Pending count and key sequence between keys (D-05, D-06).
     pub matcher: Matcher,
     pub should_quit: bool,
+    /// Fetch intents the reducer records; only `run()` drains them and spawns the requests.
+    pub effects: Vec<crate::effect::Effect>,
+    /// The state of the room load, for the status bar.
+    pub conn: ConnState,
 }
 
 impl App {
@@ -96,6 +110,9 @@ impl App {
     }
 
     /// An empty app in Normal mode with the sidebar focused, configured from the config files.
+    ///
+    /// `config.connection` is ignored on purpose: the token goes into `api::Client` and never
+    /// enters `App`.
     pub fn with_config(size: Size, config: crate::config::Config) -> Self {
         App {
             mode: Mode::Normal,
@@ -120,6 +137,8 @@ impl App {
             theme: config.theme,
             matcher: Matcher::default(),
             should_quit: false,
+            effects: Vec::new(),
+            conn: ConnState::Idle,
         }
     }
 
@@ -224,6 +243,41 @@ mod tests {
         );
         let app = app_with_config(config_from_toml("key_timeout_ms = 250\n"), 80, 24);
         assert_eq!(app.key_timeout(), Duration::from_millis(250));
+    }
+
+    /// The status row (second from the bottom) of an 80x24 render.
+    fn status_row(app: &App) -> String {
+        let screen = crate::test_util::render_to_string(app, 80, 24);
+        screen.lines().nth(22).expect("status row").to_string()
+    }
+
+    #[test]
+    fn conn_state() {
+        use crate::action::Action;
+        use crate::api::ApiError;
+        use crate::app::update::update;
+        let mut app = App::new(Size::new(80, 24));
+        assert_eq!(app.conn, ConnState::Idle);
+        assert!(app.effects.is_empty());
+        let idle = status_row(&app);
+        assert!(!idle.contains("Connecting"), "{idle}");
+        assert!(!idle.contains("unauthorized"), "{idle}");
+
+        app.conn = ConnState::Connecting;
+        let connecting = status_row(&app);
+        assert!(connecting.contains("Connecting…"), "{connecting}");
+
+        update(&mut app, Action::LoadFailed(ApiError::Unauthorized));
+        assert_eq!(app.conn, ConnState::Failed(ApiError::Unauthorized));
+        let failed = status_row(&app);
+        assert!(failed.contains("unauthorized"), "{failed}");
+        assert!(!failed.contains("Connecting"), "{failed}");
+
+        update(&mut app, Action::RoomsLoaded(Vec::new()));
+        assert_eq!(app.conn, ConnState::Ready);
+        let ready = status_row(&app);
+        assert!(!ready.contains("unauthorized"), "{ready}");
+        assert!(!ready.contains("Connecting"), "{ready}");
     }
 
     #[test]

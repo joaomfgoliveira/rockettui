@@ -59,6 +59,8 @@ pub enum Action {
     RoomsLoaded(Vec<Room>),
     FoldersLoaded(Vec<Folder>),
     MessagesLoaded(RoomId, Vec<Message>),
+    /// The room load failed; the error is a fixed kind with no payload text.
+    LoadFailed(crate::api::ApiError),
     /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
     KeyTimeout,
     /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
@@ -138,6 +140,7 @@ impl std::fmt::Debug for Action {
                     messages.len()
                 )
             }
+            Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
             Action::KeyTimeout => write!(f, "KeyTimeout"),
             Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
@@ -182,5 +185,11 @@ mod tests {
         let run = format!("{:?}", Action::RunCommand("SENTINEL-CMD-5e2a".to_string()));
         assert!(!run.contains("SENTINEL-CMD-5e2a"));
         assert_eq!(run, "RunCommand(..)");
+
+        let failed = format!(
+            "{:?}",
+            Action::LoadFailed(crate::api::ApiError::Server(502))
+        );
+        assert_eq!(failed, "LoadFailed(Server(502))");
     }
 }

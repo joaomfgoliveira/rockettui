@@ -1,0 +1,131 @@
+{
+  "update": [
+    {
+      "_id": "s-r-general",
+      "rid": "r-general",
+      "t": "c",
+      "name": "general",
+      "fname": "general",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 3
+    },
+    {
+      "_id": "s-r-random",
+      "rid": "r-random",
+      "t": "c",
+      "name": "random",
+      "fname": "random",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": true,
+      "unread": 0
+    },
+    {
+      "_id": "s-r-devteam",
+      "rid": "r-devteam",
+      "t": "p",
+      "name": "dev-team",
+      "fname": "dev-team",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 2,
+      "category": "cat-work"
+    },
+    {
+      "_id": "s-r-secrets",
+      "rid": "r-secrets",
+      "t": "p",
+      "name": "secrets",
+      "fname": "secrets",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0
+    },
+    {
+      "_id": "s-r-design",
+      "rid": "r-design",
+      "t": "c",
+      "name": "design-review-x7",
+      "fname": "Design review",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0,
+      "prid": "r-general"
+    },
+    {
+      "_id": "s-r-platform",
+      "rid": "r-platform",
+      "t": "p",
+      "name": "platform",
+      "fname": "platform",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0,
+      "category": "cat-work"
+    },
+    {
+      "_id": "s-r-dm-alice",
+      "rid": "r-dm-alice",
+      "t": "d",
+      "name": "alice",
+      "fname": "Alice Liddell",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 1
+    },
+    {
+      "_id": "s-r-dm-carol",
+      "rid": "r-dm-carol",
+      "t": "d",
+      "name": "carol",
+      "fname": "Carol",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": false,
+      "f": false,
+      "unread": 0
+    },
+    {
+      "_id": "s-r-livechat",
+      "rid": "r-livechat",
+      "t": "l",
+      "name": "visitor",
+      "fname": "visitor",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0
+    },
+    {
+      "_id": "s-r-invited",
+      "rid": "r-invited",
+      "t": "c",
+      "name": "invited-room",
+      "fname": "invited-room",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0,
+      "status": "INVITED"
+    },
+    {
+      "_id": "s-r-orphan",
+      "rid": "r-orphan",
+      "t": "c",
+      "name": "orphan",
+      "fname": "orphan",
+      "ts": "2026-11-01T00:00:00.000Z",
+      "open": true,
+      "f": false,
+      "unread": 0
+    }
+  ],
+  "remove": [],
+  "success": true
+}

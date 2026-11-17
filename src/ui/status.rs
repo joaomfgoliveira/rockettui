@@ -1,6 +1,6 @@
 //! Status bar (mode badge, current room, pending keys and status message) and the command-line row with its cursor.
 
-use crate::app::{App, Mode, StatusMsg};
+use crate::app::{App, ConnState, Mode, StatusMsg};
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -18,6 +18,16 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
         badge,
         Span::styled(format!(" {room}"), app.theme.status_room),
     ];
+    match app.conn {
+        ConnState::Connecting => {
+            spans.push(Span::styled(" Connecting…", app.theme.status_info));
+        }
+        ConnState::Failed(err) => spans.push(Span::styled(
+            format!(" {}", sanitize_line(&err.to_string())),
+            app.theme.status_error,
+        )),
+        ConnState::Idle | ConnState::Ready => {}
+    }
     let pending = app.pending_display();
     if !pending.is_empty() {
         spans.push(Span::styled(

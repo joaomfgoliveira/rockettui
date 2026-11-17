@@ -1,0 +1,169 @@
+{
+  "update": [
+    {
+      "_id": "r-general",
+      "t": "c",
+      "lm": "2026-11-16T10:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-general",
+        "rid": "r-general",
+        "msg": "SENTINEL-LASTMSG-text for r-general",
+        "ts": "2026-11-16T10:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-devteam",
+      "t": "p",
+      "lm": "2026-11-16T09:50:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-devteam",
+        "rid": "r-devteam",
+        "msg": "SENTINEL-LASTMSG-text for r-devteam",
+        "ts": "2026-11-16T09:50:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-dm-alice",
+      "t": "d",
+      "lm": "2026-11-16T09:40:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-dm-alice",
+        "rid": "r-dm-alice",
+        "msg": "SENTINEL-LASTMSG-text for r-dm-alice",
+        "ts": "2026-11-16T09:40:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-random",
+      "t": "c",
+      "lm": "2026-11-16T08:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-random",
+        "rid": "r-random",
+        "msg": "SENTINEL-LASTMSG-text for r-random",
+        "ts": "2026-11-16T08:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-platform",
+      "t": "p",
+      "lm": "2026-11-16T07:30:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-platform",
+        "rid": "r-platform",
+        "msg": "SENTINEL-LASTMSG-text for r-platform",
+        "ts": "2026-11-16T07:30:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      },
+      "teamMain": true
+    },
+    {
+      "_id": "r-design",
+      "t": "c",
+      "lm": "2026-11-16T07:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-design",
+        "rid": "r-design",
+        "msg": "SENTINEL-LASTMSG-text for r-design",
+        "ts": "2026-11-16T07:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      },
+      "prid": "r-general"
+    },
+    {
+      "_id": "r-secrets",
+      "t": "p",
+      "lm": "2026-11-16T05:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-secrets",
+        "rid": "r-secrets",
+        "msg": "SENTINEL-LASTMSG-text for r-secrets",
+        "ts": "2026-11-16T05:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      },
+      "encrypted": true
+    },
+    {
+      "_id": "r-dm-carol",
+      "t": "d",
+      "lm": "2026-11-16T04:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-dm-carol",
+        "rid": "r-dm-carol",
+        "msg": "SENTINEL-LASTMSG-text for r-dm-carol",
+        "ts": "2026-11-16T04:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-livechat",
+      "t": "l",
+      "lm": "2026-11-16T03:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-livechat",
+        "rid": "r-livechat",
+        "msg": "SENTINEL-LASTMSG-text for r-livechat",
+        "ts": "2026-11-16T03:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "_id": "r-invited",
+      "t": "c",
+      "lm": "2026-11-16T02:00:00.000Z",
+      "msgs": 3,
+      "lastMessage": {
+        "_id": "m-r-invited",
+        "rid": "r-invited",
+        "msg": "SENTINEL-LASTMSG-text for r-invited",
+        "ts": "2026-11-16T02:00:00.000Z",
+        "u": {
+          "_id": "u2",
+          "username": "alice"
+        }
+      }
+    }
+  ],
+  "remove": [],
+  "success": true
+}

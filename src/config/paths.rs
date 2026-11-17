@@ -81,6 +81,7 @@ pub fn read_sources(dir: &Path) -> Sources {
         keymap,
         theme,
         read_errors,
+        ..Sources::default()
     }
 }
 
