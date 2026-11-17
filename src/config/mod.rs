@@ -104,6 +104,7 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
         sources.require_connection,
         &mut problems,
     );
+    let warnings = connection::warnings(connection.as_ref(), sources.config_mode);
     let report = Report::new(problems);
     if report.errors.is_empty() {
         Ok(Config {
@@ -111,7 +112,7 @@ pub fn load_from_sources(sources: &Sources) -> Result<Config, Report> {
             keymap,
             theme,
             connection,
-            warnings: Vec::new(),
+            warnings,
         })
     } else {
         Err(report)

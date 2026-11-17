@@ -9,6 +9,7 @@ use crate::config::diag::{ConfigFile, Problem, Reader, Severity, line_col, parse
 use reqwest::Url;
 use std::ffi::OsString;
 use std::fmt;
+use std::net::IpAddr;
 
 /// Environment variable holding the Rocket.Chat base URL.
 pub const ENV_SERVER_URL: &str = "ROCKETTUI_SERVER_URL";
@@ -130,10 +131,47 @@ fn error(key: &str, message: String) -> Problem {
     }
 }
 
-/// Runtime warnings for a resolved connection (D-04, T-03-21). Texts are fixed and never contain
-/// the token, user id or URL.
-pub fn warnings(_conn: Option<&Connection>, _config_mode: Option<u32>) -> Vec<String> {
-    Vec::new()
+/// True for `localhost` and any loopback IP (127.0.0.0/8, ::1); `host` is `Url::host_str`, so an
+/// IPv6 address still carries its brackets.
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Runtime warnings for a resolved connection (D-04, T-03-21). They never block: the app starts
+/// anyway. Texts are fixed apart from the mode number and never contain the token, user id or URL.
+///
+/// - The token came from `config.toml` and the file has a group or other permission bit.
+/// - The URL is `http://` to a host that is not loopback, so the token travels unencrypted.
+pub fn warnings(conn: Option<&Connection>, config_mode: Option<u32>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(conn) = conn else {
+        return out;
+    };
+    if conn.token_source == CredSource::File
+        && let Some(mode) = config_mode
+        && mode & 0o077 != 0
+    {
+        out.push(format!(
+            "config.toml holds the token but is mode {:04o}: chmod 600 it",
+            mode & 0o777
+        ));
+    }
+    if conn.server_url.scheme() == "http"
+        && conn
+            .server_url
+            .host_str()
+            .is_some_and(|h| !is_loopback_host(h))
+    {
+        out.push(
+            "server_url uses http:// to a non-local host: the token is sent unencrypted"
+                .to_string(),
+        );
+    }
+    out
 }
 
 /// Read `server_url`, `user_id` and `token` from the text of `config.toml` (`None` = absent).

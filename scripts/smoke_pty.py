@@ -728,6 +728,55 @@ def scenario_config_creds(binary):
         raise SmokeFail("the token appears in the terminal output")
 
 
+def scenario_perm_warning(binary):
+    mock = start_mock()
+    files = {
+        "config.toml": (
+            f'server_url = "{mock.base_url}"\n'
+            f'user_id = "{MOCK_USER_ID}"\n'
+            f'token = "{MOCK_TOKEN}"\n'
+        )
+    }
+    # A 0644 config.toml holding the token: the app still starts, warns on the status row (kept
+    # across a key press) and repeats the warning on stderr after the terminal is restored.
+    pid, fd = spawn(binary, config_files=files, config_modes={"config.toml": 0o644})
+    buf = bytearray()
+    wait_ready(fd, buf)
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("chmod 600"), 5):
+        raise SmokeFail("the permission warning never appeared on the status bar")
+    type_keys(fd, buf, b"j")
+    read_until(fd, buf, lambda b: False, 0.3)
+    if not screen_of(buf).contains("chmod 600"):
+        raise SmokeFail("the warning did not survive a key press")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    data = bytes(buf)
+    after = data[data.rfind(ALT_OFF) :]
+    if b"rockettui: warning:" not in after or b"chmod 600" not in after:
+        raise SmokeFail("the warning was not printed to stderr after the terminal was restored")
+    if MOCK_TOKEN.encode() in data:
+        raise SmokeFail("the token appears in the terminal output")
+    if not all(authed for _method, _path, _query, authed in mock.requests):
+        raise SmokeFail("a request reached the server without valid credentials")
+
+    # The same files at 0600: no warning anywhere.
+    pid, fd = spawn(binary, config_files=files, config_modes={"config.toml": 0o600})
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if b"chmod 600" in bytes(buf):
+        raise SmokeFail("a 0600 config.toml produced a permission warning")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -738,6 +787,7 @@ SCENARIOS = {
     "connect_read": scenario_connect_read,
     "missing_creds": scenario_missing_creds,
     "config_creds": scenario_config_creds,
+    "perm_warning": scenario_perm_warning,
 }
 
 

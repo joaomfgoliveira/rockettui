@@ -70,10 +70,29 @@ pub fn read_source(dir: &Path, file: ConfigFile, out: &mut Vec<Problem>) -> Opti
     }
 }
 
-/// Read the three files of `dir`.
+/// The permission bits of `path`, following symlinks like `read_source`. Only reads the metadata:
+/// nothing is created, written or chmodded (D-04 warns, it never fixes). `None` off Unix.
+#[cfg(unix)]
+fn file_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .ok()
+        .map(|meta| meta.permissions().mode())
+}
+
+#[cfg(not(unix))]
+fn file_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
+/// Read the three files of `dir`. `config_mode` is filled only when `config.toml` was read as
+/// text, once, together with the text (so a later chmod changes the warning at the next launch).
 pub fn read_sources(dir: &Path) -> Sources {
     let mut read_errors = Vec::new();
     let config = read_source(dir, ConfigFile::Config, &mut read_errors);
+    let config_mode = config
+        .as_ref()
+        .and_then(|_| file_mode(&dir.join(ConfigFile::Config.file_name())));
     let keymap = read_source(dir, ConfigFile::Keymap, &mut read_errors);
     let theme = read_source(dir, ConfigFile::Theme, &mut read_errors);
     Sources {
@@ -81,6 +100,7 @@ pub fn read_sources(dir: &Path) -> Sources {
         keymap,
         theme,
         read_errors,
+        config_mode,
         ..Sources::default()
     }
 }

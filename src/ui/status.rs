@@ -1,4 +1,4 @@
-//! Status bar (mode badge, current room, pending keys and status message) and the command-line row with its cursor.
+//! Status bar (mode badge, current room, connection state, persistent config warnings, pending keys and status message) and the command-line row with its cursor.
 
 use crate::app::{App, ConnState, Mode, StatusMsg};
 use crate::ui::sanitize::sanitize_line;
@@ -27,6 +27,13 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
             app.theme.status_error,
         )),
         ConnState::Idle | ConnState::Ready => {}
+    }
+    // Config warnings (D-04) stay on every frame, independent of `status_msg`.
+    for warning in &app.warnings {
+        spans.push(Span::styled(
+            format!(" warning: {}", sanitize_line(warning)),
+            app.theme.status_error,
+        ));
     }
     let pending = app.pending_display();
     if !pending.is_empty() {
