@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 3
+current_phase: 03
 current_phase_name: Connect & Read
 status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-11-17T10:13:11.109Z"
-last_activity: 2026-11-16
-last_activity_desc: Phase 2 complete, transitioned to Phase 3
-state_head: db6c792cf397fa0ad7605fb76a59ecb6076c8188
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-11-17T10:43:05.184Z"
+last_activity: 2026-11-17
+last_activity_desc: Phase 03 execution started
+state_head: 57aa5722a63411403fcead743d2d46b48f088feb
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 11
+  completed_plans: 12
   percent: 33
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-14)
 
 **Core value:** Reading and sending Rocket.Chat messages (with live incoming messages) entirely from the keyboard in a modal, vim-like interface.
-**Current focus:** Phase 02 — Configuration System
+**Current focus:** Phase 03 — Connect & Read
 
 ## Current Position
 
-Phase: 3 (Connect & Read) — READY TO EXECUTE
-Plan: Not started
+Phase: 03 (Connect & Read) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-11-16 — Phase 2 complete, transitioned to Phase 3
+Last activity: 2026-11-17 — Phase 03 execution started
 
 Progress: [███░░░░░░░] 33%
 
@@ -53,6 +53,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Marker strings are rejected, not sanitized, when sanitize_line would change them; width caps 4 columns (encrypted 12)
 - [Phase 02]: author_palette is a trusted user list (1-64 colors, validated as colors only); explicit fg on messages.author beats the palette, fg on messages.cursor overrides author colors on the cursor row
 - [Phase 02]: author_color returns Color::Reset for an empty palette (defense in depth behind load-time validation, T-02-17)
+- [Phase 03]: 03-01: Folders = Favorites (favorited rooms without a category) then custom categories (A6, awaiting author confirmation); literal D-10 reading is one condition in map::folders
+- [Phase 03]: 03-01: Effect outbox on App drained only by run(); the token lives only in api::Client headers, never in App; reqwest redirects disabled, reqwest::Error never formatted
 
 ### Pending Todos
 
@@ -71,9 +73,9 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-16T17:24:32.162Z
-**Stopped at:** Phase 3 context gathered
-**Resume file:** .planning/phases/03-connect-read/03-CONTEXT.md
+**Last session:** 2026-11-17T10:43:05.088Z
+**Stopped at:** Completed 03-01-PLAN.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -84,3 +86,4 @@ None yet.
 | Phase 02 P03 | 5 min | 3 tasks | 9 files |
 | Phase 02 P04 | 6 min | 3 tasks | 10 files |
 | Phase 02 P05 | 4 min | 2 tasks | 5 files |
+| Phase 03 P01 | 8 min | 2 tasks | 19 files |
