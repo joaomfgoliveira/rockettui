@@ -65,6 +65,21 @@ pub fn on_open(app: &mut App, id: &RoomId) {
     app.effects.push(effect);
 }
 
+/// `:reconnect` (D-16): forget every room whose first page failed, and fetch the open room again
+/// now if its page was one of them. A closed room that failed is fetched when it is next opened.
+/// Loading and Loaded rooms are untouched (D-13).
+pub fn retry_failed(app: &mut App) {
+    let reopen = app
+        .current_room
+        .clone()
+        .filter(|id| matches!(app.history.get(id), Some(HistoryState::Failed)));
+    app.history
+        .retain(|_, state| !matches!(state, HistoryState::Failed));
+    if let Some(id) = reopen {
+        on_open(app, &id);
+    }
+}
+
 /// The older-page fetch (D-14). Called after every messages-pane motion: when the cursor sits on
 /// the oldest loaded message of a Loaded room it records one `Effect::LoadHistory` with `before`
 /// set to the raw timestamp of that message and marks the page in flight. Nothing happens while a

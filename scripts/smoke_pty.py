@@ -236,6 +236,9 @@ def start_mock(mode="ok"):
     `(method, path, query_dict, authed_bool)`, one per request received (any method). Only GET is
     served; every other method gets 405 (and is recorded). A request without the right
     X-User-Id and X-Auth-Token gets 401. The server is shut down at exit.
+
+    `mode` is settable at any time: "ok" serves normally, "unauthorized" answers every GET with
+    the 9.0.0-style 401 body whatever the credentials (a rejected or revoked token).
     """
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -263,7 +266,7 @@ def start_mock(mode="ok"):
             self.server.requests.append((self.command, parsed.path, query, authed))
             if self.command != "GET":
                 self.reply(405, {"success": False})
-            elif not authed:
+            elif self.server.mode == "unauthorized" or not authed:
                 self.reply(
                     401, {"success": False, "error": "You must be logged in to do this."}
                 )
@@ -777,6 +780,51 @@ def scenario_perm_warning(binary):
         raise SmokeFail("the token appears in the terminal output")
 
 
+def scenario_unauthorized(binary):
+    # The server rejects the token: one clear status line, the app stays usable, nothing retries
+    # on its own, and :reconnect loads the rooms once the server accepts again (D-06).
+    mock = start_mock("unauthorized")
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_drawn(fd, buf)
+    shows_unauthorized = lambda b: screen_of(b).contains("unauthorized")
+    if not read_until(fd, buf, shows_unauthorized, 10):
+        raise SmokeFail("the unauthorized line never appeared on the status bar")
+    if screen_of(buf).contains("general"):
+        raise SmokeFail("a room is listed although the server rejected the token")
+    # Give an automatic retry time to show itself, then count the room-list requests.
+    read_until(fd, buf, lambda b: False, 1.0)
+    subs = lambda: [r for r in mock.requests if r[1] == "/api/v1/subscriptions.get"]
+    if len(subs()) != 1:
+        raise SmokeFail(f"expected exactly one subscriptions.get before :reconnect: {mock.requests}")
+    # The app stays usable: a key press is handled and the line is still the unauthorized one.
+    type_keys(fd, buf, b"j")
+    if not screen_of(buf).contains("NORMAL"):
+        raise SmokeFail("the app stopped drawing after the failure")
+
+    mock.mode = "ok"
+    type_keys(fd, buf, b":reconnect")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("general"), 10):
+        raise SmokeFail("the rooms never loaded after :reconnect")
+    status = lambda b: screen_of(b).rows()[22]
+    if not read_until(fd, buf, lambda b: "unauthorized" not in status(b), 5):
+        raise SmokeFail("the unauthorized line is still on the status bar after :reconnect")
+    if len(subs()) < 2:
+        raise SmokeFail(f"expected a second subscriptions.get after :reconnect: {mock.requests}")
+    if any(method != "GET" for method, _path, _query, _authed in mock.requests):
+        raise SmokeFail(f"a non-GET request was sent: {mock.requests}")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -788,6 +836,7 @@ SCENARIOS = {
     "missing_creds": scenario_missing_creds,
     "config_creds": scenario_config_creds,
     "perm_warning": scenario_perm_warning,
+    "unauthorized": scenario_unauthorized,
 }
 
 
