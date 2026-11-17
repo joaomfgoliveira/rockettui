@@ -1,0 +1,11 @@
+{
+  "preferences": {
+    "sidebarCategories": [
+      {
+        "_id": "cat-work",
+        "name": "Work"
+      }
+    ]
+  },
+  "success": true
+}

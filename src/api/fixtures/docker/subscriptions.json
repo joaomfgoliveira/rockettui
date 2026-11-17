@@ -1,0 +1,180 @@
+{
+  "remove": [],
+  "success": true,
+  "update": [
+    {
+      "_id": "6afc3131355101d0992a6bcf",
+      "_updatedAt": "2026-11-17T10:49:21.080Z",
+      "alert": true,
+      "groupMentions": 0,
+      "name": "general",
+      "open": true,
+      "rid": "GENERAL",
+      "t": "c",
+      "ts": "2026-11-17T10:49:21.080Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 1,
+      "userMentions": 1
+    },
+    {
+      "_id": "6afc3131355101d0992a6bda",
+      "_updatedAt": "2026-11-17T10:49:25.257Z",
+      "alert": true,
+      "fname": "rt-public",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.234Z",
+      "name": "rt-public",
+      "open": true,
+      "rid": "6afc3131355101d0992a6bd9",
+      "roles": [
+        "owner"
+      ],
+      "t": "c",
+      "ts": "2026-11-17T10:49:21.646Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c5c",
+      "_updatedAt": "2026-11-17T10:49:25.920Z",
+      "alert": false,
+      "fname": "rt-discussion",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.920Z",
+      "name": "3QnLp7aNkP6onjqvA",
+      "open": true,
+      "prid": "6afc3131355101d0992a6bd9",
+      "rid": "6afc3135355101d0992a6c5b",
+      "roles": [
+        "owner"
+      ],
+      "t": "c",
+      "ts": "2026-11-17T10:49:25.174Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c64",
+      "_updatedAt": "2026-11-17T10:49:25.366Z",
+      "alert": false,
+      "f": true,
+      "fname": "rt-private",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.352Z",
+      "name": "rt-private",
+      "open": true,
+      "rid": "6afc3135355101d0992a6c62",
+      "roles": [
+        "owner"
+      ],
+      "t": "p",
+      "ts": "2026-11-17T10:49:25.273Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c6a",
+      "_updatedAt": "2026-11-17T10:49:25.453Z",
+      "alert": true,
+      "fname": "Alice",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.402Z",
+      "name": "alice",
+      "open": true,
+      "rid": "6afc3135355101d0992a6c68",
+      "t": "d",
+      "ts": "2026-11-17T10:49:25.383Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "username": "dev"
+      },
+      "unread": 2,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c6f",
+      "_updatedAt": "2026-11-17T10:49:25.510Z",
+      "alert": false,
+      "fname": "Bob",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.496Z",
+      "name": "bob",
+      "open": false,
+      "rid": "6afc3135355101d0992a6c6e",
+      "t": "d",
+      "ts": "2026-11-17T10:49:25.474Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c73",
+      "_updatedAt": "2026-11-17T10:49:25.548Z",
+      "alert": false,
+      "fname": "secrets",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.548Z",
+      "name": "secrets",
+      "open": true,
+      "rid": "6afc3135355101d0992a6c72",
+      "roles": [
+        "owner"
+      ],
+      "t": "p",
+      "ts": "2026-11-17T10:49:25.515Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    },
+    {
+      "_id": "6afc3135355101d0992a6c75",
+      "_updatedAt": "2026-11-17T10:49:25.990Z",
+      "alert": false,
+      "category": "cat-work",
+      "fname": "rt-team",
+      "groupMentions": 0,
+      "ls": "2026-11-17T10:49:25.990Z",
+      "name": "rt-team",
+      "open": true,
+      "rid": "6afc3135355101d0992a6c74",
+      "roles": [
+        "owner"
+      ],
+      "t": "c",
+      "ts": "2026-11-17T10:49:25.942Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "unread": 0,
+      "userMentions": 0
+    }
+  ]
+}

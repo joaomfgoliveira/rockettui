@@ -20,6 +20,7 @@ Run from the repository root, in this order:
 python3 -I dev/seed.py up       # start Rocket.Chat + MongoDB replica set, wait for /api/info
 python3 -I dev/seed.py seed     # create users, rooms, messages and the PAT
 python3 -I dev/seed.py check    # prove the PAT works and the secret files are safe
+python3 -I dev/seed.py capture  # write scrubbed REST fixtures to src/api/fixtures/docker/
 python3 -I dev/seed.py down     # remove containers, volume and the state directory
 ```
 
@@ -27,6 +28,30 @@ Settings come from the environment: `RT_PROJECT` (default `rockettui-dev`), `RT_
 (default `8.9.1`), `RT_HOST_PORT` (default `3100`).
 
 `seed` refuses to run twice on the same stack; to start over run `down` then `up`.
+
+## Seeded dataset
+
+Users: `dev` (the app user, owner of the PAT), `alice`, `bob`, plus the `admin` account.
+
+| Room | Type | What it exercises |
+|------|------|-------------------|
+| `rt-public` | public channel | 130 messages from dev and alice (paging beyond one page and beyond the server's 100 cap), alice's join system message, a `discussion-created` system message, one message with an attachment titled `report.pdf` |
+| `rt-private` | private group | favorited by dev (Favorites folder) |
+| DM `alice` | direct | unread messages for dev |
+| DM `bob` | direct | closed by dev (`open=false`, must be skipped) |
+| `secrets` | private group | `encrypted=true` set in MongoDB (shown as "encrypted, not supported") |
+| `rt-discussion` | discussion | child of `rt-public`; its subscription `name` is the room id, the title is `fname` |
+| `rt-team` | team main room | `teamMain`; best effort: held by the custom sidebar category `Work` |
+| `general` | public channel | created by Rocket.Chat itself |
+
+Notes: the category step needs no license (the preference is written through the API, the
+subscription `category` through MongoDB); on this server channels count only mentions as unread,
+so `rt-public` shows `unread: 0` with `alert: true`, while the alice DM shows `unread: 2`.
+
+`capture` writes five fixtures under `src/api/fixtures/docker/` (`subscriptions`, `rooms`,
+`preferences`, `history_rt_public`, `history_dm_alice`) with every `lastMessage` and `md` key
+removed. It aborts without writing if any token or password appears in the text. Message text is
+synthetic seed text.
 
 ## Run the app against it
 

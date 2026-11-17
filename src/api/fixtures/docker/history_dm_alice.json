@@ -1,0 +1,62 @@
+{
+  "messages": [
+    {
+      "_id": "4gQa4jZ5HbkYn9Mdj",
+      "_updatedAt": "2026-11-17T10:49:25.449Z",
+      "alias": "",
+      "attachments": [],
+      "channels": [],
+      "groupable": false,
+      "mentions": [],
+      "msg": "dm seed message 3",
+      "parseUrls": true,
+      "rid": "6afc3135355101d0992a6c68",
+      "ts": "2026-11-17T10:49:25.444Z",
+      "u": {
+        "_id": "9YwZuwwDw8WYJ7G5u",
+        "name": "Alice",
+        "username": "alice"
+      },
+      "urls": []
+    },
+    {
+      "_id": "h5Ss6rRCCiMbG2qQQ",
+      "_updatedAt": "2026-11-17T10:49:25.420Z",
+      "alias": "",
+      "attachments": [],
+      "channels": [],
+      "groupable": false,
+      "mentions": [],
+      "msg": "dm seed message 2",
+      "parseUrls": true,
+      "rid": "6afc3135355101d0992a6c68",
+      "ts": "2026-11-17T10:49:25.417Z",
+      "u": {
+        "_id": "9YwZuwwDw8WYJ7G5u",
+        "name": "Alice",
+        "username": "alice"
+      },
+      "urls": []
+    },
+    {
+      "_id": "9znyb3N4m2xoehhtm",
+      "_updatedAt": "2026-11-17T10:49:25.395Z",
+      "alias": "",
+      "attachments": [],
+      "channels": [],
+      "groupable": false,
+      "mentions": [],
+      "msg": "dm seed message 1",
+      "parseUrls": true,
+      "rid": "6afc3135355101d0992a6c68",
+      "ts": "2026-11-17T10:49:25.391Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "urls": []
+    }
+  ],
+  "success": true
+}

@@ -1,0 +1,164 @@
+{
+  "remove": [],
+  "success": true,
+  "update": [
+    {
+      "_id": "6afc3131355101d0992a6bd9",
+      "_updatedAt": "2026-11-17T10:49:25.265Z",
+      "default": false,
+      "fname": "rt-public",
+      "lm": "2026-11-17T10:49:25.248Z",
+      "msgs": 132,
+      "name": "rt-public",
+      "ro": false,
+      "sysMes": true,
+      "t": "c",
+      "ts": "2026-11-17T10:49:21.646Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "usersCount": 2
+    },
+    {
+      "_id": "6afc3135355101d0992a6c5b",
+      "_updatedAt": "2026-11-17T10:49:25.931Z",
+      "default": false,
+      "description": null,
+      "encrypted": false,
+      "fname": "rt-discussion",
+      "lm": "2026-11-17T10:49:25.906Z",
+      "msgs": 1,
+      "name": "3QnLp7aNkP6onjqvA",
+      "prid": "6afc3131355101d0992a6bd9",
+      "ro": false,
+      "sysMes": true,
+      "t": "c",
+      "topic": "rt-public",
+      "ts": "2026-11-17T10:49:25.174Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "usersCount": 1
+    },
+    {
+      "_id": "6afc3135355101d0992a6c62",
+      "_updatedAt": "2026-11-17T10:49:25.358Z",
+      "default": false,
+      "fname": "rt-private",
+      "lm": "2026-11-17T10:49:25.341Z",
+      "msgs": 3,
+      "name": "rt-private",
+      "ro": false,
+      "sysMes": true,
+      "t": "p",
+      "ts": "2026-11-17T10:49:25.273Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "usersCount": 2
+    },
+    {
+      "_id": "6afc3135355101d0992a6c68",
+      "_updatedAt": "2026-11-17T10:49:25.462Z",
+      "default": false,
+      "lm": "2026-11-17T10:49:25.444Z",
+      "msgs": 3,
+      "ro": false,
+      "sysMes": true,
+      "t": "d",
+      "ts": "2026-11-17T10:49:25.376Z",
+      "uids": [
+        "9YwZuwwDw8WYJ7G5u",
+        "BrAGRWwvntWziMgv6"
+      ],
+      "usernames": [
+        "alice",
+        "dev"
+      ],
+      "usersCount": 2
+    },
+    {
+      "_id": "6afc3135355101d0992a6c6e",
+      "_updatedAt": "2026-11-17T10:49:25.500Z",
+      "default": false,
+      "lm": "2026-11-17T10:49:25.486Z",
+      "msgs": 1,
+      "ro": false,
+      "sysMes": true,
+      "t": "d",
+      "ts": "2026-11-17T10:49:25.471Z",
+      "uids": [
+        "BrAGRWwvntWziMgv6",
+        "mNGaepoWJybFoRBbr"
+      ],
+      "usernames": [
+        "bob",
+        "dev"
+      ],
+      "usersCount": 2
+    },
+    {
+      "_id": "6afc3135355101d0992a6c72",
+      "_updatedAt": "2026-11-17T10:49:25.553Z",
+      "default": false,
+      "encrypted": true,
+      "fname": "secrets",
+      "lm": "2026-11-17T10:49:25.538Z",
+      "msgs": 1,
+      "name": "secrets",
+      "ro": false,
+      "sysMes": true,
+      "t": "p",
+      "ts": "2026-11-17T10:49:25.515Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "usersCount": 1
+    },
+    {
+      "_id": "6afc3135355101d0992a6c74",
+      "_updatedAt": "2026-11-17T10:49:25.998Z",
+      "default": false,
+      "fname": "rt-team",
+      "lm": "2026-11-17T10:49:25.977Z",
+      "msgs": 1,
+      "name": "rt-team",
+      "ro": false,
+      "sysMes": true,
+      "t": "c",
+      "teamId": "6afc3135355101d0992a6c76",
+      "teamMain": true,
+      "ts": "2026-11-17T10:49:25.942Z",
+      "u": {
+        "_id": "BrAGRWwvntWziMgv6",
+        "name": "Dev",
+        "username": "dev"
+      },
+      "usersCount": 1
+    },
+    {
+      "_id": "GENERAL",
+      "_updatedAt": "2026-11-17T10:49:21.464Z",
+      "default": true,
+      "msgs": 3,
+      "name": "general",
+      "t": "c",
+      "ts": "2026-11-17T10:49:18.326Z",
+      "u": {
+        "_id": "rocket.cat",
+        "name": "Rocket.Cat",
+        "username": "rocket.cat"
+      },
+      "usernames": [],
+      "usersCount": 3
+    }
+  ]
+}

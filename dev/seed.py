@@ -155,14 +155,41 @@ def cmd_up():
     print("server up: %s version %s on 127.0.0.1:%s" % (PROJECT, version, HOST_PORT))
 
 
+def post(auth, room_id, text, **extra):
+    body = {"roomId": room_id, "text": text}
+    body.update(extra)
+    api("POST", "/api/v1/chat.postMessage", body, auth)
+
+
+def mongosh(js, admin_pass):
+    """Run one mongosh expression in the stack's MongoDB; returns stdout (no secrets in it)."""
+    result = compose(
+        ["exec", "-T", "mongodb", "mongosh", "--quiet", "rocketchat", "--eval", js],
+        admin_pass,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise Fail("mongosh failed")
+    return result.stdout
+
+
+def matched_one(output):
+    try:
+        return json.loads(output.strip().splitlines()[-1]).get("matchedCount") == 1
+    except (ValueError, IndexError, AttributeError):
+        return False
+
+
 def cmd_seed():
     passwords = read_env(ADMIN_ENV)
     if "SEEDED" in passwords:
         raise Fail("already seeded; re-seeding means `down` then `up`")
+    admin_pass = passwords["ADMIN_PASS"]
     admin = None
-    for attempt in range(20):
+    for _ in range(20):
         try:
-            admin = login("admin", passwords["ADMIN_PASS"])
+            admin = login("admin", admin_pass)
             break
         except Fail:
             time.sleep(3)
@@ -170,30 +197,120 @@ def cmd_seed():
         raise Fail("admin login did not succeed")
     print("admin logged in")
 
-    api(
-        "POST",
-        "/api/v1/users.create",
-        {
-            "email": "dev@example.invalid",
-            "name": "Dev",
-            "password": passwords["DEV_PASS"],
-            "username": "dev",
-            "verified": True,
-        },
-        admin,
-    )
-    print("user created: dev")
+    for name, key in (("dev", "DEV_PASS"), ("alice", "ALICE_PASS"), ("bob", "BOB_PASS")):
+        api(
+            "POST",
+            "/api/v1/users.create",
+            {
+                "email": "%s@example.invalid" % name,
+                "name": name.capitalize(),
+                "password": passwords[key],
+                "username": name,
+                "verified": True,
+            },
+            admin,
+        )
+        print("user created: %s" % name)
     dev = login("dev", passwords["DEV_PASS"])
+    alice = login("alice", passwords["ALICE_PASS"])
 
+    # rt-public: paging beyond one page and beyond the server's 100 cap, a join system message
+    # (alice's `uj`), one attachment, and unread messages for dev (alice posts last).
     public = api("POST", "/api/v1/channels.create", {"name": "rt-public"}, dev)["channel"]["_id"]
-    api("POST", "/api/v1/chat.postMessage", {"roomId": public, "text": "seed message 000"}, dev)
-    print("channel created: rt-public")
+    post(dev, public, "seed message 000")
+    api("POST", "/api/v1/channels.join", {"roomId": public}, alice)
+    discussion = None
+    for n in range(1, 130):
+        author = dev if n % 2 == 0 else alice
+        if n == 127:
+            # Created late so its `discussion-created` system message sits in the newest page
+            # and alice still posts last (rt-public stays unread for dev).
+            discussion = api(
+                "POST",
+                "/api/v1/rooms.createDiscussion",
+                {"prid": public, "t_name": "rt-discussion"},
+                dev,
+            )["discussion"]["_id"]
+        if n == 125:
+            post(
+                author,
+                public,
+                "seed message %03d" % n,
+                attachments=[{"title": "report.pdf", "text": "quarterly report"}],
+            )
+        else:
+            post(author, public, "seed message %03d" % n)
+    print("channel seeded: rt-public (130 messages, join, attachment)")
 
-    token_name = "rockettui-%d" % int(time.time())
+    # rt-private: favorited by dev.
+    private = api(
+        "POST", "/api/v1/groups.create", {"name": "rt-private", "members": ["alice"]}, dev
+    )["group"]["_id"]
+    post(dev, private, "private seed message 1")
+    post(alice, private, "private seed message 2")
+    post(dev, private, "private seed message 3")
+    api("POST", "/api/v1/rooms.favorite", {"roomId": private, "favorite": True}, dev)
+    print("group seeded: rt-private (favorite)")
+
+    # DM with alice, two unread messages from alice.
+    dm_alice = api("POST", "/api/v1/im.create", {"username": "alice"}, dev)["room"]["_id"]
+    post(dev, dm_alice, "dm seed message 1")
+    post(alice, dm_alice, "dm seed message 2")
+    post(alice, dm_alice, "dm seed message 3")
+    print("dm seeded: alice (unread)")
+
+    # DM with bob, closed by dev (open=false, skipped by the app, D-09).
+    dm_bob = api("POST", "/api/v1/im.create", {"username": "bob"}, dev)["room"]["_id"]
+    post(dev, dm_bob, "dm seed message 1")
+    api("POST", "/api/v1/im.close", {"roomId": dm_bob}, dev)
+    print("dm seeded: bob (closed)")
+
+    # secrets: an encrypted group, flagged directly in MongoDB (RESEARCH step 4).
+    secret = api("POST", "/api/v1/groups.create", {"name": "secrets"}, dev)["group"]["_id"]
+    post(dev, secret, "secret seed message 1")
+    out = mongosh(
+        'JSON.stringify(db.rocketchat_room.updateOne({name:"secrets"},{$set:{encrypted:true}}))',
+        admin_pass,
+    )
+    if not matched_one(out):
+        raise Fail("could not mark the secrets group encrypted")
+    print("group seeded: secrets (encrypted)")
+
+    # rt-discussion under rt-public (created inside the rt-public loop above).
+    post(dev, discussion, "discussion seed message 1")
+    print("discussion seeded: rt-discussion")
+
+    # rt-team and its main room.
+    team = api("POST", "/api/v1/teams.create", {"name": "rt-team", "type": 0}, dev)["team"]
+    team_room = team["roomId"]
+    post(dev, team_room, "team seed message 1")
+    print("team seeded: rt-team")
+
+    # Custom sidebar category, best effort and license free (RESEARCH D-10 findings).
+    try:
+        api(
+            "POST",
+            "/api/v1/users.setPreferences",
+            {
+                "userId": dev[0],
+                "data": {"sidebarCategories": [{"_id": "cat-work", "name": "Work"}]},
+            },
+            dev,
+        )
+        js = (
+            "JSON.stringify(db.rocketchat_subscription.updateOne("
+            '{rid:"%s","u._id":"%s"},{$set:{category:"cat-work"}}))' % (team_room, dev[0])
+        )
+        if not matched_one(mongosh(js, admin_pass)):
+            raise Fail("subscription not found")
+        print("category seeded: Work holds rt-team")
+    except Fail as error:
+        print("categories skipped: %s" % error)
+
     pat = api(
         "POST",
         "/api/v1/users.generatePersonalAccessToken",
-        {"tokenName": token_name, "bypassTwoFactor": True},
+        {"tokenName": "rockettui-%d" % int(time.time()), "bypassTwoFactor": True},
         dev,
     )["token"]
     write_env(
@@ -237,7 +354,11 @@ def cmd_check():
     app = read_env(APP_ENV)
     auth = (app["ROCKETTUI_USER_ID"], app["ROCKETTUI_TOKEN"])
     reply = api("GET", "/api/v1/subscriptions.get", auth=auth)
-    names = sorted(sub.get("name") or sub.get("fname") or "?" for sub in reply.get("update", []))
+    # A discussion's `name` is its room id; its readable title is `fname`.
+    names = sorted(
+        (sub.get("fname") if sub.get("prid") else None) or sub.get("name") or sub.get("fname") or "?"
+        for sub in reply.get("update", [])
+    )
     print("ok: %d subscriptions: %s" % (len(names), ", ".join(names)))
 
 
@@ -254,10 +375,64 @@ def cmd_down():
     print("down: %s" % PROJECT)
 
 
+def scrub(value):
+    """Drop lastMessage (carries message text) and md (parsed markdown) everywhere."""
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items() if k not in ("lastMessage", "md")}
+    if isinstance(value, list):
+        return [scrub(item) for item in value]
+    return value
+
+
+def cmd_capture():
+    app = read_env(APP_ENV)
+    passwords = read_env(ADMIN_ENV)
+    auth = (app["ROCKETTUI_USER_ID"], app["ROCKETTUI_TOKEN"])
+    # Fresh login tokens exist only so the secret check below can look for them.
+    secret_values = [app["ROCKETTUI_TOKEN"]]
+    secret_values += [v for k, v in passwords.items() if k.endswith("_PASS")]
+    for user, key in (("dev", "DEV_PASS"), ("alice", "ALICE_PASS"), ("bob", "BOB_PASS")):
+        secret_values.append(login(user, passwords[key])[1])
+
+    subscriptions = api("GET", "/api/v1/subscriptions.get", auth=auth)
+    by_name = {}
+    for sub in subscriptions.get("update", []):
+        by_name[sub.get("name")] = sub.get("rid")
+    public = by_name.get("rt-public")
+    dm_alice = by_name.get("alice")
+    if not public or not dm_alice:
+        raise Fail("rt-public or the alice DM is missing from subscriptions.get")
+
+    documents = {
+        "subscriptions": subscriptions,
+        "rooms": api("GET", "/api/v1/rooms.get", auth=auth),
+        "preferences": api("GET", "/api/v1/users.getPreferences", auth=auth),
+        "history_rt_public": api(
+            "GET", "/api/v1/channels.history?roomId=%s&count=50" % public, auth=auth
+        ),
+        "history_dm_alice": api(
+            "GET", "/api/v1/im.history?roomId=%s&count=50" % dm_alice, auth=auth
+        ),
+    }
+    texts = {
+        name: json.dumps(scrub(doc), indent=2, sort_keys=True) + "\n"
+        for name, doc in documents.items()
+    }
+    for text in texts.values():
+        assert_no_secrets(text, secret_values)
+    os.makedirs(FIXTURES, exist_ok=True)
+    for name, text in texts.items():
+        path = os.path.join(FIXTURES, name + ".json")
+        with open(path, "w") as handle:
+            handle.write(text)
+        print("wrote %s" % os.path.relpath(path, REPO))
+
+
 COMMANDS = {
     "up": cmd_up,
     "seed": cmd_seed,
     "check": cmd_check,
+    "capture": cmd_capture,
     "down": cmd_down,
 }
 
