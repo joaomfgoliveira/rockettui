@@ -242,7 +242,10 @@ fn dispatch(app: &mut App, outcome: Outcome) {
 fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     match app.focus {
         Focus::Sidebar => sidebar::apply_motion(app, motion, count),
-        Focus::Messages => crate::app::messages::apply_motion(app, motion, count),
+        Focus::Messages => {
+            crate::app::messages::apply_motion(app, motion, count);
+            history::maybe_load_older(app);
+        }
         Focus::Input => input_motion(app, motion, count),
     }
 }

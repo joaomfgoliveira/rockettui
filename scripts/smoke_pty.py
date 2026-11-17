@@ -160,6 +160,7 @@ HISTORY_ENDPOINTS = {
     "/api/v1/im.history": "d",
 }
 HISTORY_COUNT_CAP = 100  # the server's API_Upper_Count_Limit
+HISTORY_BASE = datetime.datetime(2026, 11, 16, 8, 55, 0, tzinfo=datetime.timezone.utc)
 
 
 def _subscriptions():
@@ -175,7 +176,7 @@ def _iso(base, index):
 def history_messages(rid, name):
     """All messages of a room, oldest first. r-general has 130 (`message 000`..`message 129`,
     authors alternating alice and bob), every other room 5 (`<name> note N`)."""
-    base = datetime.datetime(2026, 11, 16, 8, 55, 0, tzinfo=datetime.timezone.utc)
+    base = HISTORY_BASE
     out = []
     count = 130 if rid == "r-general" else 5
     for i in range(count):
@@ -599,6 +600,31 @@ def scenario_connect_read(binary):
         raise SmokeFail(f"expected one channels.history request for r-general: {general}")
     if "latest" in general[0][2]:
         raise SmokeFail("the first page was requested with `latest`")
+    # gg moves onto the oldest loaded message (g-080): the next older page is requested with
+    # `latest` equal to its timestamp, and after it arrives k lands on message 079 (D-14).
+    type_keys(fd, buf, b"gg")
+    oldest = _iso(HISTORY_BASE, 80)
+
+    def older_request(_b):
+        return any(
+            r[1] == "/api/v1/channels.history"
+            and r[2].get("roomId") == "r-general"
+            and r[2].get("latest") == oldest
+            for r in mock.requests
+        )
+
+    if not read_until(fd, buf, older_request, 5):
+        raise SmokeFail(f"no older-page request with latest={oldest}: {mock.requests}")
+    # k does nothing until the page is in (the cursor sits on the oldest message), so press it
+    # until message 079 is drawn.
+    reached = False
+    for _ in range(25):
+        type_keys(fd, buf, b"k")
+        if read_until(fd, buf, lambda b: screen_of(b).contains("message 079"), 0.2):
+            reached = True
+            break
+    if not reached:
+        raise SmokeFail("message 079 never appeared after gg and k")
     # Ctrl-w h back to the sidebar, G to the last row (secrets), Enter opens it.
     type_keys(fd, buf, b"\x17")
     type_keys(fd, buf, b"h")

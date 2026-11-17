@@ -619,6 +619,97 @@ mod tests {
         assert_eq!(latest.as_deref(), Some("2026-11-16T09:59:00.000Z"));
     }
 
+    fn query_of(request: &wiremock::Request) -> Vec<(String, String)> {
+        request
+            .url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn latest_param() {
+        let server = MockServer::start().await;
+        mount_ok(&server, "channels.history", HISTORY).await;
+        let room = RoomId("r-general".to_string());
+        client_for(&server)
+            .load_history(
+                &room,
+                RoomKind::Channel,
+                false,
+                50,
+                Some("2026-11-16T10:00:00.300Z"),
+            )
+            .await
+            .expect("history loads");
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            query_of(&requests[0]),
+            [
+                ("roomId".to_string(), "r-general".to_string()),
+                ("count".to_string(), "50".to_string()),
+                ("latest".to_string(), "2026-11-16T10:00:00.300Z".to_string()),
+            ]
+        );
+        assert!(
+            query_of(&requests[0]).iter().all(|(k, _)| k != "inclusive"),
+            "an older page never asks for the boundary message again"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_above_cap() {
+        // A server that caps the page at 100 answers a count of 500 with 100 messages.
+        let body = serde_json::json!({
+            "success": true,
+            "messages": (0..100)
+                .map(|i| serde_json::json!({
+                    "_id": format!("m{i:03}"),
+                    "msg": "x",
+                    "ts": format!("2026-11-16T09:{:02}:{:02}.000Z", i / 60, i % 60),
+                    "u": { "_id": "u1", "username": "alice" },
+                }))
+                .collect::<Vec<_>>(),
+        })
+        .to_string();
+        let server = MockServer::start().await;
+        mount_ok(&server, "channels.history", &body).await;
+        let room = RoomId("r-general".to_string());
+        let page = client_for(&server)
+            .load_history(&room, RoomKind::Channel, false, 500, None)
+            .await
+            .expect("history loads");
+        let requests = server.received_requests().await.expect("recorded");
+        assert!(query_of(&requests[0]).contains(&("count".to_string(), "500".to_string())));
+        assert_eq!(
+            page.messages.len(),
+            100,
+            "the short page is returned in full"
+        );
+
+        // A shorter-than-asked page is not the end of history; only an empty one is.
+        let mut app = App::new(Size::new(80, 24));
+        app.history
+            .insert(room.clone(), crate::app::history::HistoryState::Loading);
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: room.clone(),
+                messages: page.messages,
+                oldest_ts: page.oldest_ts,
+                older: false,
+            },
+        );
+        assert!(matches!(
+            app.history.get(&room),
+            Some(crate::app::history::HistoryState::Loaded {
+                exhausted: false,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn history_page_debug_redacts() {
         let page = HistoryPage {
