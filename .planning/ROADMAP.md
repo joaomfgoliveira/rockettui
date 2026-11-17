@@ -120,22 +120,28 @@ Plans:
   1. User enters Insert mode, types a message and sends it
   2. The sent message appears in the room (verified in the official client)
 **UI hint**: yes
-**Plans:** 6 plans
+**Plans:** 8 plans
 
 Plans:
 **Wave 1**
-- [ ] 04-01-PLAN.md — Wave 0 live probe of chat.sendMessage (P0-P7), then the send tracer: Enter -> pending row -> per-room queue -> POST chat.sendMessage with a client _id -> swap in place; `send` pty scenario (wave 1)
+- [ ] 04-01-PLAN.md — Wave 0 live probe of chat.sendMessage (P0-P7), then the IO tracer: Effect::SendMessage -> POST chat.sendMessage with a client _id -> MessageSent/SendFailed -> swap in place or status error; per-run id prefix (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 04-02-PLAN.md — Retry (`r`) and discard (`dd`) of failed sends, Failed vs Unconfirmed, chat.getMessage reconcile before resending (wave 2, parallel with 04-03)
-- [ ] 04-03-PLAN.md — Pending / failed / unconfirmed look: `[markers]` sending, failed, unconfirmed and messages.pending / messages.failed in both layouts (wave 2, parallel with 04-02)
+- [ ] 04-02-PLAN.md — Enter sends: SendState on Message (literal sweep), pending row -> per-room queue -> swap in place; encrypted/blank guards; `send` pty scenario (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 04-04-PLAN.md — follow_on_send setting, per-room in-memory drafts, D-13 id dedupe (merge_incoming) (wave 3, parallel with 04-05)
-- [ ] 04-05-PLAN.md — Own username from GET /api/v1/me once per connection and on :reconnect; pending rows authored by it (wave 3, parallel with 04-04)
+- [ ] 04-03-PLAN.md — Retry (`r`) and discard (`dd`) of failed sends, Failed vs Unconfirmed (5xx Unconfirmed, D-18), chat.getMessage reconcile before resending (wave 3, parallel with 04-04)
+- [ ] 04-04-PLAN.md — Pending / failed / unconfirmed look: `[markers]` sending, failed, unconfirmed and messages.pending / messages.failed in both layouts (wave 3, parallel with 04-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 04-06-PLAN.md — Proof against the Docker server 8.9.1 and 9.0.0 (docker_send, persistence), full phase gate, official-client UAT checkpoint (wave 4)
+- [ ] 04-05-PLAN.md — follow_on_send setting, per-room in-memory drafts, D-13 id dedupe (merge_incoming) (wave 4, parallel with 04-06)
+- [ ] 04-06-PLAN.md — Own username from GET /api/v1/me once per connection and on :reconnect; pending rows authored by it (wave 4, parallel with 04-05)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 04-07-PLAN.md — `:q` warns while messages are undelivered; repeated `:q` or `:q!` quits (D-20); deterministic pty quit paths (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 04-08-PLAN.md — Proof against the Docker server 8.9.1 and 9.0.0 (docker_send, persistence), full phase gate, official-client UAT checkpoint (wave 6)
 
 ### Phase 5: Realtime
 **Goal**: Incoming messages appear live over a DDP WebSocket connection
