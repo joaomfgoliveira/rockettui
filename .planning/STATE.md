@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Connect & Read
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-11-17T10:57:27.171Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-11-17T11:04:46.863Z"
 last_activity: 2026-11-17
 last_activity_desc: Phase 03 execution started
-state_head: cd64fa944628699d60aec2b8b0a503f41bc14f38
+state_head: 174159478f8ac301c45cc1fca94c080cf697a750
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 14
+  completed_plans: 15
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 03 (Connect & Read) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-11-17 — Phase 03 execution started
 
@@ -59,6 +59,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 03]: 03-02: local server facts for mapping: discussion subscription name is the room id (title in fname), channels count only mentions as unread, history carries discussion-created system messages, categories work license-free via setPreferences plus MongoDB
 - [Phase 03]: 03-03: first history page merges before local messages and shifts a stored cursor; a failed first page leaves the room Failed and reopening retries; endpoint chosen by Room.private (server type p), never by name
 - [Phase 03]: 03-03: fake-source MessagesLoaded marks rooms Loaded+exhausted so Phase 1/2 snapshots stay unchanged; placeholders use messages.notice with no new theme element
+- [Phase 03]: 03-04: an older page that adds no message (empty or all ids held) ends the history; a shorter page never does; paging sends the raw server timestamp of the oldest held message
+- [Phase 03]: 03-04: MessageKind { Normal, System }; E2E leftovers keep kind Normal with the fixed text [encrypted message] and their msg and content are never mapped; attachment names are listed once across file, files and attachment titles
 
 ### Pending Todos
 
@@ -77,8 +79,8 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-17T10:57:27.071Z
-**Stopped at:** Completed 03-03-PLAN.md
+**Last session:** 2026-11-17T11:04:46.768Z
+**Stopped at:** Completed 03-04-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -93,3 +95,4 @@ None yet.
 | Phase 03 P01 | 8 min | 2 tasks | 19 files |
 | Phase 03 P02 | 7 min | 2 tasks | 9 files |
 | Phase 03 P03 | 5 min | 2 tasks | 18 files |
+| Phase 03 P04 | 6 min | 2 tasks | 15 files |
