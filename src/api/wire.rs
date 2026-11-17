@@ -84,6 +84,28 @@ pub struct WireRoom {
     pub lm: Option<ApiDate>,
 }
 
+#[derive(Deserialize)]
+pub struct PreferencesResp {
+    pub preferences: WirePrefs,
+}
+
+/// The part of `users.getPreferences` the sidebar folders need.
+#[derive(Deserialize)]
+pub struct WirePrefs {
+    #[serde(default, rename = "sidebarCategories")]
+    pub sidebar_categories: Vec<WireCategory>,
+}
+
+/// A user-defined sidebar category. The built-in entries carry `default: true`.
+#[derive(Deserialize)]
+pub struct WireCategory {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub default: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

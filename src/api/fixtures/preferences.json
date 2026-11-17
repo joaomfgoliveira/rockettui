@@ -1,0 +1,10 @@
+{
+  "preferences": {
+    "sidebarCategories": [
+      { "_id": "favorites", "name": "Favorites", "default": true },
+      { "_id": "cat-work", "name": "Work" },
+      { "_id": "cat-empty", "name": "Empty" }
+    ]
+  },
+  "success": true
+}

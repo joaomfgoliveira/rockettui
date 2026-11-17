@@ -238,6 +238,7 @@ mod tests {
 
     const SUBS: &str = include_str!("fixtures/subscriptions.json");
     const ROOMS: &str = include_str!("fixtures/rooms.json");
+    const PREFS: &str = include_str!("fixtures/preferences.json");
     const USER: &str = "u1";
     const TOKEN: &str = "SENTINEL-TOKEN-9c41";
 
@@ -445,5 +446,53 @@ mod tests {
             assert!(!format!("{error:?}").contains(TOKEN));
             assert!(!error.to_string().contains(TOKEN));
         }
+    }
+
+    /// All three endpoints answer; `prefs` mounts users.getPreferences with the given body.
+    async fn mount_rooms(server: &MockServer) {
+        mount_ok(server, "subscriptions.get", SUBS).await;
+        mount_ok(server, "rooms.get", ROOMS).await;
+    }
+
+    #[tokio::test]
+    async fn preferences_failure_falls_back() {
+        // A 400 (the server has no default preferences), a 500 and a body that is not JSON.
+        for broken in [
+            ResponseTemplate::new(400).set_body_string("{\"success\":false}"),
+            ResponseTemplate::new(500).set_body_string("oops"),
+            ResponseTemplate::new(200).set_body_raw("<html>no</html>", "text/html"),
+        ] {
+            let server = MockServer::start().await;
+            mount_rooms(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/users.getPreferences"))
+                .respond_with(broken)
+                .mount(&server)
+                .await;
+            let list = client_for(&server).load_rooms().await.expect("rooms load");
+            assert_eq!(list.rooms.len(), 7);
+            let names: Vec<&str> = list.folders.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(names, ["Favorites"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn preferences_requested() {
+        let server = MockServer::start().await;
+        mount_rooms(&server).await;
+        mount_ok(&server, "users.getPreferences", PREFS).await;
+        let list = client_for(&server).load_rooms().await.expect("rooms load");
+        let names: Vec<&str> = list.folders.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["Favorites", "Work"]);
+
+        let requests = server.received_requests().await.expect("recorded");
+        let prefs: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path() == "/api/v1/users.getPreferences")
+            .collect();
+        assert_eq!(prefs.len(), 1);
+        assert_eq!(prefs[0].method.as_str(), "GET");
+        assert_eq!(prefs[0].headers.get("x-user-id").unwrap(), USER);
+        assert_eq!(prefs[0].headers.get("x-auth-token").unwrap(), TOKEN);
     }
 }

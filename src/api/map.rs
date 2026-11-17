@@ -3,8 +3,8 @@
 //! `subscriptions.get` says which rooms the user joined and how they show; `rooms.get` adds what
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
-use crate::api::wire::{WireRoom, WireSub};
-use crate::data::{Room, RoomId, RoomKind};
+use crate::api::wire::{WirePrefs, WireRoom, WireSub};
+use crate::data::{Folder, Room, RoomId, RoomKind};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -89,13 +89,21 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
     out
 }
 
+/// The sidebar folders: a `Favorites` folder first, then the user's custom categories.
+pub fn folders(subs: &[WireSub], rooms: &[Room], prefs: Option<&WirePrefs>) -> Vec<Folder> {
+    let _ = (subs, rooms, prefs);
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::wire::{RoomsResp, SubscriptionsResp};
+    use crate::api::wire::{PreferencesResp, RoomsResp, SubscriptionsResp};
+    use crate::data::FolderId;
 
     const SUBS: &str = include_str!("fixtures/subscriptions.json");
     const ROOMS: &str = include_str!("fixtures/rooms.json");
+    const PREFS: &str = include_str!("fixtures/preferences.json");
 
     fn fixture_subs() -> Vec<WireSub> {
         serde_json::from_str::<SubscriptionsResp>(SUBS)
@@ -208,5 +216,64 @@ mod tests {
                 .iter()
                 .any(|r| format!("{r:?}").contains("SENTINEL-LASTMSG"))
         );
+    }
+
+    fn fixture_prefs() -> WirePrefs {
+        serde_json::from_str::<PreferencesResp>(PREFS)
+            .expect("preferences fixture")
+            .preferences
+    }
+
+    fn folder(id: &str, name: &str, rooms: &[&str]) -> Folder {
+        Folder {
+            id: FolderId(id.to_string()),
+            name: name.to_string(),
+            room_ids: rooms.iter().map(|r| RoomId((*r).to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn folders_union() {
+        let subs = fixture_subs();
+        let mapped = rooms(&subs, &fixture_rooms());
+        let prefs = fixture_prefs();
+        let made = folders(&subs, &mapped, Some(&prefs));
+        assert_eq!(
+            made,
+            [
+                folder("favorites", "Favorites", &["r-random"]),
+                folder("cat-work", "Work", &["r-devteam", "r-platform"]),
+            ]
+        );
+        // Each room is listed in at most one folder.
+        let mut seen = HashSet::new();
+        for room_id in made.iter().flat_map(|f| &f.room_ids) {
+            assert!(seen.insert(room_id), "{room_id:?} listed twice");
+        }
+    }
+
+    #[test]
+    fn folders_no_categories() {
+        let subs = fixture_subs();
+        let mapped = rooms(&subs, &fixture_rooms());
+        assert_eq!(
+            folders(&subs, &mapped, None),
+            [folder("favorites", "Favorites", &["r-random"])]
+        );
+
+        // No favorite and no category: no folder at all.
+        let plain = [sub(r#"{"rid":"r-1","t":"c","name":"one"}"#)];
+        let records = [record(r#"{"_id":"r-1"}"#)];
+        let mapped = rooms(&plain, &records);
+        assert!(folders(&plain, &mapped, None).is_empty());
+
+        // A favorite whose subscription was skipped (open = false) is not listed.
+        let hidden = [
+            sub(r#"{"rid":"r-1","t":"c","name":"one","f":true,"open":false}"#),
+            sub(r#"{"rid":"r-2","t":"c","name":"two"}"#),
+        ];
+        let records = [record(r#"{"_id":"r-1"}"#), record(r#"{"_id":"r-2"}"#)];
+        let mapped = rooms(&hidden, &records);
+        assert!(folders(&hidden, &mapped, None).is_empty());
     }
 }
