@@ -2,7 +2,7 @@
 
 > Full coverage by default. Opt-outs are explicit, reasoned decisions.
 >
-> Scope note: the deterministic detector (`api-coverage.cjs`) returned `detected: false` on the phase scope, but Phase 4 genuinely adds Rocket.Chat REST calls (the send path), so the matrix is written anyway, as in Phase 3. The capability surface is the message-sending part of the REST API a terminal chat client could use; server baseline 8.9.1 with a 9.0.0 pass (plan 04-08). Each INTEGRATE row names the plan that delivers it. Phase 3's rows (rooms, history, preferences) are unchanged. Plan numbers follow the current plan set, revision 2 (plans 04-01 to 04-08): plan 04-01 was split into 04-01 and 04-02 and plan 04-07 was added for D-20 in revision 1, and the D-18, D-20 and D-21 amendments are applied.
+> Scope note: the deterministic detector (`api-coverage.cjs`) returned `detected: false` on the phase scope, but Phase 4 genuinely adds Rocket.Chat REST calls (the send path), so the matrix is written anyway, as in Phase 3. The capability surface is the message-sending part of the REST API a terminal chat client could use; server baseline 8.9.1 with a 9.0.0 pass (plan 04-08). Each INTEGRATE row names the plan that delivers it. Phase 3's rows (rooms, history, preferences) are unchanged. Plan numbers follow the current plan set, revision 3 (plans 04-01 to 04-08): plan 04-01 was split into 04-01 and 04-02 and plan 04-07 was added for D-20 in revision 1, the D-18, D-20 and D-21 amendments are applied, and round 3 extends D-21's held-id rules to history pages (plan 04-05).
 
 | capability | decision | reason |
 |---|---|---|
@@ -22,5 +22,5 @@
 | server-side drafts / message drafts sync | OPT-OUT | explicitly out of scope: drafts stay in memory (D-10); persisting drafts is a Deferred Idea |
 | permission pre-check (permissions.listAll, rooms.info readOnly / muted) | OPT-OUT | explicitly out of scope: no client-side pre-check; the server's rejection surfaces as a failed message (D-11, Deferred Ideas) |
 | settings (Message_MaxAllowedSize) in the app | OPT-OUT | not needed: no client-side length cap beyond the 64 KiB input cap (D-12); read only by the dev probe |
-| realtime DDP echo of sent messages (stream-room-messages) | OPT-OUT | not needed yet: Phase 5 (MSG-03); its echo lands on the client `_id` through the D-13 helper from plan 04-05, whose held-id rules are D-21's (Sent: ignore; pending: confirm in place) |
+| realtime DDP echo of sent messages (stream-room-messages) | OPT-OUT | not needed yet: Phase 5 (MSG-03); its echo lands on the client `_id` through the D-13 helper from plan 04-05, whose held-id rules are D-21's (Sent: ignore; pending: confirm in place); the Phase 3 history loads (first page, refresh and older pages) follow the same rules through `messages::confirm_held`, so a delivered-but-Unconfirmed message is confirmed by a later history load (plan 04-05) |
 | rate-limit headers (X-RateLimit-*) | OPT-OUT | not needed: a 429 is a failed send with manual retry only (default (e)) |
