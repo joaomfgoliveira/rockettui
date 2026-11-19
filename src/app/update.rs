@@ -4,7 +4,9 @@
 
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
-use crate::app::{App, ConnState, Focus, MAX_CMDLINE, Mode, command, history, send, sidebar};
+use crate::app::{
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, history, send, sidebar,
+};
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
 use crate::ui::sanitize::sanitize_line;
@@ -42,6 +44,7 @@ pub fn update(app: &mut App, action: Action) {
             sidebar::on_rows_changed(app);
         }
         Action::LoadFailed(err) => app.conn = ConnState::Failed(err),
+        Action::MeLoaded(name) => own_username_loaded(app, name),
         Action::FoldersLoaded(folders) => {
             app.folders = folders;
             sidebar::on_rows_changed(app);
@@ -187,6 +190,22 @@ pub fn update(app: &mut App, action: Action) {
     }
 }
 
+/// The own username arrived (D-17): keep it in memory only, so every message sent from now on is
+/// authored by it while pending. A row composed before it arrived carries the `LOCAL_AUTHOR`
+/// fallback and is renamed, in every room; a `Sent` row (the server's own copy) and a row by any
+/// other author are left alone.
+fn own_username_loaded(app: &mut App, name: String) {
+    for held in app.messages.values_mut() {
+        for message in held
+            .iter_mut()
+            .filter(|m| m.send.is_unsent() && m.author == LOCAL_AUTHOR)
+        {
+            message.author.clone_from(&name);
+        }
+    }
+    app.own_username = Some(name);
+}
+
 /// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
 fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
     if app.mode != Mode::Insert {
@@ -251,7 +270,7 @@ mod tests {
     use crate::action::Action;
     use crate::app::{App, Focus, MAX_CMDLINE, sidebar};
     use crate::app::{Mode, update::update};
-    use crate::data::{RoomId, SendState, fake};
+    use crate::data::{Message, MessageKind, RoomId, SendState, fake};
     use crate::test_util::{app_80x24, press};
     use ratatui::layout::Size;
 
@@ -791,6 +810,86 @@ mod tests {
         assert_eq!(app.focus, Focus::Messages);
         update(&mut app, Action::FocusPrev);
         assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn me_loaded_sets_author() {
+        let mut app = app_80x24();
+        app.open_room(general());
+        assert_eq!(app.own_username, None);
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+        assert_eq!(app.own_username.as_deref(), Some("smoke"));
+        press(&mut app, "ihello<CR>");
+        let sent = app.messages[&general()].last().expect("the pending row");
+        assert_eq!(sent.body, "hello");
+        assert_eq!(sent.author, "smoke");
+        assert!(sent.send.is_unsent());
+    }
+
+    fn row(room: &str, id: &str, author: &str, send: SendState) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: RoomId(room.to_string()),
+            author: author.to_string(),
+            ts: 0,
+            body: "text".to_string(),
+            kind: MessageKind::Normal,
+            send,
+        }
+    }
+
+    fn authors(app: &App, room: &str) -> Vec<String> {
+        app.messages[&RoomId(room.to_string())]
+            .iter()
+            .map(|m| m.author.clone())
+            .collect()
+    }
+
+    #[test]
+    fn me_loaded_renames_pending() {
+        let mut app = app_80x24();
+        let general_before = app.messages[&general()].len();
+        let random = RoomId("random".to_string());
+        let random_before = app.messages[&random].len();
+        app.messages.get_mut(&general()).unwrap().extend([
+            row("general", "g-sending", "me", SendState::Sending),
+            row("general", "g-failed", "me", SendState::Failed),
+            row("general", "g-unconfirmed", "me", SendState::Unconfirmed),
+            row("general", "g-sent", "me", SendState::Sent),
+        ]);
+        app.messages.get_mut(&random).unwrap().push(row(
+            "random",
+            "r-queued",
+            "me",
+            SendState::Queued { reconcile: false },
+        ));
+
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+
+        let general_authors = authors(&app, "general");
+        assert_eq!(
+            general_authors[general_before..],
+            ["smoke", "smoke", "smoke", "me"],
+            "the three unsent rows are renamed, the Sent one is left alone"
+        );
+        assert_eq!(authors(&app, "random")[random_before..], ["smoke"]);
+        assert_eq!(app.own_username.as_deref(), Some("smoke"));
+    }
+
+    #[test]
+    fn me_loaded_keeps_other_authors() {
+        let mut app = app_80x24();
+        let before = app.messages[&general()].len();
+        app.messages.get_mut(&general()).unwrap().extend([
+            row("general", "g-other", "alice", SendState::Failed),
+            row("general", "g-mine", "me", SendState::Failed),
+        ]);
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+        assert_eq!(authors(&app, "general")[before..], ["alice", "smoke"]);
+        // A second, different name does not rename rows that already carry the first one.
+        update(&mut app, Action::MeLoaded("other".to_string()));
+        assert_eq!(authors(&app, "general")[before..], ["alice", "smoke"]);
+        assert_eq!(app.own_username.as_deref(), Some("other"));
     }
 
     #[test]

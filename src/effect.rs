@@ -33,6 +33,9 @@ impl std::fmt::Debug for SendText {
 pub enum Effect {
     /// Load the joined rooms and the sidebar folders.
     LoadRooms,
+    /// Load the user's own username with `GET /api/v1/me`, once per connection (D-17): at startup
+    /// and on `:reconnect`, never per send. Best effort: a failure reports nothing.
+    LoadMe,
     /// Load a page of a room's history: the newest `count` messages, or, with `before`, the page
     /// strictly older than that raw server timestamp.
     LoadHistory {
@@ -64,6 +67,8 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Err(error) => {
             return vec![match effect {
                 Effect::LoadRooms => Action::LoadFailed(error),
+                // LoadRooms already reports the client error; the username is best effort.
+                Effect::LoadMe => return Vec::new(),
                 Effect::LoadHistory { room, before, .. } => Action::HistoryFailed {
                     room,
                     older: before.is_some(),
@@ -80,6 +85,10 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Action::RoomsLoaded(list.rooms),
             ],
             Err(error) => vec![Action::LoadFailed(error)],
+        },
+        Effect::LoadMe => match client.me().await {
+            Ok(Some(name)) => vec![Action::MeLoaded(name)],
+            Ok(None) | Err(_) => Vec::new(),
         },
         Effect::LoadHistory {
             room,
@@ -218,6 +227,37 @@ mod tests {
                 error: ApiError::Unauthorized,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn load_me_actions() {
+        async fn serve(status: u16, body: &str) -> MockServer {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/me"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_raw(body.to_string(), "application/json"),
+                )
+                .mount(&server)
+                .await;
+            server
+        }
+        let server = serve(
+            200,
+            "{\"_id\":\"u1\",\"username\":\"smoke\",\"success\":true}",
+        )
+        .await;
+        let actions = run(Ok(client_for(&server)), Effect::LoadMe).await;
+        assert_eq!(actions, [Action::MeLoaded("smoke".to_string())]);
+
+        let server = serve(401, "{\"success\":false}").await;
+        assert_eq!(run(Ok(client_for(&server)), Effect::LoadMe).await, []);
+
+        let server = serve(200, "{\"username\":\"\"}").await;
+        assert_eq!(run(Ok(client_for(&server)), Effect::LoadMe).await, []);
+
+        assert_eq!(run(Err(ApiError::Client), Effect::LoadMe).await, []);
     }
 
     #[tokio::test]

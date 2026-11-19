@@ -67,6 +67,8 @@ pub enum Action {
     RoomsLoaded(Vec<Room>),
     FoldersLoaded(Vec<Folder>),
     MessagesLoaded(RoomId, Vec<Message>),
+    /// The user's own username from `GET /api/v1/me` (D-17). Its `Debug` never prints it.
+    MeLoaded(String),
     /// The room load failed; the error is a fixed kind with no payload text.
     LoadFailed(crate::api::ApiError),
     /// A page of history arrived, oldest first. `oldest_ts` is the raw server timestamp of its
@@ -179,6 +181,7 @@ impl std::fmt::Debug for Action {
                     messages.len()
                 )
             }
+            Action::MeLoaded(_) => write!(f, "MeLoaded(..)"),
             Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
             Action::HistoryLoaded {
                 room,
@@ -245,6 +248,10 @@ mod tests {
         let run = format!("{:?}", Action::RunCommand("SENTINEL-CMD-5e2a".to_string()));
         assert!(!run.contains("SENTINEL-CMD-5e2a"));
         assert_eq!(run, "RunCommand(..)");
+
+        let me = format!("{:?}", Action::MeLoaded("SENTINEL-AUTHOR-2b9d".to_string()));
+        assert!(!me.contains("SENTINEL-AUTHOR-2b9d"), "{me}");
+        assert_eq!(me, "MeLoaded(..)");
 
         let failed = format!(
             "{:?}",

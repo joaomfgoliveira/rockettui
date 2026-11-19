@@ -25,12 +25,15 @@ pub fn cmd_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// `:reconnect` / `:retry` (D-06, D-16): load the rooms again and retry every history page that
-/// failed. This and reopening a room are the only retries; the reducer never retries by itself,
-/// so a broken token cannot hammer the server. Realtime reconnect is Phase 5.
+/// `:reconnect` / `:retry` (D-06, D-16): load the rooms again, re-learn the own username (D-17) and
+/// retry every history page that failed. This and reopening a room are the only retries; the
+/// reducer never retries by itself, so a broken token cannot hammer the server. It never touches a
+/// pending, failed or unconfirmed send and sends nothing (D-08, as clarified by D-20). Realtime
+/// reconnect is Phase 5.
 pub fn cmd_reconnect(app: &mut App, _args: &[&str]) -> Result<(), String> {
     app.conn = ConnState::Connecting;
     app.effects.push(Effect::LoadRooms);
+    app.effects.push(Effect::LoadMe);
     history::retry_failed(app);
     Ok(())
 }
@@ -61,7 +64,7 @@ mod tests {
     use crate::app::history::HistoryState;
     use crate::app::update::update;
     use crate::app::{App, ConnState, Mode, StatusMsg};
-    use crate::data::{Room, RoomId, RoomKind};
+    use crate::data::{Message, MessageKind, Room, RoomId, RoomKind, SendState};
     use crate::effect::Effect;
     use crate::test_util::{app_80x24, press};
     use ratatui::layout::Size;
@@ -144,7 +147,7 @@ mod tests {
         let mut app = failed_app(ApiError::Unauthorized);
         press(&mut app, ":reconnect<CR>");
         assert_eq!(app.conn, ConnState::Connecting);
-        assert_eq!(app.effects, [Effect::LoadRooms]);
+        assert_eq!(app.effects, [Effect::LoadRooms, Effect::LoadMe]);
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.status_msg.is_none());
         assert!(!app.should_quit);
@@ -155,7 +158,7 @@ mod tests {
         let mut app = failed_app(ApiError::Unauthorized);
         press(&mut app, ":retry<CR>");
         assert_eq!(app.conn, ConnState::Connecting);
-        assert_eq!(app.effects, [Effect::LoadRooms]);
+        assert_eq!(app.effects, [Effect::LoadRooms, Effect::LoadMe]);
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.status_msg.is_none());
     }
@@ -183,7 +186,10 @@ mod tests {
             "a Loaded room is not refetched"
         );
         assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Loading));
-        assert_eq!(app.effects, [Effect::LoadRooms, history_effect("r-a")]);
+        assert_eq!(
+            app.effects,
+            [Effect::LoadRooms, Effect::LoadMe, history_effect("r-a")]
+        );
     }
 
     #[test]
@@ -192,7 +198,59 @@ mod tests {
         app.history.insert(rid("r-a"), HistoryState::Loading);
         press(&mut app, ":reconnect<CR>");
         assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Loading));
-        assert_eq!(app.effects, [Effect::LoadRooms]);
+        assert_eq!(app.effects, [Effect::LoadRooms, Effect::LoadMe]);
+    }
+
+    #[test]
+    fn reconnect_loads_me() {
+        let mut app = failed_app(ApiError::Timeout);
+        app.history.insert(rid("r-a"), HistoryState::Failed);
+        press(&mut app, ":reconnect<CR>");
+        assert_eq!(
+            app.effects,
+            [Effect::LoadRooms, Effect::LoadMe, history_effect("r-a")]
+        );
+        assert!(
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SendMessage { .. })),
+            "{:?}",
+            app.effects
+        );
+    }
+
+    #[test]
+    fn reconnect_leaves_sends() {
+        let mut app = failed_app(ApiError::Timeout);
+        let states = [
+            SendState::Failed,
+            SendState::Unconfirmed,
+            SendState::Queued { reconcile: true },
+            SendState::Sending,
+        ];
+        let rows: Vec<Message> = states
+            .iter()
+            .enumerate()
+            .map(|(n, send)| Message {
+                id: format!("rt-{n}"),
+                room_id: rid("r-a"),
+                author: "me".to_string(),
+                ts: 0,
+                body: "text".to_string(),
+                kind: MessageKind::Normal,
+                send: *send,
+            })
+            .collect();
+        app.messages.insert(rid("r-a"), rows.clone());
+        press(&mut app, ":reconnect<CR>");
+        assert_eq!(app.messages[&rid("r-a")], rows, "D-08: no send is touched");
+        assert!(
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SendMessage { .. })),
+            "nothing is sent: {:?}",
+            app.effects
+        );
     }
 
     #[test]

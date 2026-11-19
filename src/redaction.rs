@@ -202,6 +202,7 @@ fn sentinel_sweep() {
     };
     no_sentinel("Effect::LoadHistory", &format!("{effect:?}"));
     no_sentinel("Effect::LoadRooms", &format!("{:?}", Effect::LoadRooms));
+    no_sentinel("Effect::LoadMe", &format!("{:?}", Effect::LoadMe));
     // The send path: the text of a message being sent, and its effect and results (D-14).
     no_sentinel(
         "SendText",
@@ -242,6 +243,7 @@ fn sentinel_sweep() {
             room_ids: vec![RoomId("r-general".to_string())],
         }]),
         Action::MessagesLoaded(RoomId("r-general".to_string()), vec![message_with_body()]),
+        Action::MeLoaded(BODY.to_string()),
         Action::MessageSent {
             room: RoomId("r-general".to_string()),
             id: "rt-test-1".to_string(),

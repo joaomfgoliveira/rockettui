@@ -106,6 +106,8 @@ pub async fn run(
     app.id_prefix = session_id_prefix();
     app.conn = ConnState::Connecting;
     app.effects.push(Effect::LoadRooms);
+    // The own username, once per connection (D-17); `:reconnect` asks again, a send never does.
+    app.effects.push(Effect::LoadMe);
     let mut batch: Vec<Action> = Vec::new();
     // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.
     let mut key_deadline: Option<tokio::time::Instant> = None;
