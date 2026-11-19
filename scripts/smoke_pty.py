@@ -741,9 +741,14 @@ def scenario_send_unconfirmed(binary):
     os.write(fd, b"\x1b")
     time.sleep(0.3)
     type_keys(fd, buf, b"r")
-    swapped = lambda b: any(
-        "maybe sent" in row and MOCK_USERNAME in row for row in screen_of(b).rows()
-    )
+    # Since plan 04-06 the pending row already carries the username from /me, so the author cell can
+    # no longer tell the local row from the server's copy. Wait on the observable events instead: the
+    # reconcile GET reached the server, and the row has lost its unconfirmed `?` marker.
+    def swapped(b):
+        asked = any(r[0] == "GET" and r[1] == GET_MESSAGE_ENDPOINT for r in mock.requests)
+        rows = [row for row in screen_of(b).rows() if "maybe sent" in row]
+        return asked and bool(rows) and all("?" not in row for row in rows)
+
     if not read_until(fd, buf, swapped, 10):
         raise SmokeFail("`r` never turned the unconfirmed row into the server's copy")
     posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
