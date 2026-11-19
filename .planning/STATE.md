@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 04
 current_phase_name: Send Messages
 status: executing
-stopped_at: Phase 4 context gathered
-last_updated: "2026-11-19T19:03:02.542Z"
-last_activity: 2026-11-17
-last_activity_desc: Phase 03 complete, transitioned to Phase 4
-state_head: 4bf42eebf07e2fe238e5dbbbaa0dfee00dd6e27f
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-11-19T19:17:07.846Z"
+last_activity: 2026-11-19
+last_activity_desc: Phase 04 execution started
+state_head: f630bb98dc436765e46aed9ef9d3a281b3263654
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 26
-  completed_plans: 18
+  completed_plans: 19
   percent: 50
 ---
 
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-11-17)
 
 ## Current Position
 
-Phase: 04 (Send Messages) — READY TO EXECUTE
-Plan: Not started
+Phase: 04 (Send Messages) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-11-17 — Phase 03 complete, transitioned to Phase 4
+Last activity: 2026-11-19 — Phase 04 execution started
 
 Progress: [█████░░░░░] 50%
 
@@ -66,6 +66,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 03]: 03-06: :reconnect and :retry are one command row; retry_failed forgets Failed history entries and reopens only the current room, Loaded and Loading rooms are never refetched; the reducer never retries on its own
 - [Phase 03]: 03-06: src/redaction.rs is the single D-07 sentinel sweep; every new type holding a secret or message text must be added to it; Client::with_timeouts varies deadlines only, never TLS or redirect policy
 - [Phase 03]: 03-07: docker_env refuses a non-loopback server URL; docker_read asserts the wrapped halves of the attachment tag; the RESEARCH-derived mapping matched real 8.9.1 output and 9.0.0 passed with no client change
+- [Phase 04]: 04-01: chat.sendMessage keeps the client _id on 8.9.1 (probe P1); a repeated id is a 400 (A1), so reconcile via chat.getMessage stays in plan 04-03
+- [Phase 04]: 04-01: a send result is applied by (room, id) never by the current room; failures show one fixed 'message not sent: <reason>' per ApiError kind, never server text; all 4xx currently map to BadResponse
+- [Phase 04]: 04-01: client ids are App.id_prefix + local_seq; run() draws a per-process rt+32hex prefix once, tests keep local-
 
 ### Pending Todos
 
@@ -84,9 +87,9 @@ None yet.
 
 ## Session
 
-**Last session:** 2026-11-17T17:48:54.420Z
-**Stopped at:** Phase 4 context gathered
-**Resume file:** .planning/phases/04-send-messages/04-CONTEXT.md
+**Last session:** 2026-11-19T19:17:07.569Z
+**Stopped at:** Completed 04-01-PLAN.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -104,3 +107,4 @@ None yet.
 | Phase 03 P05 | 6 min | 2 tasks | 8 files |
 | Phase 03 P06 | 5 min | 2 tasks | 6 files |
 | Phase 03 P07 | 6 min | 2 tasks | 3 files |
+| Phase 04 P01 | 5 min | 3 tasks | 13 files |

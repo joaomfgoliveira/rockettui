@@ -120,11 +120,11 @@ Plans:
   1. User enters Insert mode, types a message and sends it
   2. The sent message appears in the room (verified in the official client)
 **UI hint**: yes
-**Plans:** 0/8 plans executed
+**Plans:** 1/8 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 04-01-PLAN.md — Wave 0 live probe of chat.sendMessage (P0-P7), then the IO tracer: Effect::SendMessage -> POST chat.sendMessage with a client _id -> MessageSent/SendFailed -> swap in place or status error; per-run id prefix (wave 1)
+- [x] 04-01-PLAN.md — Wave 0 live probe of chat.sendMessage (P0-P7), then the IO tracer: Effect::SendMessage -> POST chat.sendMessage with a client _id -> MessageSent/SendFailed -> swap in place or status error; per-run id prefix (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 04-02-PLAN.md — Enter sends: SendState on Message (literal sweep), pending row -> per-room queue -> swap in place; encrypted/blank guards; `send` pty scenario (wave 2)
@@ -171,6 +171,6 @@ Plans:
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
 | 3. Connect & Read | 7/7 | Complete    | 2026-11-17 |
-| 4. Send Messages | 0/8 | Planned     | - |
+| 4. Send Messages | 1/8 | In Progress | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |
