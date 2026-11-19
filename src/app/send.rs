@@ -185,7 +185,7 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
 /// fixed reason goes to the status bar (D-06), and the next queued message of the room goes out
 /// (D-16). Plan 04-03 splits `Unconfirmed` out of this for an unknown outcome (D-07, D-18).
 pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
-    app.status_msg = Some(StatusMsg::Error(send_error_text(error)));
+    app.status_msg = Some(StatusMsg::Error(send_error_text(error, false)));
     let Some(held) = app.messages.get_mut(&room) else {
         return;
     };
@@ -200,7 +200,7 @@ pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
 
 /// `message not sent: <reason>` with one fixed reason per error kind. It is deliberately not
 /// `ApiError`'s `Display`, whose hints point at `:reconnect` (D-08), and it never holds server text.
-pub fn send_error_text(error: ApiError) -> String {
+pub fn send_error_text(error: ApiError, _unconfirmed: bool) -> String {
     let reason = match error {
         ApiError::Unauthorized => "unauthorized, check the user id and token".to_string(),
         ApiError::Forbidden => "not allowed in this room".to_string(),
@@ -213,6 +213,8 @@ pub fn send_error_text(error: ApiError) -> String {
         ApiError::BadResponse => "unexpected response".to_string(),
         ApiError::TooLarge => "response too large".to_string(),
         ApiError::Client => "cannot build the HTTP client".to_string(),
+        ApiError::Rejected => "rejected (read-only, muted or too long)".to_string(),
+        ApiError::ConnectionLost => "connection lost".to_string(),
     };
     format!("message not sent: {reason}")
 }
@@ -826,49 +828,128 @@ mod tests {
         assert!(!app.messages.contains_key(&empty));
     }
 
+    /// Every `ApiError` value, with whether it leaves the outcome of a send unknown (D-07, D-18).
+    /// Written out here on purpose: it is the spec `outcome_unknown` is checked against.
+    fn all_errors() -> [(ApiError, bool); 13] {
+        [
+            (ApiError::Unauthorized, false),
+            (ApiError::Forbidden, false),
+            (ApiError::NotFound, false),
+            (ApiError::RateLimited, false),
+            (ApiError::Redirected, false),
+            (ApiError::Rejected, false),
+            (ApiError::Unreachable, false),
+            (ApiError::Client, false),
+            (ApiError::Timeout, true),
+            (ApiError::Server(502), true),
+            (ApiError::ConnectionLost, true),
+            (ApiError::BadResponse, true),
+            (ApiError::TooLarge, true),
+        ]
+    }
+
     #[test]
-    fn fail_status_has_no_body() {
-        let errors = [
-            ApiError::Unauthorized,
-            ApiError::Forbidden,
-            ApiError::NotFound,
-            ApiError::RateLimited,
-            ApiError::Redirected,
-            ApiError::Server(502),
-            ApiError::Unreachable,
-            ApiError::Timeout,
-            ApiError::BadResponse,
-            ApiError::TooLarge,
-            ApiError::Client,
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for error in errors {
+    fn fail_classification() {
+        for (error, unknown) in all_errors() {
             let mut app = open_general_app();
-            app.messages.entry(general()).or_default().push(msg(
-                &general(),
-                "rt-test-1",
-                "me",
-                0,
-                BODY,
-            ));
-            let before = app.messages[&general()].clone();
-            on_failed(&mut app, general(), "rt-test-1".to_string(), error);
+            press(&mut app, &format!("i{BODY}<CR>"));
+            let index = app.messages[&general()].len() - 1;
+            assert_eq!(app.messages[&general()][index].send, SendState::Sending);
+            let before = app.messages[&general()].len();
+
+            on_failed(&mut app, general(), "local-1".to_string(), error);
+            let held = &app.messages[&general()];
+            assert_eq!(held.len(), before, "{error:?}: the message keeps its place");
+            let expected = if unknown {
+                SendState::Unconfirmed
+            } else {
+                SendState::Failed
+            };
+            assert_eq!(held[index].send, expected, "{error:?}");
+            assert_eq!(held[index].body, BODY, "{error:?}: the row keeps its text");
             let Some(StatusMsg::Error(text)) = &app.status_msg else {
                 panic!("{error:?}: no error status");
             };
-            assert!(text.starts_with("message not sent: "), "{text}");
-            assert!(!text.contains(BODY), "{text}");
-            assert!(!text.contains(":reconnect"), "{text}");
-            assert!(seen.insert(text.clone()), "one reason per kind: {text}");
-            assert_eq!(
-                app.messages[&general()],
-                before,
-                "the message keeps its place"
-            );
+            let prefix = if unknown {
+                "message may not have been sent: "
+            } else {
+                "message not sent: "
+            };
+            assert!(text.starts_with(prefix), "{error:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn fail_text_fixed() {
+        for unconfirmed in [false, true] {
+            let mut seen = std::collections::HashSet::new();
+            for (error, _) in all_errors() {
+                let text = send_error_text(error, unconfirmed);
+                assert!(!text.contains(BODY), "{text}");
+                assert!(!text.contains(":reconnect"), "{text}");
+                assert!(!text.contains("http"), "{text}");
+                assert!(seen.insert(text.clone()), "one reason per kind: {text}");
+            }
         }
         assert_eq!(
-            send_error_text(ApiError::Server(503)),
+            send_error_text(ApiError::Server(503), false),
             "message not sent: server error (HTTP 503)"
         );
+        assert_eq!(
+            send_error_text(ApiError::Server(502), true),
+            "message may not have been sent: server error (HTTP 502)"
+        );
+        assert_eq!(
+            send_error_text(ApiError::Rejected, false),
+            "message not sent: rejected (read-only, muted or too long)"
+        );
+        assert_eq!(
+            send_error_text(ApiError::ConnectionLost, true),
+            "message may not have been sent: connection lost"
+        );
+    }
+
+    #[test]
+    fn unsent_never_resent_on_its_own() {
+        // One Failed and one Unconfirmed message; nothing the app does by itself sends them again:
+        // not a clock tick, not the next message, not `:reconnect`, not a result of another message.
+        let mut app = open_general_app();
+        let room = general();
+        let mut failed = msg(&room, "F1", "me", 2, "failed text");
+        failed.send = SendState::Failed;
+        let mut unknown = msg(&room, "U1", "me", 3, "unknown text");
+        unknown.send = SendState::Unconfirmed;
+        app.messages.entry(room.clone()).or_default().push(failed);
+        app.messages.entry(room.clone()).or_default().push(unknown);
+
+        update(&mut app, Action::Clock(1_794_909_600));
+        press(&mut app, ":reconnect<CR>");
+        press(&mut app, "inext<CR>");
+        answer_sent(&mut app, "local-1", 20);
+        update(&mut app, Action::Clock(1_794_909_700));
+        press(&mut app, "<Esc>:reconnect<CR>");
+
+        let sent: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(sent, ["local-1"], "only the new message was sent");
+        let held = &app.messages[&room];
+        let state_of = |id: &str| held.iter().find(|m| m.id == id).map(|m| m.send);
+        assert_eq!(state_of("F1"), Some(SendState::Failed));
+        assert_eq!(state_of("U1"), Some(SendState::Unconfirmed));
+    }
+
+    #[test]
+    fn discard_unconfirmed() {
+        // An Unconfirmed message is discarded like a Failed one (D-06).
+        let mut app = app_with_failed();
+        app.messages
+            .get_mut(&general())
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .send = SendState::Unconfirmed;
+        let before = app.messages[&general()].len();
+        press(&mut app, "dd");
+        assert_eq!(app.messages[&general()].len(), before - 1);
+        assert!(app.effects.is_empty());
     }
 }

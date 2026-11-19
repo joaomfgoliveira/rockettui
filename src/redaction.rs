@@ -118,7 +118,7 @@ const ALL_SEND_STATES: [SendState; 6] = [
     SendState::Unconfirmed,
 ];
 
-const ALL_ERRORS: [ApiError; 11] = [
+const ALL_ERRORS: [ApiError; 13] = [
     ApiError::Unauthorized,
     ApiError::Forbidden,
     ApiError::NotFound,
@@ -130,6 +130,8 @@ const ALL_ERRORS: [ApiError; 11] = [
     ApiError::BadResponse,
     ApiError::TooLarge,
     ApiError::Client,
+    ApiError::Rejected,
+    ApiError::ConnectionLost,
 ];
 
 #[test]
