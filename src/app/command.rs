@@ -253,6 +253,56 @@ mod tests {
         );
     }
 
+    /// A fake-data app with `general` open and one undelivered message in it.
+    fn app_with_failed() -> App {
+        let mut app = crate::test_util::app_80x24();
+        app.open_room(rid("general"));
+        app.messages
+            .get_mut(&rid("general"))
+            .expect("general")
+            .push(Message {
+                id: "u-1".to_string(),
+                room_id: rid("general"),
+                author: "me".to_string(),
+                ts: 0,
+                body: "SENTINEL-BODY-7f3a".to_string(),
+                kind: MessageKind::Normal,
+                send: SendState::Failed,
+            });
+        app
+    }
+
+    fn status_text(app: &App) -> String {
+        match &app.status_msg {
+            Some(StatusMsg::Error(m)) | Some(StatusMsg::Info(m)) => m.clone(),
+            None => String::new(),
+        }
+    }
+
+    #[test]
+    fn quit_warns_then_quits() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit);
+        assert_eq!(
+            status_text(&app),
+            "1 message not delivered: :q again or :q! to quit"
+        );
+        assert!(!status_text(&app).contains("SENTINEL"));
+        press(&mut app, ":q<CR>");
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn force_quit_skips_warning() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q!<CR>");
+        assert!(app.should_quit);
+        let mut fresh = app_with_failed();
+        press(&mut fresh, ":quit!<CR>");
+        assert!(fresh.should_quit);
+    }
+
     #[test]
     fn quit_after_failure() {
         let mut app = failed_app(ApiError::Unreachable);

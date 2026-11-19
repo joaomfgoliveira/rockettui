@@ -123,6 +123,8 @@ pub struct App {
     /// Pending count and key sequence between keys (D-05, D-06).
     pub matcher: Matcher,
     pub should_quit: bool,
+    /// Set when `:q` warned about undelivered messages (D-20): the next `:q` then quits.
+    pub quit_warned: bool,
     /// Fetch intents the reducer records; only `run()` drains them and spawns the requests.
     pub effects: Vec<crate::effect::Effect>,
     /// The state of the room load, for the status bar.
@@ -171,6 +173,7 @@ impl App {
             theme: config.theme,
             matcher: Matcher::default(),
             should_quit: false,
+            quit_warned: false,
             effects: Vec::new(),
             conn: ConnState::Idle,
             warnings: config.warnings,
@@ -295,6 +298,12 @@ impl App {
     /// The pending count and keys in Vim notation, empty when nothing is pending.
     pub fn pending_display(&self) -> String {
         self.matcher.display()
+    }
+
+    /// The number of messages, over every room, whose send state is not `Sent`: Queued, Sending,
+    /// Failed or Unconfirmed (D-20). Such messages live in memory only.
+    pub fn undelivered_count(&self) -> usize {
+        0
     }
 
     /// Display name of the open room, if one is open.
@@ -498,6 +507,35 @@ mod tests {
         assert_eq!(app.drafts.len(), 1);
         let shown = format!("{:?}", app.drafts[&rid("general")]);
         assert!(!shown.contains("secret"), "{shown}");
+    }
+
+    #[test]
+    fn undelivered_count_states() {
+        let mut app = crate::test_util::app_80x24();
+        assert_eq!(app.undelivered_count(), 0, "server messages never count");
+        let states = [
+            ("general", SendState::Queued { reconcile: false }),
+            ("random", SendState::Sending),
+            ("general", SendState::Failed),
+            ("general", SendState::Unconfirmed),
+            ("general", SendState::Sent),
+            ("random", SendState::Sent),
+        ];
+        for (n, (room, send)) in states.into_iter().enumerate() {
+            app.messages
+                .get_mut(&rid(room))
+                .expect("room")
+                .push(Message {
+                    id: format!("u-{n}"),
+                    room_id: rid(room),
+                    author: "me".to_string(),
+                    ts: 0,
+                    body: "text".to_string(),
+                    kind: crate::data::MessageKind::Normal,
+                    send,
+                });
+        }
+        assert_eq!(app.undelivered_count(), 4);
     }
 
     #[test]
