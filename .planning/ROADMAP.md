@@ -120,7 +120,7 @@ Plans:
   1. User enters Insert mode, types a message and sends it
   2. The sent message appears in the room (verified in the official client)
 **UI hint**: yes
-**Plans:** 6/8 plans executed
+**Plans:** 7/8 plans executed
 
 Plans:
 **Wave 1**
@@ -138,7 +138,7 @@ Plans:
 - [x] 04-06-PLAN.md — Own username from GET /api/v1/me once per connection and on :reconnect; pending rows authored by it (wave 4, parallel with 04-05)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 04-07-PLAN.md — `:q` warns while messages are undelivered; repeated `:q` or `:q!` quits (D-20); deterministic pty quit paths (wave 5)
+- [x] 04-07-PLAN.md — `:q` warns while messages are undelivered; repeated `:q` or `:q!` quits (D-20); deterministic pty quit paths (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 04-08-PLAN.md — Proof against the Docker server 8.9.1 and 9.0.0 (docker_send, persistence), full phase gate, official-client UAT checkpoint (wave 6)
@@ -171,6 +171,6 @@ Plans:
 | 1. Modal TUI Shell | 6/6 | Complete    | 2026-11-15 |
 | 2. Configuration System | 5/5 | Complete    | 2026-11-16 |
 | 3. Connect & Read | 7/7 | Complete    | 2026-11-17 |
-| 4. Send Messages | 6/8 | In Progress | - |
+| 4. Send Messages | 7/8 | In Progress | - |
 | 5. Realtime | 0/TBD | Not started | - |
 | 6. Company Server | 0/TBD | Not started | - |
