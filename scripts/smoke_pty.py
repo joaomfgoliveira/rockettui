@@ -234,6 +234,7 @@ def history_reply(path, query):
 
 SEND_ENDPOINT = "/api/v1/chat.sendMessage"
 GET_MESSAGE_ENDPOINT = "/api/v1/chat.getMessage"
+ME_ENDPOINT = "/api/v1/me"
 
 
 def _now_iso():
@@ -344,6 +345,10 @@ def start_mock(mode="ok"):
                 self.reply(*send_reply(self.server, body))
             elif self.command != "GET":
                 self.reply(405, {"success": False})
+            elif parsed.path == ME_ENDPOINT:
+                self.reply(
+                    200, {"_id": MOCK_USER_ID, "username": MOCK_USERNAME, "success": True}
+                )
             elif parsed.path == GET_MESSAGE_ENDPOINT:
                 self.reply(*get_message_reply(self.server, query))
             elif parsed.path in HISTORY_ENDPOINTS:
@@ -655,6 +660,45 @@ def scenario_send_retry(binary):
     posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
     if len(posts) != 3:
         raise SmokeFail(f"expected three chat.sendMessage POSTs, saw {len(posts)}")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
+
+
+def scenario_send_author(binary):
+    """D-17 in the real binary: the own username is learned once with GET /api/v1/me at startup, so
+    a message the server never echoed (a Failed row) is still drawn under `smoke`, not under the
+    `me` fallback. The /me requests are counted as a total since launch."""
+    mock = start_mock()
+    mock.fail_next = [400]
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, b"who am i")
+    type_keys(fd, buf, b"\r")
+    # The status line is read before ESC: any key press clears it.
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("message not sent"), 10):
+        raise SmokeFail("a rejected send never showed `message not sent`")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    # The row was never confirmed by the server, so its author can only have come from /me.
+    if not any("who am i" in row and MOCK_USERNAME in row for row in screen_of(buf).rows()):
+        raise SmokeFail("the pending row is not drawn under the username from /me")
+
+    def me_gets():
+        return [r for r in mock.requests if r[0] == "GET" and r[1] == ME_ENDPOINT]
+
+    if len(me_gets()) != 1:
+        raise SmokeFail(f"expected exactly one GET /api/v1/me before :reconnect: {mock.requests}")
+    if not me_gets()[0][3]:
+        raise SmokeFail("the /me request was not authenticated")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)
@@ -1205,6 +1249,7 @@ SCENARIOS = {
     "insert": scenario_insert,
     "send": scenario_send,
     "send_retry": scenario_send_retry,
+    "send_author": scenario_send_author,
     "send_unconfirmed": scenario_send_unconfirmed,
     "config_layout": scenario_config_layout,
     "config_keymap": scenario_config_keymap,

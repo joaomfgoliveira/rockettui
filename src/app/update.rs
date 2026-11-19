@@ -42,6 +42,7 @@ pub fn update(app: &mut App, action: Action) {
             sidebar::on_rows_changed(app);
         }
         Action::LoadFailed(err) => app.conn = ConnState::Failed(err),
+        Action::MeLoaded(name) => own_username_loaded(app, name),
         Action::FoldersLoaded(folders) => {
             app.folders = folders;
             sidebar::on_rows_changed(app);
@@ -185,6 +186,12 @@ pub fn update(app: &mut App, action: Action) {
         // A `cmd:<command>` binding: runs exactly as typing `:<command><CR>` would.
         Action::RunCommand(line) => command::execute(app, &line),
     }
+}
+
+/// The own username arrived (D-17): keep it in memory only, so every message sent from now on is
+/// authored by it while pending.
+fn own_username_loaded(app: &mut App, name: String) {
+    app.own_username = Some(name);
 }
 
 /// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
@@ -791,6 +798,20 @@ mod tests {
         assert_eq!(app.focus, Focus::Messages);
         update(&mut app, Action::FocusPrev);
         assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn me_loaded_sets_author() {
+        let mut app = app_80x24();
+        app.open_room(general());
+        assert_eq!(app.own_username, None);
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+        assert_eq!(app.own_username.as_deref(), Some("smoke"));
+        press(&mut app, "ihello<CR>");
+        let sent = app.messages[&general()].last().expect("the pending row");
+        assert_eq!(sent.body, "hello");
+        assert_eq!(sent.author, "smoke");
+        assert!(sent.send.is_unsent());
     }
 
     #[test]

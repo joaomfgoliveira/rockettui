@@ -133,6 +133,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::Paste(_)
         | Action::RoomsLoaded(_)
         | Action::FoldersLoaded(_)
+        | Action::MeLoaded(_)
         | Action::MessagesLoaded(..)
         | Action::LoadFailed(_)
         | Action::HistoryLoaded { .. }

@@ -117,6 +117,14 @@ pub struct WireCategory {
     pub default: bool,
 }
 
+/// The part of `GET /api/v1/me` the client reads: the user's own username (D-17). The rest of the
+/// large document (email, roles, settings, services) is not declared, so serde skips it.
+#[derive(Deserialize)]
+pub struct MeResp {
+    #[serde(default)]
+    pub username: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct HistoryResp {
     #[serde(default)]

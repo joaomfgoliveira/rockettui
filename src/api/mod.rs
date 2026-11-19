@@ -304,6 +304,13 @@ impl Client {
         read_json(request, ApiError::BadResponse).await
     }
 
+    /// The user's own username from `GET /api/v1/me` (D-17), `None` when the answer holds none or
+    /// an empty one. Best effort: the caller ignores every error and keeps its fallback author.
+    pub async fn me(&self) -> Result<Option<String>, ApiError> {
+        let resp: wire::MeResp = self.get_json("me", &[]).await?;
+        Ok(resp.username.filter(|name| !name.is_empty()))
+    }
+
     /// Ask the server for message `id` of `room` with `GET chat.getMessage` (D-15): the reconcile
     /// step before a retried `Unconfirmed` message is posted again. Any error means the answer is
     /// not known; the caller treats every non-200 as "not stored".
@@ -507,6 +514,36 @@ mod tests {
     async fn effect_run_without_client_fails_closed() {
         let actions = effect::run(Err(ApiError::Client), Effect::LoadRooms).await;
         assert_eq!(actions, [Action::LoadFailed(ApiError::Client)]);
+    }
+
+    #[tokio::test]
+    async fn me_username() {
+        let me = |body: &str| {
+            let body = body.to_string();
+            async move {
+                let server = MockServer::start().await;
+                mount_ok(&server, "me", &body).await;
+                client_for(&server).me().await
+            }
+        };
+        let full = "{\"_id\":\"u1\",\"username\":\"smoke\",\"success\":true,\"roles\":[\"user\"]}";
+        assert_eq!(me(full).await, Ok(Some("smoke".to_string())));
+        assert_eq!(me("{\"_id\":\"u1\",\"success\":true}").await, Ok(None));
+        assert_eq!(me("{\"username\":\"\"}").await, Ok(None));
+        assert_eq!(me("{\"username\":null}").await, Ok(None));
+        assert_eq!(
+            me("<html>not json</html>").await,
+            Err(ApiError::BadResponse)
+        );
+
+        // `mount_ok` only answers when both auth headers are right, so a 200 above proves the
+        // request carried them; a 401 is Unauthorized.
+        let server = MockServer::start().await;
+        mount_status(&server, "me", 401).await;
+        assert_eq!(client_for(&server).me().await, Err(ApiError::Unauthorized));
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method.as_str(), "GET");
     }
 
     #[test]
