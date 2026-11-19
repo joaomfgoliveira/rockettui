@@ -76,8 +76,14 @@ pub fn submit(app: &mut App) {
 
 /// Start the next send of `room`: nothing while a message of the room is `Sending`; otherwise the
 /// first `Queued` message in order becomes `Sending` and its effect is recorded. `Failed` and
-/// `Unconfirmed` messages are skipped, so a failure never blocks the queue behind it (D-16).
+/// `Unconfirmed` messages are skipped, so a failure never blocks the queue behind it (D-16). Nothing
+/// starts either while `App.awaiting_answer` has an entry for the room: that row was confirmed by a
+/// server copy but its own request has not answered, so the slot is still taken (D-03).
 pub fn pump(app: &mut App, room: &RoomId) {
+    // A row confirmed early by a server copy still has its POST outstanding (D-03).
+    if app.awaiting_answer.contains_key(room) {
+        return;
+    }
     let Some(held) = app.messages.get_mut(room) else {
         return;
     };
@@ -175,18 +181,33 @@ fn remove_at(app: &mut App, room: &RoomId, index: usize) {
 
 /// The server accepted message `id` of `room` and answered with its stored copy: replace the held
 /// message with that id by `message`, marked `Sent`, at the same index (D-04), then start the next
-/// queued message of the room (D-03). When `room` holds no message with that id nothing changes.
+/// queued message of the room (D-03). When `room` no longer holds that id the server's message goes
+/// through `messages::merge_incoming` instead (D-13, D-21), and the answer releases the room's
+/// `awaiting_answer` entry when it names this id.
 pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
-    let Some(held) = app.messages.get_mut(&room) else {
-        return;
-    };
-    if let Some(slot) = held.iter_mut().find(|m| m.id == id) {
-        *slot = Message {
-            send: SendState::Sent,
-            ..message
-        };
-        pump(app, &room);
+    let slot = app
+        .messages
+        .get_mut(&room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == id));
+    match slot {
+        Some(slot) => {
+            *slot = Message {
+                send: SendState::Sent,
+                ..message
+            };
+        }
+        // The row is gone (discarded meanwhile): the server holds the message, so it goes through
+        // the one append path, which also keeps a repeated answer from adding it twice (D-13).
+        None => {
+            messages::merge_incoming(app, &room, message);
+        }
     }
+    // This answer is the end of the request that kept the in-flight slot of a row confirmed early
+    // by a server copy (D-03).
+    if app.awaiting_answer.get(&room) == Some(&id) {
+        app.awaiting_answer.remove(&room);
+    }
+    pump(app, &room);
 }
 
 /// The send of message `id` of `room` failed. A definite failure (the server refused it or the
@@ -194,7 +215,16 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
 /// connection, an unreadable answer) makes it `Unconfirmed`, because the server may have stored it
 /// (D-06, D-07, D-18). Either way it keeps its place, the fixed reason goes to the status bar, and
 /// the next queued message of the room goes out (D-16). Nothing here resends it: only `retry` does.
+///
+/// When `App.awaiting_answer` names this id, the row was already confirmed `Sent` by the server's
+/// own copy: the entry is dropped, no row changes, no status error is shown, and the queue goes on
+/// (D-03, D-21).
 pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
+    if app.awaiting_answer.get(&room) == Some(&id) {
+        app.awaiting_answer.remove(&room);
+        pump(app, &room);
+        return;
+    }
     let unconfirmed = error.outcome_unknown();
     app.status_msg = Some(StatusMsg::Error(send_error_text(error, unconfirmed)));
     let Some(held) = app.messages.get_mut(&room) else {

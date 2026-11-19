@@ -175,14 +175,49 @@ pub enum Merge {
     Confirmed(usize),
 }
 
-/// The held-id rule of D-13 as amended by D-21, for one server message. See the implementation.
-pub fn confirm_held(_app: &mut App, _room: &RoomId, _message: &Message) -> Option<Merge> {
-    None
+/// The held-id rule of D-13 as amended by D-21, for one server message: the one place it lives,
+/// shared by `merge_incoming` and the history merges.
+///
+/// `None` when `room` holds no message with `message.id` (nothing changed; the caller adds it). A
+/// held `Sent` copy is `Some(Ignored)`. A held copy that is still pending (Queued, Sending, Failed
+/// or Unconfirmed) is replaced in place by a clone of `message` marked `Sent` and reported as
+/// `Some(Confirmed(index))`, so a send whose server answer was lost is confirmed by a later server
+/// copy. When the replaced copy was `Sending`, its POST has not answered, so the room's single
+/// in-flight slot stays occupied: `App.awaiting_answer` records the room and the id until
+/// `send::on_sent` or `send::on_failed` releases it (D-03).
+///
+/// It matches by `_id` within `room` only (T-04-18) and never pumps, touches `msg_views` or records
+/// an effect: an in-place replace keeps every index.
+pub fn confirm_held(app: &mut App, room: &RoomId, message: &Message) -> Option<Merge> {
+    let held = app.messages.get_mut(room)?;
+    let index = held.iter().position(|m| m.id == message.id)?;
+    let was = held[index].send;
+    if was == SendState::Sent {
+        return Some(Merge::Ignored);
+    }
+    held[index] = Message {
+        send: SendState::Sent,
+        ..message.clone()
+    };
+    if was == SendState::Sending {
+        app.awaiting_answer.insert(room.clone(), message.id.clone());
+    }
+    Some(Merge::Confirmed(index))
 }
 
-/// The one append path for a server message outside a history page (D-13, D-21).
+/// The one append path for a server message that arrives outside a history page (D-13, D-21):
+/// whatever `confirm_held` decides when the `_id` is held, otherwise the message is appended,
+/// marked `Sent`, creating the room's vector. Phase 5's realtime echo of the user's own message
+/// lands here, as a no-op or a confirmation on its client id. It does not pump and does not touch
+/// `msg_views`: an append shifts no existing index.
 pub fn merge_incoming(app: &mut App, room: &RoomId, message: Message) -> Merge {
-    app.messages.entry(room.clone()).or_default().push(message);
+    if let Some(outcome) = confirm_held(app, room, &message) {
+        return outcome;
+    }
+    app.messages.entry(room.clone()).or_default().push(Message {
+        send: SendState::Sent,
+        ..message
+    });
     Merge::Appended
 }
 

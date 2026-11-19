@@ -130,31 +130,35 @@ pub fn maybe_load_older(app: &mut App) {
 /// The status line shown at the top of a room with no older message.
 const BEGINNING: &str = "Beginning of history";
 
-/// A page of history arrived (`messages` oldest first). The first page is merged in front of any
-/// messages the room already holds (local sends), skipping ids already present; an empty first
-/// page marks the room exhausted, since no older page can follow. An older page is prepended
-/// without the messages already held and keeps the cursor on the same message at the same screen
-/// row; an empty page or one with nothing new marks the room exhausted (D-14).
+/// A page of history arrived (`page` oldest first). The first page is merged in front of any
+/// messages the room already holds (local sends); an empty first page marks the room exhausted,
+/// since no older page can follow. An older page is prepended and keeps the cursor on the same
+/// message at the same screen row; an empty page or one with nothing new marks the room exhausted
+/// (D-14).
+///
+/// Held ids follow D-21 in both cases, through `messages::confirm_held`: a page message whose id is
+/// held as `Sent` is ignored, and one held as a pending copy (Queued, Sending, Failed, Unconfirmed)
+/// replaces it in place and marks it `Sent`, keeping its position and any stored cursor. Only the
+/// messages the room does not hold are prepended.
 pub fn on_loaded(
     app: &mut App,
     room: RoomId,
-    messages: Vec<Message>,
+    page: Vec<Message>,
     oldest_ts: Option<String>,
     older: bool,
 ) {
     if older {
-        on_older_page(app, room, messages, oldest_ts);
+        on_older_page(app, room, page, oldest_ts);
         return;
     }
 
-    let exhausted = messages.is_empty();
-    let held = app.messages.entry(room.clone()).or_default();
-    let have: HashSet<String> = held.iter().map(|m| m.id.clone()).collect();
-    let mut merged: Vec<Message> = messages
+    let exhausted = page.is_empty();
+    let mut merged: Vec<Message> = page
         .into_iter()
-        .filter(|m| !have.contains(&m.id))
+        .filter(|m| messages::confirm_held(app, &room, m).is_none())
         .collect();
     let added = merged.len();
+    let held = app.messages.entry(room.clone()).or_default();
     merged.append(held);
     *held = merged;
     // A stored view points at an index; the new messages sit in front of it.
@@ -172,8 +176,8 @@ pub fn on_loaded(
     );
 }
 
-/// The older-page branch of `on_loaded`: prepend what is not held yet (de-duplicated by id, the
-/// page itself included), keep a stored view on the same message and the same screen row, and
+/// The older-page branch of `on_loaded`: prepend what is not held yet (held ids follow D-21 through
+/// `messages::confirm_held`; the page's own repeats are dropped), keep a stored view on the same message and the same screen row, and
 /// move `oldest_ts` back. A page with nothing new ends the history, so a misbehaving server
 /// cannot cause a request loop.
 fn on_older_page(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Option<String>) {
@@ -190,13 +194,14 @@ fn on_older_page(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opt
         )
     });
 
-    let held = app.messages.entry(room.clone()).or_default();
-    let mut have: HashSet<String> = held.iter().map(|m| m.id.clone()).collect();
+    // `seen` holds the ids already taken from this page, so a page that repeats an id adds it once.
+    let mut seen: HashSet<String> = HashSet::new();
     let mut merged: Vec<Message> = page
         .into_iter()
-        .filter(|m| have.insert(m.id.clone()))
+        .filter(|m| messages::confirm_held(app, &room, m).is_none() && seen.insert(m.id.clone()))
         .collect();
     let added = merged.len();
+    let held = app.messages.entry(room.clone()).or_default();
     merged.append(held);
     *held = merged;
 
