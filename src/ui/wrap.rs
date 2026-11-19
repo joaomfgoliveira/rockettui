@@ -114,9 +114,10 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 /// `theme.messages_time` and body text `theme.messages_body`; padding and indent stay raw spans.
 /// A `MessageKind::System` message takes `theme.messages_notice` for its author and its text.
 ///
-/// The send state decides the rest (`send_look`, D-01): a `Queued` or `Sending` message draws
-/// `theme.markers.sending` where its time would be, and the time cell, the author and the body all
-/// take `theme.messages_pending`. Other states keep the confirmed look here until they get their own.
+/// The send state decides the rest (`send_look`, D-01, D-06): a `Queued` or `Sending` message draws
+/// `theme.markers.sending` where its time would be and a `Failed` one `markers.failed`, an
+/// `Unconfirmed` one `markers.unconfirmed`; the time cell, the author and the body then all take
+/// `theme.messages_pending` (Queued, Sending) or `theme.messages_failed` (Failed, Unconfirmed).
 /// The marker is padded and measured exactly like the time, so no body moves.
 ///
 /// Compact caps the author column at `width - (time_col + 1 + 2 + MIN_BODY)` (saturating), so the
@@ -211,9 +212,15 @@ fn send_look(msg: &Message, ctx: &RowCtx) -> (String, Option<ratatui::style::Sty
             sanitize_line(&ctx.theme.markers.sending).into_owned(),
             Some(ctx.theme.messages_pending),
         ),
-        SendState::Sent | SendState::Failed | SendState::Unconfirmed => {
-            (format_ts(ctx.time_format, msg.ts, ctx.zone), None)
-        }
+        SendState::Failed => (
+            sanitize_line(&ctx.theme.markers.failed).into_owned(),
+            Some(ctx.theme.messages_failed),
+        ),
+        SendState::Unconfirmed => (
+            sanitize_line(&ctx.theme.markers.unconfirmed).into_owned(),
+            Some(ctx.theme.messages_failed),
+        ),
+        SendState::Sent => (format_ts(ctx.time_format, msg.ts, ctx.zone), None),
     }
 }
 

@@ -208,7 +208,9 @@ impl App {
             .filter(|m| m.send.is_unsent())
             .map(|m| match m.send {
                 SendState::Queued { .. } | SendState::Sending => markers.sending.width(),
-                SendState::Sent | SendState::Failed | SendState::Unconfirmed => 0,
+                SendState::Failed => markers.failed.width(),
+                SendState::Unconfirmed => markers.unconfirmed.width(),
+                SendState::Sent => 0,
             })
             .max()
             .unwrap_or(0)

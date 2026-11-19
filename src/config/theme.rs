@@ -42,6 +42,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.body",
     "messages.notice",
     "messages.pending",
+    "messages.failed",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -81,6 +82,8 @@ const MARKER_KEYS: &[&str] = &[
     "team",
     "direct_message",
     "sending",
+    "failed",
+    "unconfirmed",
 ];
 
 /// Border types a `type` key accepts (A6).
@@ -108,7 +111,10 @@ pub struct Markers {
     pub direct_message: String,
     /// Drawn in place of the time of a message that is `Queued` or `Sending` (D-01).
     pub sending: String,
+    /// Drawn in place of the time of a send that did not reach the server (D-06).
     pub failed: String,
+    /// Drawn in place of the time of a send whose outcome is unknown: a timeout, a lost
+    /// connection or a 5xx (D-07, D-18).
     pub unconfirmed: String,
 }
 
@@ -127,8 +133,8 @@ impl Default for Markers {
             team: glyph(RoomKind::Team),
             direct_message: glyph(RoomKind::DirectMessage),
             sending: "\u{2026}".to_string(),
-            failed: String::new(),
-            unconfirmed: String::new(),
+            failed: "!".to_string(),
+            unconfirmed: "?".to_string(),
         }
     }
 }
@@ -159,6 +165,8 @@ impl Markers {
             "team" => &mut self.team,
             "direct_message" => &mut self.direct_message,
             "sending" => &mut self.sending,
+            "failed" => &mut self.failed,
+            "unconfirmed" => &mut self.unconfirmed,
             _ => return None,
         };
         Some((slot, MAX_MARKER_WIDTH))
@@ -198,6 +206,7 @@ pub struct Theme {
     /// Author, marker and body of a message the server has not confirmed yet: `Queued` or
     /// `Sending` (D-01).
     pub messages_pending: Style,
+    /// Author, marker and body of a message that is `Failed` or `Unconfirmed` (D-06).
     pub messages_failed: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
@@ -235,7 +244,7 @@ impl Default for Theme {
             messages_body: plain,
             messages_notice: plain.add_modifier(Modifier::DIM),
             messages_pending: plain.add_modifier(Modifier::DIM),
-            messages_failed: plain,
+            messages_failed: plain.fg(Color::Red),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -271,6 +280,7 @@ impl Theme {
             ("messages", "body") => Some(&mut self.messages_body),
             ("messages", "notice") => Some(&mut self.messages_notice),
             ("messages", "pending") => Some(&mut self.messages_pending),
+            ("messages", "failed") => Some(&mut self.messages_failed),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,

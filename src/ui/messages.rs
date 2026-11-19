@@ -750,8 +750,7 @@ mod tests {
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
         // Header rows are y 1, 3, 5, 7, 9; each body sits at x 3 on the row below.
-        let marker_at =
-            |y: u16| row_text(&terminal, y).contains(|c| matches!(c, '\u{2026}' | '!' | '?'));
+        let marker_at = |y: u16| row_text(&terminal, y).contains(['\u{2026}', '!', '?']);
         assert!(!marker_at(1), "a Sent header has a time, not a marker");
         for y in [3u16, 5, 7, 9] {
             assert!(marker_at(y), "row {y} {}", row_text(&terminal, y));
