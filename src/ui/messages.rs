@@ -669,4 +669,126 @@ mod tests {
         assert_eq!(buffer[(x, 18)].fg, Color::Reset);
         assert_eq!(buffer[(x, 18)].modifier, Modifier::empty());
     }
+
+    /// A room holding one message in each send state, in this order.
+    fn app_with_every_state(layout: wrap::MessageLayout) -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        app.message_layout = layout;
+        let room = RoomId("quiet".to_string());
+        let msg = |id: &str, author: &str, ts: i64, body: &str, send: SendState| Message {
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: author.to_string(),
+            ts,
+            body: body.to_string(),
+            kind: MessageKind::Normal,
+            send,
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg("1", "alice", 34_440, "delivered message", SendState::Sent),
+                msg("2", "me", 34_500, "in flight", SendState::Sending),
+                msg(
+                    "3",
+                    "me",
+                    34_560,
+                    "waiting its turn",
+                    SendState::Queued { reconcile: false },
+                ),
+                msg(
+                    "4",
+                    "me",
+                    34_620,
+                    "refused by the server",
+                    SendState::Failed,
+                ),
+                msg(
+                    "5",
+                    "me",
+                    34_680,
+                    "outcome not known",
+                    SendState::Unconfirmed,
+                ),
+            ],
+        );
+        app.open_room(room);
+        app
+    }
+
+    /// In Compact each message of `app_with_every_state` is one row, at y 1 to 5.
+    fn assert_state_styles(terminal: &Terminal<TestBackend>, body_x: u16) {
+        let buffer = terminal.backend().buffer();
+        let dim = |x: u16, y: u16| buffer[(x, y)].modifier.contains(Modifier::DIM);
+        for (y, name) in [(2u16, "Sending"), (3, "Queued")] {
+            assert!(dim(body_x, y), "{name} body not dim");
+            assert_ne!(buffer[(body_x, y)].fg, Color::Red, "{name}");
+        }
+        for (y, name) in [(4u16, "Failed"), (5, "Unconfirmed")] {
+            assert_eq!(buffer[(body_x, y)].fg, Color::Red, "{name} body not red");
+            assert!(!dim(body_x, y), "{name}");
+        }
+        assert!(!dim(body_x, 1), "Sent body is not dim");
+        assert_eq!(buffer[(body_x, 1)].fg, Color::Reset);
+    }
+
+    #[test]
+    fn send_states_compact_52x20() {
+        let app = app_with_every_state(wrap::MessageLayout::Compact);
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        for needle in ["\u{2026}", "!", "?"] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        assert_state_styles(&terminal, 14);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn send_states_two_line_52x20() {
+        let app = app_with_every_state(wrap::MessageLayout::TwoLine);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        // Header rows are y 1, 3, 5, 7, 9; each body sits at x 3 on the row below.
+        let marker_at =
+            |y: u16| row_text(&terminal, y).contains(|c| matches!(c, '\u{2026}' | '!' | '?'));
+        assert!(!marker_at(1), "a Sent header has a time, not a marker");
+        for y in [3u16, 5, 7, 9] {
+            assert!(marker_at(y), "row {y} {}", row_text(&terminal, y));
+        }
+        assert_eq!(buffer[(3, 2)].fg, Color::Reset, "Sent body");
+        assert!(
+            buffer[(3, 4)].modifier.contains(Modifier::DIM),
+            "Sending body"
+        );
+        assert!(
+            buffer[(3, 6)].modifier.contains(Modifier::DIM),
+            "Queued body"
+        );
+        assert_eq!(buffer[(3, 8)].fg, Color::Red, "Failed body");
+        assert_eq!(buffer[(3, 10)].fg, Color::Red, "Unconfirmed body");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn cursor_over_failed_row() {
+        let mut app = app_with_every_state(wrap::MessageLayout::Compact);
+        press(&mut app, "4gg");
+        assert_eq!(view(&app, &RoomId("quiet".to_string())).cursor, 3);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        // Row 4 is the Failed message on the cursor: the highlight covers it, the red stays.
+        for x in [1u16, 14, 30] {
+            assert!(
+                buffer[(x, 4)].modifier.contains(Modifier::REVERSED),
+                "x {x} not highlighted"
+            );
+        }
+        assert_eq!(
+            buffer[(14, 4)].fg,
+            Color::Red,
+            "failed style under the cursor"
+        );
+        assert!(!buffer[(14, 5)].modifier.contains(Modifier::REVERSED));
+    }
 }

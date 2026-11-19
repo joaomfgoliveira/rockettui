@@ -807,4 +807,78 @@ mod tests {
             }
         }
     }
+
+    /// Failed and Unconfirmed rows: the state's marker where the time would be, and author, marker
+    /// and body in messages_failed, in both layouts.
+    #[test]
+    fn failed_and_unconfirmed_rows() {
+        let theme = Theme::default();
+        assert_ne!(theme.messages_failed, theme.messages_pending);
+        let format = TimeFormat::default();
+        let long = "word ".repeat(30);
+        for (state, marker) in [
+            (crate::data::SendState::Failed, "!"),
+            (crate::data::SendState::Unconfirmed, "?"),
+        ] {
+            for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+                let ctx = RowCtx {
+                    layout,
+                    author_col: 5,
+                    time_col: 5,
+                    time_format: &format,
+                    zone: Zone::Utc,
+                    theme: &theme,
+                };
+                let m = with_state(state, "alice", "hello there");
+                let rows = render_rows(&m, 60, &ctx);
+                let (marker_span, author_span, body_span) = match layout {
+                    MessageLayout::Compact => (0, 2, 4),
+                    MessageLayout::TwoLine => (2, 0, 1),
+                };
+                let body_line = match layout {
+                    MessageLayout::Compact => &rows[0],
+                    MessageLayout::TwoLine => &rows[1],
+                };
+                let head = &rows[0];
+                assert_eq!(head.spans[marker_span].content.trim(), marker, "{layout:?}");
+                assert_eq!(head.spans[marker_span].style, theme.messages_failed);
+                assert_eq!(head.spans[author_span].content, "alice");
+                assert_eq!(head.spans[author_span].style, theme.messages_failed);
+                let body = &body_line.spans[body_span];
+                assert_eq!(body.content, "hello there");
+                assert_eq!(body.style, theme.messages_failed, "{layout:?}");
+                assert!(!text(&rows[0]).contains("00:00"), "{layout:?}");
+                let m = with_state(state, "alice", &long);
+                assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
+            }
+        }
+    }
+
+    /// A marker wider than the formatted time widens the room's time column, so every body
+    /// still starts at the same x.
+    #[test]
+    fn wide_marker_keeps_body_column() {
+        use crate::data::SendState;
+        let sources = crate::config::Sources {
+            config: Some("timestamp_format = \"%H\"\n".to_string()),
+            theme: Some("[markers]\nfailed = \"FAIL\"\n".to_string()),
+            ..Default::default()
+        };
+        let Ok(config) = crate::config::load_from_sources(&sources) else {
+            panic!("test config is invalid");
+        };
+        let app = crate::app::App::with_config(ratatui::layout::Size::new(80, 24), config);
+        let msgs = [
+            msg("alice", "sent body"),
+            with_state(SendState::Failed, "alice", "failed body"),
+        ];
+        let ctx = app.row_ctx(&msgs);
+        assert_eq!(ctx.time_col, 4);
+        let at = |m: &Message, needle: &str| {
+            let rows = render_rows(m, 60, &ctx);
+            let t = text(&rows[0]);
+            t[..t.find(needle).expect("body")].width()
+        };
+        assert_eq!(at(&msgs[0], "sent"), at(&msgs[1], "failed"));
+    }
 }

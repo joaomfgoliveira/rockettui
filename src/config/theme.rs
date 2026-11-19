@@ -108,6 +108,8 @@ pub struct Markers {
     pub direct_message: String,
     /// Drawn in place of the time of a message that is `Queued` or `Sending` (D-01).
     pub sending: String,
+    pub failed: String,
+    pub unconfirmed: String,
 }
 
 impl Default for Markers {
@@ -125,6 +127,8 @@ impl Default for Markers {
             team: glyph(RoomKind::Team),
             direct_message: glyph(RoomKind::DirectMessage),
             sending: "\u{2026}".to_string(),
+            failed: String::new(),
+            unconfirmed: String::new(),
         }
     }
 }
@@ -194,6 +198,7 @@ pub struct Theme {
     /// Author, marker and body of a message the server has not confirmed yet: `Queued` or
     /// `Sending` (D-01).
     pub messages_pending: Style,
+    pub messages_failed: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -230,6 +235,7 @@ impl Default for Theme {
             messages_body: plain,
             messages_notice: plain.add_modifier(Modifier::DIM),
             messages_pending: plain.add_modifier(Modifier::DIM),
+            messages_failed: plain,
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -762,8 +768,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            23,
-            "16 chrome and border paths plus the seven messages elements"
+            24,
+            "16 chrome and border paths plus the eight messages elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -996,6 +1002,12 @@ mod tests {
             Theme::default().messages_pending,
             Style::default().add_modifier(Modifier::DIM)
         );
+        assert_eq!(Markers::default().failed, "!");
+        assert_eq!(Markers::default().unconfirmed, "?");
+        assert_eq!(
+            Theme::default().messages_failed,
+            Style::default().fg(Color::Red)
+        );
     }
 
     #[test]
@@ -1012,6 +1024,26 @@ mod tests {
             assert_eq!(out.len(), 1, "{bad}: {out:?}");
             assert_eq!(out[0].severity, Severity::Error);
             assert_eq!(out[0].key.as_deref(), Some("markers.sending"));
+        }
+        let (theme, out) = parse_str(
+            "[markers]\nfailed = \"x\"\nunconfirmed = \"??\"\n[messages.failed]\nbg = \"yellow\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.markers.failed, "x");
+        assert_eq!(theme.markers.unconfirmed, "??");
+        assert_eq!(theme.messages_failed.bg, Some(Color::Yellow));
+        // The default red survives when only bg is set.
+        assert_eq!(theme.messages_failed.fg, Some(Color::Red));
+        for key in ["failed", "unconfirmed"] {
+            for bad in ["12345", "\\u001b[2J", "a\\u202eb"] {
+                let out = marker_problems(&format!("[markers]\n{key} = \"{bad}\"\n"));
+                assert_eq!(out.len(), 1, "{key} {bad}: {out:?}");
+                assert_eq!(out[0].severity, Severity::Error);
+                assert_eq!(
+                    out[0].key.as_deref(),
+                    Some(format!("markers.{key}").as_str())
+                );
+            }
         }
     }
 
@@ -1052,8 +1084,8 @@ mod tests {
         }
         let m = Markers::default();
         toml.push_str(&format!(
-            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\nsending = {:?}\n",
-            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message, m.sending
+            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\nsending = {:?}\nfailed = {:?}\nunconfirmed = {:?}\n",
+            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message, m.sending, m.failed, m.unconfirmed
         ));
         let (theme, out) = parse_str(&toml);
         assert!(out.is_empty(), "{out:?}\n{toml}");
