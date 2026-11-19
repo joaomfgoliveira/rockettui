@@ -95,6 +95,11 @@ pub struct App {
     pub cmdline: String,
     /// The multiline draft of the input bar (D-14).
     pub input: input_buf::InputBuffer,
+    /// The unsent drafts of the rooms that are not open, one per room (D-10). In memory only and
+    /// never written to disk; a draft leaves here only through `open_room` (back into `input`) and
+    /// is sent only by Enter in its own room. An empty draft is not stored. `InputBuffer`'s `Debug`
+    /// redacts the text.
+    pub drafts: HashMap<RoomId, input_buf::InputBuffer>,
     /// Counter behind the ids of locally appended messages.
     pub local_seq: u64,
     /// The prefix of every client message id: ids are `id_prefix` + `local_seq` (built by
@@ -150,6 +155,7 @@ impl App {
             sidebar: sidebar::SidebarState::default(),
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
+            drafts: HashMap::new(),
             local_seq: 0,
             id_prefix: "local-".to_string(),
             own_username: None,
@@ -328,6 +334,137 @@ mod tests {
         // Test ids are built from the prefix and the counter: local-1, local-2.
         assert_eq!(format!("{}{}", app.id_prefix, 1), "local-1");
         assert_eq!(format!("{}{}", app.id_prefix, 2), "local-2");
+    }
+
+    fn rid(name: &str) -> RoomId {
+        RoomId(name.to_string())
+    }
+
+    /// Open `name` the way a user does: focus the sidebar, put its cursor on the room, press Enter.
+    fn open_via_sidebar(app: &mut App, name: &str) {
+        app.focus = Focus::Sidebar;
+        let index = sidebar::rows(app)
+            .iter()
+            .position(|r| matches!(r, sidebar::SidebarRow::Room { id, .. } if id.0 == name))
+            .expect("room row is listed");
+        app.sidebar.cursor = index;
+        crate::test_util::press(app, "<CR>");
+        assert_eq!(app.current_room, Some(rid(name)));
+    }
+
+    /// The `SendMessage` effects recorded so far, as (room id, message id).
+    fn send_effects(app: &App) -> Vec<(String, String)> {
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                crate::effect::Effect::SendMessage { room, id, .. } => {
+                    Some((room.0.clone(), id.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn drafts_switch_and_restore() {
+        use crate::test_util::{press, render_to_string};
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        press(&mut app, "ifor general<Esc>");
+        open_via_sidebar(&mut app, "random");
+        assert!(app.input.is_empty(), "random has no draft yet");
+        press(&mut app, "ifor random<Esc>");
+
+        open_via_sidebar(&mut app, "general");
+        assert_eq!(app.input.text(), "for general");
+        assert!(render_to_string(&app, 80, 24).contains("for general"));
+        open_via_sidebar(&mut app, "random");
+        assert_eq!(app.input.text(), "for random");
+        assert!(render_to_string(&app, 80, 24).contains("for random"));
+    }
+
+    #[test]
+    fn drafts_same_room_keeps() {
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        crate::test_util::press(&mut app, "ikeep me<Esc>");
+        open_via_sidebar(&mut app, "general");
+        assert_eq!(app.input.text(), "keep me");
+        assert!(
+            app.drafts.is_empty(),
+            "the open room's draft is the live buffer"
+        );
+    }
+
+    #[test]
+    fn drafts_empty_not_stored() {
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        open_via_sidebar(&mut app, "random");
+        open_via_sidebar(&mut app, "general");
+        assert!(app.drafts.is_empty());
+    }
+
+    #[test]
+    fn drafts_before_any_room() {
+        let mut app = crate::test_util::app_80x24();
+        crate::test_util::press(&mut app, "ihello<Esc>");
+        assert_eq!(app.current_room, None);
+        open_via_sidebar(&mut app, "general");
+        assert_eq!(app.input.text(), "hello");
+        assert!(app.drafts.is_empty());
+    }
+
+    #[test]
+    fn drafts_send_goes_to_own_room() {
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        crate::test_util::press(&mut app, "iin general<Esc>");
+        open_via_sidebar(&mut app, "random");
+        assert!(app.input.is_empty(), "random shows its own (empty) draft");
+        open_via_sidebar(&mut app, "general");
+        let random_before = app.messages[&rid("random")].len();
+        let general_before = app.messages[&rid("general")].len();
+        crate::test_util::press(&mut app, "i<CR>");
+        assert_eq!(app.messages[&rid("random")].len(), random_before);
+        let held = &app.messages[&rid("general")];
+        assert_eq!(held.len(), general_before + 1);
+        assert_eq!(held[general_before].body, "in general");
+        assert_eq!(held[general_before].send, SendState::Sending);
+        assert_eq!(
+            send_effects(&app),
+            vec![("general".to_string(), "local-1".to_string())]
+        );
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn drafts_resettle_height() {
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        crate::test_util::press(&mut app, "ia<A-CR>b<A-CR>c<Esc>");
+        assert_eq!(app.input_rows(), 3);
+        open_via_sidebar(&mut app, "random");
+        assert_eq!(app.input_rows(), 1);
+        open_via_sidebar(&mut app, "general");
+        assert_eq!(app.input_rows(), 3);
+        let (w, h) = app.input_viewport();
+        assert_eq!(h, 3);
+        assert!(w > 0);
+        open_via_sidebar(&mut app, "random");
+        assert_eq!(app.input_rows(), 1);
+    }
+
+    #[test]
+    fn drafts_stay_in_memory_and_redacted() {
+        // T-04-15: the draft map is plain App state, and its Debug never shows the text.
+        let mut app = crate::test_util::app_80x24();
+        open_via_sidebar(&mut app, "general");
+        crate::test_util::press(&mut app, "isecret draft<Esc>");
+        open_via_sidebar(&mut app, "random");
+        assert_eq!(app.drafts.len(), 1);
+        let shown = format!("{:?}", app.drafts[&rid("general")]);
+        assert!(!shown.contains("secret"), "{shown}");
     }
 
     #[test]
