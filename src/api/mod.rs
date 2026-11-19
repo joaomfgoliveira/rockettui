@@ -7,7 +7,8 @@
 //! - the default rustls TLS verification is the only mode, there is no switch to weaken it;
 //! - a `reqwest::Error` is never formatted (its text holds the request URL), it is mapped to an
 //!   `ApiError` in one place;
-//! - every body is capped at `MAX_BODY_BYTES` and decoded leniently.
+//! - every body is capped at `MAX_BODY_BYTES` and decoded leniently;
+//! - the only requests are GETs and the one `chat.sendMessage` POST (Phase 4).
 
 pub mod map;
 pub mod wire;
@@ -118,6 +119,46 @@ fn send_error(e: &reqwest::Error) -> ApiError {
     }
 }
 
+/// Send `request`, check the HTTP status, read the body under the size cap and decode it. Shared
+/// by every GET and by the one `chat.sendMessage` POST, so they all keep the same rules: the status
+/// first (a redirect is an error, never followed), then the capped body, then lenient decoding.
+async fn read_json<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T, ApiError> {
+    let mut response = request.send().await.map_err(|e| send_error(&e))?;
+    if let Some(error) = status_error(response.status()) {
+        return Err(error);
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_BODY_BYTES as u64)
+    {
+        return Err(ApiError::TooLarge);
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| send_error(&e))? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(ApiError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
+}
+
+/// The body of `chat.sendMessage`: exactly the client `_id`, the room id and the text. Built from
+/// `Serialize` structs, never by hand, so the text is always escaped as JSON. It carries no
+/// server-owned field (`ts`, `u`, ...): Rocket.Chat 9.0.0 rejects them. No `Debug`: it holds text.
+#[derive(serde::Serialize)]
+struct SendBody<'a> {
+    message: SendMsg<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct SendMsg<'a> {
+    #[serde(rename = "_id")]
+    id: &'a str,
+    rid: &'a str,
+    msg: &'a str,
+}
+
 /// The joined rooms and the sidebar folders built from one load.
 pub struct RoomList {
     pub rooms: Vec<Room>,
@@ -211,8 +252,7 @@ impl Client {
         url
     }
 
-    /// GET `method` with `query`, check the HTTP status, read the body under the size cap and
-    /// decode it. Only GET is ever sent in Phase 3.
+    /// GET `method` with `query`, then `read_json`.
     async fn get_json<T: DeserializeOwned>(
         &self,
         method: &str,
@@ -222,24 +262,7 @@ impl Client {
         if !query.is_empty() {
             request = request.query(query);
         }
-        let mut response = request.send().await.map_err(|e| send_error(&e))?;
-        if let Some(error) = status_error(response.status()) {
-            return Err(error);
-        }
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_BODY_BYTES as u64)
-        {
-            return Err(ApiError::TooLarge);
-        }
-        let mut body: Vec<u8> = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| send_error(&e))? {
-            if body.len() + chunk.len() > MAX_BODY_BYTES {
-                return Err(ApiError::TooLarge);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
+        read_json(request).await
     }
 
     /// Load the user's joined rooms and sidebar folders: `subscriptions.get`, `rooms.get` and
@@ -280,6 +303,33 @@ impl Client {
         }
         let resp: wire::HistoryResp = self.get_json(history_method(kind, private), &query).await?;
         Ok(map::history(room, resp.messages))
+    }
+
+    /// Send `text` to `room` with `POST chat.sendMessage`, the client-chosen `id` as the message
+    /// `_id` (D-07, D-15): the server stores the message under that id, so the answer and every
+    /// later copy of the message carry it. The body is the exact text, no trim and no change
+    /// (D-12). The answer is the message as stored (server time and author), mapped like history.
+    /// Redirects stay disabled, so a 3xx is `ApiError::Redirected` and neither the text nor the
+    /// credentials reach the redirect target.
+    pub async fn send_message(
+        &self,
+        room: &RoomId,
+        id: &str,
+        text: &str,
+    ) -> Result<Message, ApiError> {
+        let body = SendBody {
+            message: SendMsg {
+                id,
+                rid: &room.0,
+                msg: text,
+            },
+        };
+        let request = self
+            .http
+            .post(self.endpoint("chat.sendMessage"))
+            .json(&body);
+        let resp: wire::MessageResp = read_json(request).await?;
+        Ok(map::message(room, resp.message))
     }
 }
 
@@ -556,6 +606,99 @@ mod tests {
         assert_eq!(prefs[0].method.as_str(), "GET");
         assert_eq!(prefs[0].headers.get("x-user-id").unwrap(), USER);
         assert_eq!(prefs[0].headers.get("x-auth-token").unwrap(), TOKEN);
+    }
+
+    /// The text of the send tests: a double quote, a newline, a non-ASCII letter and an emoji.
+    const SEND_TEXT: &str = "say \"hi\"\nca\u{e9} \u{1F680}";
+
+    /// What the server answers to a send: the stored message with server time and author.
+    fn send_answer(id: &str, text: &str) -> String {
+        serde_json::json!({
+            "message": {
+                "_id": id, "rid": "r-general", "msg": text,
+                "ts": "2026-11-17T10:00:00.123Z",
+                "u": {"_id": "u1", "username": "smoke", "name": "Smoke"},
+                "md": [], "urls": []
+            },
+            "success": true
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn send_message_contract() {
+        let server = MockServer::start().await;
+        let expected = serde_json::json!({
+            "message": {"_id": "rt-test-1", "rid": "r-general", "msg": SEND_TEXT}
+        });
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.sendMessage"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::body_json(expected))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(send_answer("rt-test-1", SEND_TEXT), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let room = RoomId("r-general".to_string());
+        let message = client_for(&server)
+            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .await
+            .expect("send works");
+        assert_eq!(message.id, "rt-test-1");
+        assert_eq!(message.room_id, room);
+        assert_eq!(message.author, "smoke");
+        assert_eq!(message.ts, 1_794_909_600);
+        assert_eq!(message.body, SEND_TEXT);
+
+        // One request, a POST: nothing else was sent to the server.
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(requests[0].url.path(), "/api/v1/chat.sendMessage");
+    }
+
+    #[tokio::test]
+    async fn send_message_errors() {
+        let room = RoomId("r-general".to_string());
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("{\"success\":false}"))
+            .mount(&server)
+            .await;
+        let error = client_for(&server)
+            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .await
+            .expect_err("401 fails");
+        assert_eq!(error, ApiError::Unauthorized);
+
+        // A redirect is never followed: the target receives neither the text nor the credentials.
+        let target = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(send_answer("rt-test-1", SEND_TEXT), "application/json"),
+            )
+            .mount(&target)
+            .await;
+        let origin = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(307).insert_header(
+                "Location",
+                format!("{}/api/v1/chat.sendMessage", target.uri()),
+            ))
+            .mount(&origin)
+            .await;
+        let error = client_for(&origin)
+            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .await
+            .expect_err("307 fails");
+        assert_eq!(error, ApiError::Redirected);
+        let received = target.received_requests().await.expect("recorded");
+        assert!(received.is_empty(), "the redirect target got a request");
     }
 
     const HISTORY: &str = include_str!("fixtures/history.json");

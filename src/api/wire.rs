@@ -123,6 +123,12 @@ pub struct HistoryResp {
     pub messages: Vec<WireMsg>,
 }
 
+/// The success body of `chat.sendMessage` and of `chat.getMessage`: the one message, as stored.
+#[derive(Deserialize)]
+pub struct MessageResp {
+    pub message: WireMsg,
+}
+
 /// One message of a `*.history` response. Message text is untrusted and never printed, so there
 /// is no `Debug`. `content` is the end-to-end payload of an encrypted message: it is only checked
 /// for presence and never read, copied or printed.

@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, history, messages,
-    sidebar,
+    send, sidebar,
 };
 use crate::data::{Message, MessageKind};
 use crate::input::key::normalize;
@@ -71,6 +71,8 @@ pub fn update(app: &mut App, action: Action) {
         Action::HistoryFailed { room, older, error } => {
             history::on_failed(app, room, older, error);
         }
+        Action::MessageSent { room, id, message } => send::on_sent(app, room, id, message),
+        Action::SendFailed { room, id, error } => send::on_failed(app, room, id, error),
         Action::Resize(w, h) => {
             app.size = Size::new(w, h);
         }

@@ -128,6 +128,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::LoadFailed(_)
         | Action::HistoryLoaded { .. }
         | Action::HistoryFailed { .. }
+        | Action::MessageSent { .. }
+        | Action::SendFailed { .. }
         | Action::KeyTimeout
         | Action::Counted(..) => None,
     }

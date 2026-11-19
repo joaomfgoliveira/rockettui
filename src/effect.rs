@@ -7,7 +7,28 @@ use crate::api::{ApiError, Client};
 use crate::data::{RoomId, RoomKind};
 use tokio::sync::mpsc::Sender;
 
-/// One fetch intent.
+/// The text of a message being sent, exactly as typed. Its `Debug` prints only the byte length, so
+/// the derived `Debug` of `Effect` can never print message text (D-14, T-04-01).
+#[derive(Clone, PartialEq)]
+pub struct SendText(String);
+
+impl SendText {
+    pub fn new(text: String) -> Self {
+        SendText(text)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SendText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SendText(<{}> bytes)", self.0.len())
+    }
+}
+
+/// One IO intent: a fetch, or one send attempt.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
     /// Load the joined rooms and the sidebar folders.
@@ -20,6 +41,16 @@ pub enum Effect {
         private: bool,
         count: u16,
         before: Option<String>,
+    },
+    /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
+    /// `id` as the message `_id` (D-07, D-15). `reconcile` selects the `chat.getMessage`-first
+    /// branch of a retry (plan 04-03); this plan POSTs in every case. The answer comes back as
+    /// `Action::MessageSent` or `Action::SendFailed`, both addressed by `room` and `id`.
+    SendMessage {
+        room: RoomId,
+        id: String,
+        text: SendText,
+        reconcile: bool,
     },
 }
 
@@ -36,6 +67,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     older: before.is_some(),
                     error,
                 },
+                Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
             }];
         }
     };
@@ -66,6 +98,12 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     older,
                 }],
                 Err(error) => vec![Action::HistoryFailed { room, older, error }],
+            }
+        }
+        Effect::SendMessage { room, id, text, .. } => {
+            match client.send_message(&room, &id, text.as_str()).await {
+                Ok(message) => vec![Action::MessageSent { room, id, message }],
+                Err(error) => vec![Action::SendFailed { room, id, error }],
             }
         }
     }
@@ -173,5 +211,171 @@ mod tests {
                 error: ApiError::Client,
             }]
         );
+    }
+
+    const SENTINEL: &str = "SENTINEL-BODY-7f3a";
+
+    fn general() -> RoomId {
+        RoomId("general".to_string())
+    }
+
+    fn send_effect() -> Effect {
+        Effect::SendMessage {
+            room: general(),
+            id: "rt-test-1".to_string(),
+            text: SendText::new(SENTINEL.to_string()),
+            reconcile: false,
+        }
+    }
+
+    /// The server's answer to a send of `text` under `id`: the stored message.
+    fn answer(id: &str, text: &str) -> String {
+        serde_json::json!({
+            "message": {
+                "_id": id, "rid": "general", "msg": text,
+                "ts": "2026-11-17T10:00:00.123Z",
+                "u": {"_id": "u1", "username": "smoke"}
+            },
+            "success": true
+        })
+        .to_string()
+    }
+
+    async fn mount_send_ok(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.sendMessage"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(answer("rt-test-1", SENTINEL), "application/json"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_send_status(server: &MockServer, status: u16) {
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status).set_body_string("{\"success\":false}"))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn send_message_actions() {
+        let server = MockServer::start().await;
+        mount_send_ok(&server).await;
+        let actions = run(Ok(client_for(&server)), send_effect()).await;
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        match &actions[0] {
+            Action::MessageSent { room, id, message } => {
+                assert_eq!(*room, general());
+                assert_eq!(id, "rt-test-1");
+                assert_eq!(message.id, "rt-test-1");
+                assert_eq!(message.author, "smoke");
+                assert_eq!(message.body, SENTINEL);
+            }
+            other => panic!("expected MessageSent, got {other:?}"),
+        }
+
+        let server = MockServer::start().await;
+        mount_send_status(&server, 401).await;
+        let actions = run(Ok(client_for(&server)), send_effect()).await;
+        assert_eq!(
+            actions,
+            [Action::SendFailed {
+                room: general(),
+                id: "rt-test-1".to_string(),
+                error: ApiError::Unauthorized,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn send_without_client_fails_closed() {
+        let actions = run(Err(ApiError::Client), send_effect()).await;
+        assert_eq!(
+            actions,
+            [Action::SendFailed {
+                room: general(),
+                id: "rt-test-1".to_string(),
+                error: ApiError::Client,
+            }]
+        );
+    }
+
+    #[test]
+    fn send_text_debug_redacts() {
+        let text = SendText::new(SENTINEL.to_string());
+        assert_eq!(text.as_str(), SENTINEL);
+        let shown = format!("{text:?}");
+        assert_eq!(shown, format!("SendText(<{}> bytes)", SENTINEL.len()));
+        assert!(!shown.contains(SENTINEL));
+        let effect = format!("{:?}", send_effect());
+        assert!(!effect.contains(SENTINEL), "{effect}");
+        assert!(effect.contains("rt-test-1"), "{effect}");
+    }
+
+    #[tokio::test]
+    async fn send_round_trip_swaps_in_place() {
+        use crate::app::update::update;
+        use crate::data::{Message, MessageKind};
+        use crate::test_util::app_80x24;
+
+        let pending = Message {
+            id: "rt-test-1".to_string(),
+            room_id: general(),
+            author: "me".to_string(),
+            ts: 0,
+            body: SENTINEL.to_string(),
+            kind: MessageKind::Normal,
+        };
+        let seeded = || {
+            let mut app = app_80x24();
+            app.open_room(general());
+            app.messages
+                .get_mut(&general())
+                .expect("general has messages")
+                .push(pending.clone());
+            app
+        };
+
+        // 200: the server's copy replaces the pending message in place; no history reload.
+        let server = MockServer::start().await;
+        mount_send_ok(&server).await;
+        let mut app = seeded();
+        let len = app.messages[&general()].len();
+        let k = len - 1;
+        for action in run(Ok(client_for(&server)), send_effect()).await {
+            update(&mut app, action);
+        }
+        assert_eq!(app.messages[&general()].len(), len);
+        let swapped = &app.messages[&general()][k];
+        assert_eq!(swapped.id, "rt-test-1");
+        assert_eq!(swapped.author, "smoke");
+        assert_eq!(swapped.ts, 1_794_909_600);
+        assert!(
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadHistory { .. })),
+            "{:?}",
+            app.effects
+        );
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1, "one send is one request");
+
+        // 401: the message is unchanged and the status bar shows the fixed reason.
+        let server = MockServer::start().await;
+        mount_send_status(&server, 401).await;
+        let mut app = seeded();
+        let before = app.messages[&general()].clone();
+        for action in run(Ok(client_for(&server)), send_effect()).await {
+            update(&mut app, action);
+        }
+        assert_eq!(app.messages[&general()], before);
+        assert_eq!(app.messages[&general()][k].author, "me");
+        let Some(crate::app::StatusMsg::Error(text)) = &app.status_msg else {
+            panic!("no error status");
+        };
+        assert!(text.starts_with("message not sent: "), "{text}");
+        assert!(!text.contains(SENTINEL), "{text}");
     }
 }

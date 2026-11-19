@@ -194,6 +194,21 @@ fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
     (MessageKind::Normal, body)
 }
 
+/// One wire message as a domain `Message` of `room`: the author is `u.username` or `unknown`, `ts`
+/// is whole seconds or 0 for an unparsable date, and the body follows `kind_and_body`. The one
+/// per-message mapper: history uses it for every message and `chat.sendMessage` for its answer.
+pub fn message(room: &RoomId, msg: WireMsg) -> Message {
+    let (kind, body) = kind_and_body(&msg);
+    Message {
+        id: msg.id,
+        room_id: room.clone(),
+        author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
+        ts: msg.ts.secs().unwrap_or(0),
+        body,
+        kind,
+    }
+}
+
 /// One page of history (the server sends it newest first) as oldest-first messages.
 ///
 /// The order is the server timestamp in milliseconds, then the id, so two messages in the same
@@ -211,18 +226,7 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
         {
             oldest = Some((ms, raw));
         }
-        let (kind, body) = kind_and_body(&msg);
-        keyed.push((
-            millis.unwrap_or(0),
-            Message {
-                id: msg.id,
-                room_id: room.clone(),
-                author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
-                ts: msg.ts.secs().unwrap_or(0),
-                body,
-                kind,
-            },
-        ));
+        keyed.push((millis.unwrap_or(0), message(room, msg)));
     }
     keyed.sort_by(|(a_ms, a), (b_ms, b)| a_ms.cmp(b_ms).then_with(|| a.id.cmp(&b.id)));
     HistoryPage {
@@ -716,5 +720,22 @@ mod tests {
             assert_eq!(mapped.kind, MessageKind::System, "{id}");
             assert!(mapped.body.starts_with("* "), "{id}");
         }
+    }
+
+    #[test]
+    fn message_single() {
+        // A sendMessage-shaped message maps through `message` to the fields history would produce.
+        let json = r#"{"_id":"rt-test-1","rid":"r-general","msg":"hello","ts":"2026-11-17T10:00:00.123Z","u":{"_id":"u1","username":"smoke","name":"Smoke"},"md":[],"urls":[]}"#;
+        let wire = || serde_json::from_str::<WireMsg>(json).expect("wire message");
+        let room = RoomId("r-general".to_string());
+        let single = message(&room, wire());
+        assert_eq!(single.id, "rt-test-1");
+        assert_eq!(single.room_id, room);
+        assert_eq!(single.author, "smoke");
+        assert_eq!(single.ts, 1_794_909_600);
+        assert_eq!(single.body, "hello");
+        assert_eq!(single.kind, MessageKind::Normal);
+        let page = history(&room, vec![wire()]);
+        assert_eq!(page.messages, [single]);
     }
 }

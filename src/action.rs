@@ -75,6 +75,21 @@ pub enum Action {
         older: bool,
         error: crate::api::ApiError,
     },
+    /// The server accepted a sent message and answered with its stored copy. `id` is the client
+    /// id the message was sent under; the reducer applies the answer by `room` and `id`, never by
+    /// the current room.
+    MessageSent {
+        room: RoomId,
+        id: String,
+        message: Message,
+    },
+    /// A send failed; the error is a fixed kind with no payload text. Applied by `room` and `id`
+    /// like `MessageSent`.
+    SendFailed {
+        room: RoomId,
+        id: String,
+        error: crate::api::ApiError,
+    },
     /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
     KeyTimeout,
     /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
@@ -169,6 +184,10 @@ impl std::fmt::Debug for Action {
             Action::HistoryFailed { room, older, error } => {
                 write!(f, "HistoryFailed({room:?}, older={older}, {error:?})")
             }
+            Action::MessageSent { room, id, .. } => write!(f, "MessageSent({room:?}, {id})"),
+            Action::SendFailed { room, id, error } => {
+                write!(f, "SendFailed({room:?}, {id}, {error:?})")
+            }
             Action::KeyTimeout => write!(f, "KeyTimeout"),
             Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
@@ -253,6 +272,31 @@ mod tests {
         assert_eq!(
             failed,
             "HistoryFailed(RoomId(\"r-general\"), older=true, Timeout)"
+        );
+
+        let sent = Action::MessageSent {
+            room: RoomId("r-general".to_string()),
+            id: "rt-test-1".to_string(),
+            message: Message {
+                id: "rt-test-1".to_string(),
+                room_id: RoomId("r-general".to_string()),
+                author: "smoke".to_string(),
+                ts: 0,
+                body: "SENTINEL-BODY-7f3a".to_string(),
+                kind: MessageKind::Normal,
+            },
+        };
+        let shown = format!("{sent:?}");
+        assert!(!shown.contains("SENTINEL-BODY-7f3a"), "{shown}");
+        assert_eq!(shown, "MessageSent(RoomId(\"r-general\"), rt-test-1)");
+        let failed = Action::SendFailed {
+            room: RoomId("r-general".to_string()),
+            id: "rt-test-1".to_string(),
+            error: crate::api::ApiError::Server(502),
+        };
+        assert_eq!(
+            format!("{failed:?}"),
+            "SendFailed(RoomId(\"r-general\"), rt-test-1, Server(502))"
         );
     }
 }

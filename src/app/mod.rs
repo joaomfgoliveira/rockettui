@@ -7,6 +7,7 @@ pub mod command;
 pub mod history;
 pub mod input_buf;
 pub mod messages;
+pub mod send;
 pub mod sidebar;
 pub mod update;
 
