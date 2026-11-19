@@ -4,7 +4,7 @@
 //! rooms, one encrypted room, and one very long message. Every body is plain text.
 
 use crate::action::Action;
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind};
+use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
 
 /// 2026-11-14T00:00:00Z. All fake timestamps are offsets from this.
 pub const FAKE_EPOCH: i64 = 1_794_614_400;
@@ -109,6 +109,7 @@ fn messages(room: &str, count: usize) -> Vec<Message> {
                 ts: FAKE_EPOCH + FIRST_MESSAGE_OFFSET + (n as i64) * MESSAGE_STEP,
                 body,
                 kind: MessageKind::Normal,
+                send: SendState::Sent,
             }
         })
         .collect()

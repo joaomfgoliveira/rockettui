@@ -245,7 +245,7 @@ mod tests {
     use crate::api::map;
     use crate::api::wire::{HistoryResp, RoomsResp, SubscriptionsResp};
     use crate::app::update::update;
-    use crate::data::{MessageKind, RoomKind};
+    use crate::data::{MessageKind, RoomKind, SendState};
     use crate::test_util::{app_80x24, press, render_to_string};
     use ratatui::layout::Size;
 
@@ -520,6 +520,7 @@ mod tests {
                 ts: i as i64,
                 body: format!("body {prefix}{i:03}"),
                 kind: MessageKind::Normal,
+                send: SendState::Sent,
             })
             .collect()
     }

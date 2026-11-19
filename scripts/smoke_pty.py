@@ -5,8 +5,10 @@ Usage: python3 -I scripts/smoke_pty.py <binary> <scenario>
 
 Standard library only. The binary has no fake data: every scenario that starts the app runs it
 against `start_mock`, a stdlib mock Rocket.Chat on an ephemeral 127.0.0.1 port that serves the
-JSON fixtures under src/api/fixtures and answers 401 to a wrong X-User-Id or X-Auth-Token. The
-first frame is an empty sidebar (D-05), so `wait_ready` waits until the rooms have arrived and
+JSON fixtures under src/api/fixtures and answers 401 to a wrong X-User-Id or X-Auth-Token. It
+also serves POST /api/v1/chat.sendMessage: it records each body, rejects any key but `_id`, `rid`
+and `msg` (the exact wire contract), rejects a repeated `_id` and answers with the stored message
+authored by MOCK_USERNAME. The first frame is an empty sidebar (D-05), so `wait_ready` waits until the rooms have arrived and
 the mode badge is drawn; `wait_drawn` waits for the badge only.
 Prints `SMOKE OK: <scenario>` and exits 0, or `SMOKE FAIL: <reason>` and exits 1.
 """
@@ -40,6 +42,7 @@ PASTE_OFF = b"\x1b[?2004l"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(REPO, "src", "api", "fixtures")
 MOCK_USER_ID = "smoke-user"
+MOCK_USERNAME = "smoke"
 MOCK_TOKEN = "SENTINEL-TOKEN-9c41"
 CREDENTIAL_VARS = ("ROCKETTUI_SERVER_URL", "ROCKETTUI_USER_ID", "ROCKETTUI_TOKEN")
 
@@ -229,15 +232,54 @@ def history_reply(path, query):
     return 200, {"messages": page, "success": True}
 
 
+SEND_ENDPOINT = "/api/v1/chat.sendMessage"
+
+
+def _now_iso():
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+
+
+def send_reply(server, body):
+    """(status, body) for one chat.sendMessage: 400 invalid-params unless the body is exactly
+    {"message": {"_id", "rid", "msg"}}, 400 duplicate for an `_id` already stored, else the stored
+    message authored by MOCK_USERNAME."""
+    invalid = (400, {"success": False, "error": "invalid-params"})
+    if not isinstance(body, dict) or list(body.keys()) != ["message"]:
+        return invalid
+    message = body["message"]
+    if not isinstance(message, dict) or set(message.keys()) != {"_id", "rid", "msg"}:
+        return invalid
+    if not all(isinstance(message[key], str) for key in ("_id", "rid", "msg")):
+        return invalid
+    if message["_id"] in server.stored:
+        return 400, {"success": False, "error": "duplicate"}
+    now = _now_iso()
+    stored = {
+        "_id": message["_id"],
+        "rid": message["rid"],
+        "msg": message["msg"],
+        "ts": now,
+        "_updatedAt": now,
+        "u": {"_id": MOCK_USER_ID, "username": MOCK_USERNAME},
+    }
+    server.stored[message["_id"]] = stored
+    return 200, {"message": stored, "success": True}
+
+
 def start_mock(mode="ok"):
     """Start a mock Rocket.Chat on 127.0.0.1 with an ephemeral port, in a daemon thread.
 
     Returns the server: `base_url` is `http://127.0.0.1:<port>` and `requests` is a list of
-    `(method, path, query_dict, authed_bool)`, one per request received (any method). Only GET is
-    served; every other method gets 405 (and is recorded). A request without the right
-    X-User-Id and X-Auth-Token gets 401. The server is shut down at exit.
+    `(method, path, query_dict, authed_bool)`, one per request received (any method). GET and
+    POST chat.sendMessage are served; every other method gets 405 (and is recorded). A request
+    without the right X-User-Id and X-Auth-Token gets 401, whatever the method. The server is shut
+    down at exit.
 
-    `mode` is settable at any time: "ok" serves normally, "unauthorized" answers every GET with
+    `bodies` is a list of `(path, parsed_json)`, one per POST that carried a JSON body, and
+    `stored` maps the `_id` of each accepted chat.sendMessage to the message the server stored.
+
+    `mode` is settable at any time: "ok" serves normally, "unauthorized" answers every request with
     the 9.0.0-style 401 body whatever the credentials (a rejected or revoked token).
     """
 
@@ -264,12 +306,24 @@ def start_mock(mode="ok"):
                 and self.headers.get("X-Auth-Token") == MOCK_TOKEN
             )
             self.server.requests.append((self.command, parsed.path, query, authed))
-            if self.command != "GET":
-                self.reply(405, {"success": False})
-            elif self.server.mode == "unauthorized" or not authed:
+            body = None
+            if self.command == "POST":
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw) if raw else None
+                except ValueError:
+                    body = None
+                if body is not None:
+                    self.server.bodies.append((parsed.path, body))
+            if self.server.mode == "unauthorized" or not authed:
                 self.reply(
                     401, {"success": False, "error": "You must be logged in to do this."}
                 )
+            elif self.command == "POST" and parsed.path == SEND_ENDPOINT:
+                self.reply(*send_reply(self.server, body))
+            elif self.command != "GET":
+                self.reply(405, {"success": False})
             elif parsed.path in HISTORY_ENDPOINTS:
                 self.reply(*history_reply(parsed.path, query))
             elif parsed.path in MOCK_ROUTES:
@@ -282,6 +336,8 @@ def start_mock(mode="ok"):
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.requests = []
+    server.bodies = []
+    server.stored = {}
     server.mode = mode
     server.base_url = f"http://127.0.0.1:{server.server_address[1]}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -476,6 +532,52 @@ def scenario_insert(binary):
         raise SmokeFail(f"exit code {code}, expected 0")
     if ALT_OFF not in bytes(buf):
         raise SmokeFail("alternate screen not left")
+
+
+def scenario_send(binary):
+    """MSG-02 in the real binary: Insert-mode Enter shows the draft at once, POSTs it exactly once
+    as {"message": {"_id", "rid", "msg"}} with a client _id of the run's `rt` prefix, and the same
+    row turns into the server's copy (author `smoke`)."""
+    mock = start_mock()
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+    type_keys(fd, buf, b"i")
+    text = 'hello "send"'
+    type_keys(fd, buf, text.encode())
+    type_keys(fd, buf, b"\r")
+
+    swapped = lambda b: any(
+        text in row and MOCK_USERNAME in row for row in screen_of(b).rows()
+    )
+    if not read_until(fd, buf, swapped, 10):
+        raise SmokeFail("the sent message never turned into the server's copy")
+    posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
+    if len(posts) != 1:
+        raise SmokeFail(f"expected one chat.sendMessage POST, saw {len(posts)}")
+    if not posts[0][3]:
+        raise SmokeFail("the send request was not authenticated")
+    sent = [body for path, body in mock.bodies if path == SEND_ENDPOINT]
+    if len(sent) != 1 or list(sent[0].keys()) != ["message"]:
+        raise SmokeFail("the send body is not exactly {message: ...}")
+    message = sent[0]["message"]
+    if set(message.keys()) != {"_id", "rid", "msg"}:
+        raise SmokeFail(f"send body keys {sorted(message.keys())}, expected _id, rid, msg")
+    if not message["_id"].startswith("rt") or len(message["_id"]) < 35:
+        raise SmokeFail("the client _id does not carry the run's rt prefix")
+    if message["rid"] != "r-general" or message["msg"] != text:
+        raise SmokeFail("the send body names the wrong room or text")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
 
 
 def scenario_config_layout(binary):
@@ -972,6 +1074,7 @@ SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
     "insert": scenario_insert,
+    "send": scenario_send,
     "config_layout": scenario_config_layout,
     "config_keymap": scenario_config_keymap,
     "config_error": scenario_config_error,

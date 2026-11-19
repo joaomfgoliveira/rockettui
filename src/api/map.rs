@@ -5,7 +5,7 @@
 
 use crate::api::HistoryPage;
 use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind};
+use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -206,6 +206,7 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         ts: msg.ts.secs().unwrap_or(0),
         body,
         kind,
+        send: SendState::Sent,
     }
 }
 
@@ -735,6 +736,7 @@ mod tests {
         assert_eq!(single.ts, 1_794_909_600);
         assert_eq!(single.body, "hello");
         assert_eq!(single.kind, MessageKind::Normal);
+        assert_eq!(single.send, SendState::Sent);
         let page = history(&room, vec![wire()]);
         assert_eq!(page.messages, [single]);
     }

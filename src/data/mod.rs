@@ -55,6 +55,36 @@ pub enum MessageKind {
     System,
 }
 
+/// Where a message stands on its way to the server (MSG-02). Messages that came from the server
+/// are `Sent`; the other four belong to a message this client composed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SendState {
+    /// A server message: delivered and stored, or loaded from history.
+    #[default]
+    Sent,
+    /// Waiting its turn in its room. `reconcile` is true when the last attempt's outcome was
+    /// unknown, so the retry first asks `chat.getMessage` whether the server already holds it.
+    Queued { reconcile: bool },
+    /// The one request in flight for its room.
+    Sending,
+    /// Definitely not delivered: the server refused it or the request never left (D-06).
+    Failed,
+    /// The outcome is unknown: the request may or may not have reached the server (D-07, D-18).
+    Unconfirmed,
+}
+
+impl SendState {
+    /// True while the message is waiting for or inside its request (`Queued` or `Sending`).
+    pub fn is_pending(self) -> bool {
+        matches!(self, SendState::Queued { .. } | SendState::Sending)
+    }
+
+    /// True for every state but `Sent`.
+    pub fn is_unsent(self) -> bool {
+        self != SendState::Sent
+    }
+}
+
 /// One chat message. Its `Debug` is written by hand and prints no body or author text.
 #[derive(Clone, PartialEq)]
 pub struct Message {
@@ -66,15 +96,18 @@ pub struct Message {
     pub body: String,
     /// `System` marks a server system message, drawn dim per D-15.
     pub kind: MessageKind,
+    /// `Sent` for every server message; the other states mark a message this client sent.
+    pub send: SendState,
 }
 
-/// Redacting `Debug` (T-01-03): only the id, the room id and the body length.
+/// Redacting `Debug` (T-01-03): only the id, the room id, the body length and the send state.
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Message")
             .field("id", &self.id)
             .field("room_id", &self.room_id)
             .field("body_len", &self.body.len())
+            .field("send", &self.send)
             .finish()
     }
 }
@@ -103,11 +136,37 @@ mod tests {
             ts: 0,
             body: "SENTINEL-BODY-7f3a".to_string(),
             kind: MessageKind::Normal,
+            send: SendState::Sent,
         };
         let shown = format!("{message:?}");
         assert!(!shown.contains("SENTINEL-BODY-7f3a"));
         assert!(!shown.contains("SENTINEL-AUTHOR-2b9d"));
         assert!(shown.contains("general-000"));
         assert!(shown.contains("general"));
+        assert!(shown.contains("send: Sent"), "{shown}");
+        let failed = Message {
+            send: SendState::Failed,
+            ..message
+        };
+        let shown = format!("{failed:?}");
+        assert!(shown.contains("send: Failed"), "{shown}");
+        assert!(!shown.contains("SENTINEL"), "{shown}");
+    }
+
+    #[test]
+    fn send_state_predicates() {
+        let all = [
+            (SendState::Sent, false, false),
+            (SendState::Queued { reconcile: false }, true, true),
+            (SendState::Queued { reconcile: true }, true, true),
+            (SendState::Sending, true, true),
+            (SendState::Failed, false, true),
+            (SendState::Unconfirmed, false, true),
+        ];
+        for (state, pending, unsent) in all {
+            assert_eq!(state.is_pending(), pending, "{state:?}");
+            assert_eq!(state.is_unsent(), unsent, "{state:?}");
+        }
+        assert_eq!(SendState::default(), SendState::Sent);
     }
 }

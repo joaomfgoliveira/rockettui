@@ -4,11 +4,7 @@
 
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
-use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, StatusMsg, command, history, messages,
-    send, sidebar,
-};
-use crate::data::{Message, MessageKind};
+use crate::app::{App, ConnState, Focus, MAX_CMDLINE, Mode, command, history, send, sidebar};
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
 use crate::ui::sanitize::sanitize_line;
@@ -162,7 +158,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::CursorDown => edit_input(app, InputBuffer::down),
         Action::CursorHome => edit_input(app, InputBuffer::home),
         Action::CursorEnd => edit_input(app, InputBuffer::end),
-        Action::SubmitInput => submit_input(app),
+        Action::SubmitInput => send::submit(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -197,32 +193,6 @@ fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
     edit(&mut app.input);
     let (width, height) = app.input_viewport();
     app.input.settle(width, height);
-}
-
-/// Enter in Insert mode (D-15): append the draft as a local message from `me` to the open room,
-/// clear it and stay in Insert mode. Phase 4 replaces the local append with an API send.
-fn submit_input(app: &mut App) {
-    if app.mode != Mode::Insert || app.input.text().trim().is_empty() {
-        return;
-    }
-    let Some(room) = app.current_room.clone() else {
-        app.status_msg = Some(StatusMsg::Error(
-            "No room open: select a room with Enter".into(),
-        ));
-        return;
-    };
-    let body = app.input.take();
-    app.local_seq += 1;
-    let message = Message {
-        id: format!("local-{}", app.local_seq),
-        room_id: room.clone(),
-        author: LOCAL_AUTHOR.into(),
-        ts: app.clock_secs,
-        body,
-        kind: MessageKind::Normal,
-    };
-    app.messages.entry(room.clone()).or_default().push(message);
-    messages::follow_newest(app, &room);
 }
 
 /// Turn what the matcher produced into reducer work.
@@ -279,7 +249,7 @@ mod tests {
     use crate::action::Action;
     use crate::app::{App, Focus, MAX_CMDLINE, sidebar};
     use crate::app::{Mode, update::update};
-    use crate::data::{RoomId, fake};
+    use crate::data::{RoomId, SendState, fake};
     use crate::test_util::{app_80x24, press};
     use ratatui::layout::Size;
 
@@ -698,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_appends_local_message() {
+    fn submit_appends_pending_and_sends() {
         let mut app = open_general_app();
         let before = app.messages[&general()].len();
         update(&mut app, Action::Clock(fake::FAKE_EPOCH + 43_200));
@@ -710,6 +680,7 @@ mod tests {
         assert_eq!(last.author, "me");
         assert_eq!(last.ts, fake::FAKE_EPOCH + 43_200);
         assert!(last.id.starts_with("local-"));
+        assert_eq!(last.send, SendState::Sending);
         assert!(app.input.is_empty());
         assert_eq!(app.mode, Mode::Insert);
         let v = crate::app::messages::view(&app, &general());
@@ -718,7 +689,17 @@ mod tests {
         press(&mut app, "again<CR>");
         let msgs = &app.messages[&general()];
         assert_eq!(msgs[before + 1].ts, fake::FAKE_EPOCH + 43_260);
+        assert_eq!(
+            msgs[before + 1].send,
+            SendState::Queued { reconcile: false }
+        );
         assert_ne!(msgs[before].id, msgs[before + 1].id);
+        // One request in flight: the second message waits behind the first.
+        assert_eq!(app.effects.len(), 1);
+        assert!(matches!(
+            &app.effects[0],
+            crate::effect::Effect::SendMessage { id, .. } if *id == msgs[before].id
+        ));
     }
 
     #[test]
