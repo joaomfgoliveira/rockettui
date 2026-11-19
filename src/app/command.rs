@@ -65,6 +65,11 @@ pub fn execute(app: &mut App, line: &str) {
         return;
     };
     let args: Vec<&str> = tokens.collect();
+    // Only a `:q` straight after the warning quits through it (D-20): any other command disarms
+    // it. `q!` and `quit!` quit anyway, and an empty line (returned above) leaves the arm alone.
+    if !matches!(name, "q" | "quit") {
+        app.quit_warned = false;
+    }
     match COMMANDS.iter().find(|def| def.names.contains(&name)) {
         Some(def) => {
             if let Err(msg) = (def.run)(app, &args) {
