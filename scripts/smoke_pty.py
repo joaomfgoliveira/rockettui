@@ -493,6 +493,31 @@ def first_before(buf, first, second):
     return a != -1 and b != -1 and a < b
 
 
+def wait_confirmed(fd, buf, text, timeout=10, two_line=False):
+    """Wait until the server's copy of the message `text` is drawn.
+
+    Pending and failed rows show a marker where the time would be (plan 04-04), and since plan
+    04-06 the pending author already equals the confirmed one, so only the time proves the swap:
+    some screen row i holds `text` and row i (Compact) or row i-1 (TwoLine header) matches
+    `\\d\\d:\\d\\d`. Every sending scenario calls this before its final `:q`, which warns
+    while a message is undelivered (D-20).
+    """
+    clock = re.compile(r"\d\d:\d\d")
+
+    def confirmed(b):
+        rows = screen_of(b).rows()
+        for i, row in enumerate(rows):
+            if text not in row:
+                continue
+            head = rows[i - 1] if two_line and i > 0 else row
+            if clock.search(head):
+                return True
+        return False
+
+    if not read_until(fd, buf, confirmed, timeout):
+        raise SmokeFail(f"the server's copy of {text!r} never showed its time")
+
+
 def scenario_quit(binary):
     mock = start_mock()
     pid, fd = spawn(binary, server_url=mock.base_url)
@@ -550,6 +575,7 @@ def scenario_insert(binary):
         raise SmokeFail("typed message never appeared on the screen")
     if b"INSERT" not in bytes(buf):
         raise SmokeFail("INSERT mode never shown")
+    wait_confirmed(fd, buf, "hello smoke")
     # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
     os.write(fd, b"\x1b")
     time.sleep(0.3)
@@ -596,6 +622,7 @@ def scenario_send(binary):
         raise SmokeFail("the client _id does not carry the run's rt prefix")
     if message["rid"] != "r-general" or message["msg"] != text:
         raise SmokeFail("the send body names the wrong room or text")
+    wait_confirmed(fd, buf, text)
     # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
     os.write(fd, b"\x1b")
     time.sleep(0.3)
@@ -660,6 +687,7 @@ def scenario_send_retry(binary):
     posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
     if len(posts) != 3:
         raise SmokeFail(f"expected three chat.sendMessage POSTs, saw {len(posts)}")
+    wait_confirmed(fd, buf, "retry me")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)
@@ -712,7 +740,8 @@ def scenario_send_author(binary):
         raise SmokeFail(f"expected one chat.sendMessage POST in all, saw {len(posts)}")
     if not any("who am i" in row and MOCK_USERNAME in row for row in screen_of(buf).rows()):
         raise SmokeFail("the failed row lost its author or its place after :reconnect")
-    type_keys(fd, buf, b":q")
+    # The Failed `who am i` row is intentional and D-20 makes a plain `:q` warn about it: `:q!`.
+    type_keys(fd, buf, b":q!")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)
     if code != 0:
@@ -751,6 +780,7 @@ def scenario_send_unconfirmed(binary):
 
     if not read_until(fd, buf, swapped, 10):
         raise SmokeFail("`r` never turned the unconfirmed row into the server's copy")
+    wait_confirmed(fd, buf, "maybe sent")
     posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
     if len(posts) != 1:
         raise SmokeFail(f"expected exactly one chat.sendMessage POST, saw {len(posts)}")
@@ -771,6 +801,63 @@ def scenario_send_unconfirmed(binary):
         raise SmokeFail("the token appeared in the output")
 
 
+def failed_send_session(binary, text):
+    """Start the binary against a mock that refuses the first send, send `text` in general and wait
+    until the row is Failed. Returns (pid, fd, buf)."""
+    mock = start_mock()
+    mock.fail_next = [400]
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, text.encode())
+    type_keys(fd, buf, b"\r")
+    # The status line is read before ESC: any key press clears it.
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("message not sent"), 10):
+        raise SmokeFail("a rejected send never showed `message not sent`")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    return pid, fd, buf
+
+
+def scenario_quit_undelivered(binary):
+    """D-20 in the real binary: `:q` with a Failed message warns with a count only and keeps
+    running, a second `:q` quits; in a second run `:q!` quits at once."""
+    text = "keep me"
+    pid, fd, buf = failed_send_session(binary, text)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    status = lambda b: screen_of(b).rows()[22]
+    if not read_until(fd, buf, lambda b: "not delivered" in status(b), 10):
+        raise SmokeFail("`:q` with a Failed message never showed `not delivered`")
+    if "1 message not delivered" not in status(buf):
+        raise SmokeFail(f"unexpected warning text: {status(buf).strip()!r}")
+    read_until(fd, buf, lambda b: False, 1.0)
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        raise SmokeFail("the app quit on the first `:q` although a message is undelivered")
+    if text in status(buf):
+        raise SmokeFail("the quit warning holds the message text")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
+
+    pid, fd, buf = failed_send_session(binary, "keep me too")
+    type_keys(fd, buf, b":q!")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0 after :q!")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
+
+
 def scenario_config_layout(binary):
     mock = start_mock()
     pid, fd = spawn(
@@ -785,6 +872,7 @@ def scenario_config_layout(binary):
     type_keys(fd, buf, b"i")
     type_keys(fd, buf, b"layout check")
     type_keys(fd, buf, b"\r")
+    wait_confirmed(fd, buf, "layout check", two_line=True)
     os.write(fd, b"\x1b")  # a lone ESC; the pause keeps crossterm from reading Alt+key
     time.sleep(0.3)
 
@@ -1269,6 +1357,7 @@ SCENARIOS = {
     "send_retry": scenario_send_retry,
     "send_author": scenario_send_author,
     "send_unconfirmed": scenario_send_unconfirmed,
+    "quit_undelivered": scenario_quit_undelivered,
     "config_layout": scenario_config_layout,
     "config_keymap": scenario_config_keymap,
     "config_error": scenario_config_error,

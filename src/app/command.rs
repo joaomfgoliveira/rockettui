@@ -14,13 +14,33 @@ pub const COMMANDS: &[CommandDef] = &[
         run: cmd_quit,
     },
     CommandDef {
+        names: &["q!", "quit!"],
+        run: cmd_force_quit,
+    },
+    CommandDef {
         names: &["reconnect", "retry"],
         run: cmd_reconnect,
     },
 ];
 
-/// `:q` / `:quit` — the only way to leave the app.
+/// `:q` / `:quit` — leaves the app, but warns once while messages are undelivered (D-20): the
+/// first `:q` only shows how many there are, the next one quits. The text is built from the count
+/// alone, so it never holds a message, an author or a room name (D-14).
 pub fn cmd_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
+    let count = app.undelivered_count();
+    if count == 0 || app.quit_warned {
+        app.should_quit = true;
+        return Ok(());
+    }
+    app.quit_warned = true;
+    let noun = if count == 1 { "message" } else { "messages" };
+    Err(format!(
+        "{count} {noun} not delivered: :q again or :q! to quit"
+    ))
+}
+
+/// `:q!` / `:quit!` (D-20): leave at once. Undelivered messages live in memory only and are lost.
+pub fn cmd_force_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
     app.should_quit = true;
     Ok(())
 }

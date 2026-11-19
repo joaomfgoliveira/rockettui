@@ -303,7 +303,11 @@ impl App {
     /// The number of messages, over every room, whose send state is not `Sent`: Queued, Sending,
     /// Failed or Unconfirmed (D-20). Such messages live in memory only.
     pub fn undelivered_count(&self) -> usize {
-        0
+        self.messages
+            .values()
+            .flatten()
+            .filter(|m| m.send.is_unsent())
+            .count()
     }
 
     /// Display name of the open room, if one is open.
