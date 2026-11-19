@@ -699,6 +699,19 @@ def scenario_send_author(binary):
         raise SmokeFail(f"expected exactly one GET /api/v1/me before :reconnect: {mock.requests}")
     if not me_gets()[0][3]:
         raise SmokeFail("the /me request was not authenticated")
+    # :reconnect re-learns the username (the total becomes two) and never touches a send.
+    type_keys(fd, buf, b":reconnect")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: len(me_gets()) == 2, 10):
+        raise SmokeFail(f"expected a second GET /api/v1/me after :reconnect: {mock.requests}")
+    read_until(fd, buf, lambda b: False, 0.5)  # a stray /me or POST would be sent by now
+    if len(me_gets()) != 2:
+        raise SmokeFail(f"expected exactly two GET /api/v1/me in all: {mock.requests}")
+    posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
+    if len(posts) != 1:
+        raise SmokeFail(f"expected one chat.sendMessage POST in all, saw {len(posts)}")
+    if not any("who am i" in row and MOCK_USERNAME in row for row in screen_of(buf).rows()):
+        raise SmokeFail("the failed row lost its author or its place after :reconnect")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)

@@ -4,7 +4,9 @@
 
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
-use crate::app::{App, ConnState, Focus, MAX_CMDLINE, Mode, command, history, send, sidebar};
+use crate::app::{
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, history, send, sidebar,
+};
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
 use crate::ui::sanitize::sanitize_line;
@@ -189,8 +191,18 @@ pub fn update(app: &mut App, action: Action) {
 }
 
 /// The own username arrived (D-17): keep it in memory only, so every message sent from now on is
-/// authored by it while pending.
+/// authored by it while pending. A row composed before it arrived carries the `LOCAL_AUTHOR`
+/// fallback and is renamed, in every room; a `Sent` row (the server's own copy) and a row by any
+/// other author are left alone.
 fn own_username_loaded(app: &mut App, name: String) {
+    for held in app.messages.values_mut() {
+        for message in held
+            .iter_mut()
+            .filter(|m| m.send.is_unsent() && m.author == LOCAL_AUTHOR)
+        {
+            message.author.clone_from(&name);
+        }
+    }
     app.own_username = Some(name);
 }
 
