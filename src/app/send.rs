@@ -215,6 +215,172 @@ mod tests {
         assert_eq!(crate::app::messages::view(&app, &general()).cursor, before);
     }
 
+    /// Run every recorded send of `app` through the reducer as if it had been answered: the
+    /// helpers below answer one message at a time instead, so this is only for `states` checks.
+    fn answer_sent(app: &mut App, id: &str, ts: i64) {
+        let message = msg(&general(), id, "smoke", ts, "answer");
+        update(
+            app,
+            Action::MessageSent {
+                room: general(),
+                id: id.to_string(),
+                message,
+            },
+        );
+    }
+
+    fn answer_failed(app: &mut App, id: &str) {
+        update(
+            app,
+            Action::SendFailed {
+                room: general(),
+                id: id.to_string(),
+                error: ApiError::Timeout,
+            },
+        );
+    }
+
+    #[test]
+    fn guards_blank_no_room_encrypted() {
+        // Blank drafts: nothing in the room, no effect, no status, still Insert (D-09).
+        let mut app = open_general_app();
+        let before = app.messages[&general()].len();
+        press(&mut app, "i<CR>");
+        press(&mut app, "   <CR>");
+        press(&mut app, "<A-CR><A-CR><CR>");
+        assert_eq!(app.messages[&general()].len(), before);
+        assert!(app.effects.is_empty());
+        assert!(app.status_msg.is_none());
+        assert_eq!(app.mode, Mode::Insert);
+
+        // No room open: the fixed status, the draft kept, nothing sent.
+        let mut app = app_80x24();
+        press(&mut app, "ihello<CR>");
+        assert_eq!(app.input.text(), "hello");
+        assert!(app.effects.is_empty());
+        match &app.status_msg {
+            Some(StatusMsg::Error(text)) => {
+                assert_eq!(text, "No room open: select a room with Enter");
+            }
+            _ => panic!("expected the no-room error"),
+        }
+
+        // An encrypted room refuses before the draft is taken (D-11).
+        let secrets = RoomId("secrets".to_string());
+        let mut app = app_80x24();
+        assert!(app.rooms.iter().any(|r| r.id == secrets && r.encrypted));
+        app.open_room(secrets.clone());
+        let before = app.messages[&secrets].len();
+        press(&mut app, "isecret draft<CR>");
+        match &app.status_msg {
+            Some(StatusMsg::Error(text)) => assert_eq!(text, "encrypted, not supported"),
+            _ => panic!("expected the encrypted-room error"),
+        }
+        assert_eq!(app.input.text(), "secret draft");
+        assert_eq!(app.messages[&secrets].len(), before);
+        assert!(app.effects.is_empty());
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn queue_one_in_flight_in_order() {
+        let mut app = open_general_app();
+        press(&mut app, "ia<CR>b<CR>c<CR>");
+        assert_eq!(
+            states(&app, 3),
+            [
+                SendState::Sending,
+                SendState::Queued { reconcile: false },
+                SendState::Queued { reconcile: false },
+            ]
+        );
+        assert_eq!(sends(&app).len(), 1);
+
+        answer_sent(&mut app, "local-1", 10);
+        assert_eq!(
+            states(&app, 3),
+            [
+                SendState::Sent,
+                SendState::Sending,
+                SendState::Queued { reconcile: false },
+            ]
+        );
+        assert_eq!(sends(&app).len(), 2);
+
+        // b fails: it stays at its index, marked Failed, and c goes out (D-16).
+        answer_failed(&mut app, "local-2");
+        assert_eq!(
+            states(&app, 3),
+            [SendState::Sent, SendState::Failed, SendState::Sending]
+        );
+        let ids: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(ids, ["local-1", "local-2", "local-3"]);
+
+        // A later Enter queues behind the in-flight c and goes out after it.
+        press(&mut app, "d<CR>");
+        assert_eq!(sends(&app).len(), 3);
+        answer_sent(&mut app, "local-3", 12);
+        let ids: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(ids, ["local-1", "local-2", "local-3", "local-4"]);
+    }
+
+    #[test]
+    fn fail_marks_failed_and_keeps_row() {
+        let mut app = open_general_app();
+        press(&mut app, &format!("i{BODY}<CR>"));
+        let index = app.messages[&general()].len() - 1;
+        assert_eq!(app.messages[&general()][index].send, SendState::Sending);
+        let before = app.messages[&general()].len();
+
+        answer_failed(&mut app, "local-1");
+        let held = &app.messages[&general()];
+        assert_eq!(held.len(), before);
+        assert_eq!(held[index].id, "local-1");
+        assert_eq!(held[index].send, SendState::Failed);
+        assert_eq!(held[index].body, BODY, "the failed row keeps its text");
+        match &app.status_msg {
+            Some(StatusMsg::Error(text)) => {
+                assert!(text.starts_with("message not sent: "), "{text}");
+                assert!(!text.contains("SENTINEL"), "{text}");
+            }
+            _ => panic!("expected a failure status"),
+        }
+    }
+
+    #[test]
+    fn edge_empty_and_text_as_is() {
+        // A one-character draft is sent as one message.
+        let mut app = open_general_app();
+        press(&mut app, "ix<CR>");
+        assert_eq!(sends(&app).len(), 1);
+        assert_eq!(sends(&app)[0].2, "x");
+
+        // Leading and trailing spaces and the line break survive byte for byte.
+        let mut app = open_general_app();
+        press(&mut app, "i  two  <A-CR>lines <CR>");
+        let sent = sends(&app);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].2, "  two  \nlines ");
+        assert_eq!(
+            app.messages[&general()].last().unwrap().body,
+            "  two  \nlines "
+        );
+    }
+
+    #[test]
+    fn send_while_history_loading() {
+        use crate::app::history::HistoryState;
+        for state in [HistoryState::Loading, HistoryState::Failed] {
+            let mut app = open_general_app();
+            app.history.insert(general(), state);
+            let before = app.messages[&general()].len();
+            press(&mut app, "ihello<CR>");
+            assert_eq!(app.messages[&general()].len(), before + 1);
+            assert_eq!(sends(&app).len(), 1);
+            assert_eq!(app.messages[&general()][before].body, "hello");
+        }
+    }
+
     #[test]
     fn submit_author_is_the_own_username_when_known() {
         let mut app = open_general_app();
