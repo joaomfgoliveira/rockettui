@@ -97,10 +97,17 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "i", Action::EnterInsert),
         (Mode::Normal, "a", Action::EnterInsert),
         (Mode::Normal, "o", Action::EnterInsert),
+        // Recovery of a failed or unconfirmed send (D-06): `r` retries the message under the
+        // messages-pane cursor, `dd` discards it. `d` is unbound alone, so `dd` is a pure prefix
+        // like `gg`. Both are silent no-ops on any other message or pane.
+        (Mode::Normal, "r", Action::RetrySend),
+        (Mode::Normal, "dd", Action::DiscardSend),
         // Insert rows stay single-key so typing never waits for the sequence timeout. Shift-Enter
         // is indistinguishable from Enter in legacy terminals, so a newline is Alt-Enter or Ctrl-j.
         (Mode::Insert, "<Esc>", Action::Cancel),
         (Mode::Insert, "<C-c>", Action::Cancel),
+        // Enter sends the draft to the open room; Alt-Enter and Ctrl-j insert a newline instead
+        // (InsertNewline, rebindable in keymap.toml, D-09).
         (Mode::Insert, "<CR>", Action::SubmitInput),
         (Mode::Insert, "<A-CR>", Action::InsertNewline),
         (Mode::Insert, "<C-j>", Action::InsertNewline),
@@ -178,6 +185,31 @@ mod tests {
             extras[base.len() + 1],
             (Mode::Normal, "<S-Tab>", Action::FocusPrev)
         ));
+    }
+
+    #[test]
+    fn keymap_d_is_prefix() {
+        let keymap = default_keymap();
+        let d = parse_keys("d").unwrap();
+        let dd = parse_keys("dd").unwrap();
+        let r = parse_keys("r").unwrap();
+        assert!(matches!(keymap.lookup(Mode::Normal, &d), Lookup::Prefix));
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &dd),
+            Lookup::Exact(Action::DiscardSend)
+        ));
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &r),
+            Lookup::Exact(Action::RetrySend)
+        ));
+        // The newline keys of the Insert mode stay as documented (D-09).
+        for notation in ["<A-CR>", "<C-j>"] {
+            let chords = parse_keys(notation).unwrap();
+            assert!(matches!(
+                keymap.lookup(Mode::Insert, &chords),
+                Lookup::Exact(Action::InsertNewline)
+            ));
+        }
     }
 
     #[test]

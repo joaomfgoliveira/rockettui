@@ -4,6 +4,9 @@
 //! raw keys, resize, clock, paste, loaded data, the key timeout and counted actions are produced by
 //! the program, never by a keymap row, so they have none (T-02-11). The names are the user-facing
 //! vocabulary: renaming one breaks a user's `keymap.toml`.
+//!
+//! `retry_send` and `discard_send` are user-facing vocabulary too (D-06): they act on a failed or
+//! unconfirmed message under the messages-pane cursor, bound by default to `r` and `dd`.
 
 use crate::action::Action;
 
@@ -38,6 +41,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "cursor_home",
     "cursor_end",
     "submit_input",
+    "retry_send",
+    "discard_send",
     "execute_command",
     "quit",
 ];
@@ -74,6 +79,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "cursor_home" => Action::CursorHome,
         "cursor_end" => Action::CursorEnd,
         "submit_input" => Action::SubmitInput,
+        "retry_send" => Action::RetrySend,
+        "discard_send" => Action::DiscardSend,
         "execute_command" => Action::ExecuteCommand,
         "quit" => Action::Quit,
         _ => return None,
@@ -113,6 +120,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::CursorHome => Some("cursor_home"),
         Action::CursorEnd => Some("cursor_end"),
         Action::SubmitInput => Some("submit_input"),
+        Action::RetrySend => Some("retry_send"),
+        Action::DiscardSend => Some("discard_send"),
         Action::ExecuteCommand => Some("execute_command"),
         Action::Quit => Some("quit"),
         // `cmd:<command>` is a form of the value, not a name of its own.

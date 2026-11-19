@@ -245,6 +245,11 @@ def send_reply(server, body):
     {"message": {"_id", "rid", "msg"}}, 400 duplicate for an `_id` already stored, else the stored
     message authored by MOCK_USERNAME."""
     invalid = (400, {"success": False, "error": "invalid-params"})
+    if server.fail_next:
+        # A scripted failure: an integer status answers that status and stores nothing.
+        failure = server.fail_next.pop(0)
+        if isinstance(failure, int):
+            return failure, {"success": False, "error": "error-action-not-allowed"}
     if not isinstance(body, dict) or list(body.keys()) != ["message"]:
         return invalid
     message = body["message"]
@@ -278,6 +283,8 @@ def start_mock(mode="ok"):
 
     `bodies` is a list of `(path, parsed_json)`, one per POST that carried a JSON body, and
     `stored` maps the `_id` of each accepted chat.sendMessage to the message the server stored.
+    `fail_next` is a list a scenario may fill: each chat.sendMessage pops its first entry, and an
+    integer entry answers that status with {"success": false} without storing the message.
 
     `mode` is settable at any time: "ok" serves normally, "unauthorized" answers every request with
     the 9.0.0-style 401 body whatever the credentials (a rejected or revoked token).
@@ -338,6 +345,7 @@ def start_mock(mode="ok"):
     server.requests = []
     server.bodies = []
     server.stored = {}
+    server.fail_next = []
     server.mode = mode
     server.base_url = f"http://127.0.0.1:{server.server_address[1]}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -571,6 +579,67 @@ def scenario_send(binary):
     # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
     os.write(fd, b"\x1b")
     time.sleep(0.3)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
+
+
+def scenario_send_retry(binary):
+    """MSG-02, D-06 in the real binary: a failed send is retried with `r` under the same client _id
+    and turns into the server's copy; a failed one is discarded with `dd`. Three POSTs in all."""
+    mock = start_mock()
+    mock.fail_next = [400]
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, b"retry me")
+    type_keys(fd, buf, b"\r")
+    # The status line is read before ESC: any key press clears it.
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("message not sent"), 10):
+        raise SmokeFail("a rejected send never showed `message not sent`")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b"r")
+
+    def posts_of():
+        return [body for path, body in mock.bodies if path == SEND_ENDPOINT]
+
+    def retried(b):
+        rows = screen_of(b).rows()
+        return len(posts_of()) == 2 and any(
+            "retry me" in row and MOCK_USERNAME in row for row in rows
+        )
+
+    if not read_until(fd, buf, retried, 10):
+        raise SmokeFail("`r` never re-sent the failed message")
+    first, second = posts_of()
+    if first["message"]["_id"] != second["message"]["_id"]:
+        raise SmokeFail("the retry used another client _id")
+
+    mock.fail_next = [400]
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, b"drop me")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("message not sent"), 10):
+        raise SmokeFail("the second rejected send never showed `message not sent`")
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    if not any("drop me" in row for row in screen_of(buf).rows()):
+        raise SmokeFail("the failed message is not on the screen before dd")
+    type_keys(fd, buf, b"dd")
+    gone = lambda b: not any("drop me" in row for row in screen_of(b).rows())
+    if not read_until(fd, buf, gone, 5):
+        raise SmokeFail("`dd` did not remove the failed message")
+    posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
+    if len(posts) != 3:
+        raise SmokeFail(f"expected three chat.sendMessage POSTs, saw {len(posts)}")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)
@@ -1075,6 +1144,7 @@ SCENARIOS = {
     "panic": scenario_panic,
     "insert": scenario_insert,
     "send": scenario_send,
+    "send_retry": scenario_send_retry,
     "config_layout": scenario_config_layout,
     "config_keymap": scenario_config_keymap,
     "config_error": scenario_config_error,
