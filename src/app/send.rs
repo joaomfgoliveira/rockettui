@@ -9,6 +9,8 @@
 //! - at most one request is in flight per room: a message is `Queued` until the room has no
 //!   `Sending` message, and every result starts the next queued message of its room (D-03);
 //! - a message that failed never holds back the ones queued after it (D-16);
+//! - a failure whose outcome is unknown (timeout, 5xx, lost connection) is `Unconfirmed`, not
+//!   `Failed`: its retry asks the server first, so a lost answer never becomes a duplicate (D-07);
 //! - a result is applied to the room the message was sent from, found by room and message id,
 //!   never to the current room (the user may have opened another room meanwhile);
 //! - a server answer replaces the message in place, at the same index, so nothing moves and no
@@ -181,11 +183,14 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
     }
 }
 
-/// The send of message `id` of `room` failed: the message becomes `Failed` and keeps its place, the
-/// fixed reason goes to the status bar (D-06), and the next queued message of the room goes out
-/// (D-16). Plan 04-03 splits `Unconfirmed` out of this for an unknown outcome (D-07, D-18).
+/// The send of message `id` of `room` failed. A definite failure (the server refused it or the
+/// request never left) makes the message `Failed`; an unknown outcome (a timeout, any 5xx, a lost
+/// connection, an unreadable answer) makes it `Unconfirmed`, because the server may have stored it
+/// (D-06, D-07, D-18). Either way it keeps its place, the fixed reason goes to the status bar, and
+/// the next queued message of the room goes out (D-16). Nothing here resends it: only `retry` does.
 pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
-    app.status_msg = Some(StatusMsg::Error(send_error_text(error, false)));
+    let unconfirmed = error.outcome_unknown();
+    app.status_msg = Some(StatusMsg::Error(send_error_text(error, unconfirmed)));
     let Some(held) = app.messages.get_mut(&room) else {
         return;
     };
@@ -193,14 +198,19 @@ pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
         .iter_mut()
         .find(|m| m.id == id && m.send == SendState::Sending)
     {
-        slot.send = SendState::Failed;
+        slot.send = if unconfirmed {
+            SendState::Unconfirmed
+        } else {
+            SendState::Failed
+        };
         pump(app, &room);
     }
 }
 
-/// `message not sent: <reason>` with one fixed reason per error kind. It is deliberately not
-/// `ApiError`'s `Display`, whose hints point at `:reconnect` (D-08), and it never holds server text.
-pub fn send_error_text(error: ApiError, _unconfirmed: bool) -> String {
+/// `message not sent: <reason>`, or `message may not have been sent: <reason>` when the outcome is
+/// unknown, with one fixed reason per error kind. It is deliberately not `ApiError`'s `Display`,
+/// whose hints point at `:reconnect` (D-08), and it never holds server text or the message body.
+pub fn send_error_text(error: ApiError, unconfirmed: bool) -> String {
     let reason = match error {
         ApiError::Unauthorized => "unauthorized, check the user id and token".to_string(),
         ApiError::Forbidden => "not allowed in this room".to_string(),
@@ -216,7 +226,11 @@ pub fn send_error_text(error: ApiError, _unconfirmed: bool) -> String {
         ApiError::Rejected => "rejected (read-only, muted or too long)".to_string(),
         ApiError::ConnectionLost => "connection lost".to_string(),
     };
-    format!("message not sent: {reason}")
+    if unconfirmed {
+        format!("message may not have been sent: {reason}")
+    } else {
+        format!("message not sent: {reason}")
+    }
 }
 
 #[cfg(test)]

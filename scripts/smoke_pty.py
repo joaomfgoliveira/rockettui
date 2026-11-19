@@ -233,6 +233,7 @@ def history_reply(path, query):
 
 
 SEND_ENDPOINT = "/api/v1/chat.sendMessage"
+GET_MESSAGE_ENDPOINT = "/api/v1/chat.getMessage"
 
 
 def _now_iso():
@@ -245,11 +246,10 @@ def send_reply(server, body):
     {"message": {"_id", "rid", "msg"}}, 400 duplicate for an `_id` already stored, else the stored
     message authored by MOCK_USERNAME."""
     invalid = (400, {"success": False, "error": "invalid-params"})
-    if server.fail_next:
+    failure = server.fail_next.pop(0) if server.fail_next else None
+    if isinstance(failure, int):
         # A scripted failure: an integer status answers that status and stores nothing.
-        failure = server.fail_next.pop(0)
-        if isinstance(failure, int):
-            return failure, {"success": False, "error": "error-action-not-allowed"}
+        return failure, {"success": False, "error": "error-action-not-allowed"}
     if not isinstance(body, dict) or list(body.keys()) != ["message"]:
         return invalid
     message = body["message"]
@@ -269,6 +269,17 @@ def send_reply(server, body):
         "u": {"_id": MOCK_USER_ID, "username": MOCK_USERNAME},
     }
     server.stored[message["_id"]] = stored
+    if failure == "store_then_500":
+        # The server keeps the message, then fails the answer: the outcome is unknown to the client.
+        return 500, {"success": False}
+    return 200, {"message": stored, "success": True}
+
+
+def get_message_reply(server, query):
+    """(status, body) for one chat.getMessage: the stored message for a known `msgId`, else 400."""
+    stored = server.stored.get(query.get("msgId"))
+    if stored is None:
+        return 400, {"success": False, "error": "error-not-found"}
     return 200, {"message": stored, "success": True}
 
 
@@ -283,8 +294,10 @@ def start_mock(mode="ok"):
 
     `bodies` is a list of `(path, parsed_json)`, one per POST that carried a JSON body, and
     `stored` maps the `_id` of each accepted chat.sendMessage to the message the server stored.
-    `fail_next` is a list a scenario may fill: each chat.sendMessage pops its first entry, and an
-    integer entry answers that status with {"success": false} without storing the message.
+    `fail_next` is a list a scenario may fill: each chat.sendMessage pops its first entry. An
+    integer entry answers that status with {"success": false} without storing the message;
+    "store_then_500" stores the message and then answers 500. GET chat.getMessage answers 200 with
+    the stored message for a known `msgId` and 400 otherwise.
 
     `mode` is settable at any time: "ok" serves normally, "unauthorized" answers every request with
     the 9.0.0-style 401 body whatever the credentials (a rejected or revoked token).
@@ -331,6 +344,8 @@ def start_mock(mode="ok"):
                 self.reply(*send_reply(self.server, body))
             elif self.command != "GET":
                 self.reply(405, {"success": False})
+            elif parsed.path == GET_MESSAGE_ENDPOINT:
+                self.reply(*get_message_reply(self.server, query))
             elif parsed.path in HISTORY_ENDPOINTS:
                 self.reply(*history_reply(parsed.path, query))
             elif parsed.path in MOCK_ROUTES:
@@ -640,6 +655,51 @@ def scenario_send_retry(binary):
     posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
     if len(posts) != 3:
         raise SmokeFail(f"expected three chat.sendMessage POSTs, saw {len(posts)}")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if MOCK_TOKEN.encode() in bytes(buf):
+        raise SmokeFail("the token appeared in the output")
+
+
+def scenario_send_unconfirmed(binary):
+    """D-07, D-15, D-18 in the real binary: the server stores a message and then answers 500, so the
+    row is Unconfirmed; `r` asks chat.getMessage for that _id, finds it and turns the row into the
+    server's copy without a second POST."""
+    mock = start_mock()
+    mock.fail_next = ["store_then_500"]
+    pid, fd = spawn(binary, server_url=mock.base_url)
+    buf = bytearray()
+    wait_ready(fd, buf)
+    type_keys(fd, buf, b"\r")  # opens general
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, b"maybe sent")
+    type_keys(fd, buf, b"\r")
+    # The status line is read before ESC: any key press clears it.
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("may not have been sent"), 10):
+        raise SmokeFail("a 500 answer never showed `may not have been sent`")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b"r")
+    swapped = lambda b: any(
+        "maybe sent" in row and MOCK_USERNAME in row for row in screen_of(b).rows()
+    )
+    if not read_until(fd, buf, swapped, 10):
+        raise SmokeFail("`r` never turned the unconfirmed row into the server's copy")
+    posts = [r for r in mock.requests if r[0] == "POST" and r[1] == SEND_ENDPOINT]
+    if len(posts) != 1:
+        raise SmokeFail(f"expected exactly one chat.sendMessage POST, saw {len(posts)}")
+    sent_id = [body for path, body in mock.bodies if path == SEND_ENDPOINT][0]["message"]["_id"]
+    gets = [r for r in mock.requests if r[0] == "GET" and r[1] == GET_MESSAGE_ENDPOINT]
+    if len(gets) != 1:
+        raise SmokeFail(f"expected exactly one chat.getMessage GET, saw {len(gets)}")
+    if gets[0][2] != {"msgId": sent_id}:
+        raise SmokeFail("the reconcile GET did not ask for the POST's _id")
+    if not gets[0][3]:
+        raise SmokeFail("the reconcile GET was not authenticated")
     type_keys(fd, buf, b":q")
     type_keys(fd, buf, b"\r")
     code = wait_exit(pid, fd, buf, 10)
@@ -1145,6 +1205,7 @@ SCENARIOS = {
     "insert": scenario_insert,
     "send": scenario_send,
     "send_retry": scenario_send_retry,
+    "send_unconfirmed": scenario_send_unconfirmed,
     "config_layout": scenario_config_layout,
     "config_keymap": scenario_config_keymap,
     "config_error": scenario_config_error,

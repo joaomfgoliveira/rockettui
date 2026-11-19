@@ -43,9 +43,11 @@ pub enum Effect {
         before: Option<String>,
     },
     /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
-    /// `id` as the message `_id` (D-07, D-15). `reconcile` selects the `chat.getMessage`-first
-    /// branch of a retry (plan 04-03); this plan POSTs in every case. The answer comes back as
-    /// `Action::MessageSent` or `Action::SendFailed`, both addressed by `room` and `id`.
+    /// `id` as the message `_id` (D-07, D-15). With `reconcile` (a retry of an `Unconfirmed`
+    /// message) the server is asked first with `GET chat.getMessage`: a 200 is the answer and no
+    /// POST is sent; after a failing POST it is asked once more, and a 200 still counts as sent. The
+    /// answer comes back as `Action::MessageSent` or `Action::SendFailed`, both addressed by `room`
+    /// and `id`.
     SendMessage {
         room: RoomId,
         id: String,
@@ -100,10 +102,28 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Err(error) => vec![Action::HistoryFailed { room, older, error }],
             }
         }
-        Effect::SendMessage { room, id, text, .. } => {
+        Effect::SendMessage {
+            room,
+            id,
+            text,
+            reconcile,
+        } => {
+            // A retry of an Unconfirmed message first asks the server whether it already holds the
+            // message (D-15): a lost response must never become a duplicate in the room. Any
+            // answer but a 200 means "not stored", and the POST follows.
+            if reconcile && let Ok(message) = client.get_message(&room, &id).await {
+                return vec![Action::MessageSent { room, id, message }];
+            }
             match client.send_message(&room, &id, text.as_str()).await {
                 Ok(message) => vec![Action::MessageSent { room, id, message }],
-                Err(error) => vec![Action::SendFailed { room, id, error }],
+                Err(error) => {
+                    // The attempt may have landed meanwhile, or a duplicate `_id` was answered
+                    // with an error (probe P2): ask once more, and a 200 still counts as sent.
+                    if reconcile && let Ok(message) = client.get_message(&room, &id).await {
+                        return vec![Action::MessageSent { room, id, message }];
+                    }
+                    vec![Action::SendFailed { room, id, error }]
+                }
             }
         }
     }

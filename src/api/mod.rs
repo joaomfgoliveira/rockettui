@@ -105,7 +105,14 @@ impl ApiError {
     /// client got no clean answer (timeout, 5xx per D-18, lost connection, an answer that could
     /// not be read). Such a message is `Unconfirmed` and is reconciled before it is posted again.
     pub fn outcome_unknown(self) -> bool {
-        false
+        matches!(
+            self,
+            ApiError::Timeout
+                | ApiError::Server(_)
+                | ApiError::ConnectionLost
+                | ApiError::BadResponse
+                | ApiError::TooLarge
+        )
     }
 }
 
@@ -136,17 +143,28 @@ fn send_error(e: &reqwest::Error) -> ApiError {
     } else if e.is_decode() || e.is_body() {
         ApiError::BadResponse
     } else {
-        ApiError::Unreachable
+        // A transport error after the connection was made (a reset, a close before the answer).
+        ApiError::ConnectionLost
     }
 }
 
 /// Send `request`, check the HTTP status, read the body under the size cap and decode it. Shared
 /// by every GET and by the one `chat.sendMessage` POST, so they all keep the same rules: the status
 /// first (a redirect is an error, never followed), then the capped body, then lenient decoding.
-async fn read_json<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T, ApiError> {
+///
+/// `client_error` is what a 4xx status other than 401, 403, 404 and 429 becomes: `BadResponse` for
+/// a GET, `Rejected` for the send (D-12). A body that cannot be decoded stays `BadResponse` on both.
+async fn read_json<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    client_error: ApiError,
+) -> Result<T, ApiError> {
     let mut response = request.send().await.map_err(|e| send_error(&e))?;
     if let Some(error) = status_error(response.status()) {
-        return Err(error);
+        return Err(if error == ApiError::BadResponse {
+            client_error
+        } else {
+            error
+        });
     }
     if response
         .content_length()
@@ -283,14 +301,17 @@ impl Client {
         if !query.is_empty() {
             request = request.query(query);
         }
-        read_json(request).await
+        read_json(request, ApiError::BadResponse).await
     }
 
     /// Ask the server for message `id` of `room` with `GET chat.getMessage` (D-15): the reconcile
     /// step before a retried `Unconfirmed` message is posted again. Any error means the answer is
     /// not known; the caller treats every non-200 as "not stored".
-    pub async fn get_message(&self, _room: &RoomId, _id: &str) -> Result<Message, ApiError> {
-        Err(ApiError::BadResponse)
+    pub async fn get_message(&self, room: &RoomId, id: &str) -> Result<Message, ApiError> {
+        let resp: wire::MessageResp = self
+            .get_json("chat.getMessage", &[("msgId", id.to_string())])
+            .await?;
+        Ok(map::message(room, resp.message))
     }
 
     /// Load the user's joined rooms and sidebar folders: `subscriptions.get`, `rooms.get` and
@@ -356,7 +377,7 @@ impl Client {
             .http
             .post(self.endpoint("chat.sendMessage"))
             .json(&body);
-        let resp: wire::MessageResp = read_json(request).await?;
+        let resp: wire::MessageResp = read_json(request, ApiError::Rejected).await?;
         Ok(map::message(room, resp.message))
     }
 }
