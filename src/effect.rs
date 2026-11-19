@@ -363,14 +363,16 @@ mod tests {
         let requests = server.received_requests().await.expect("recorded");
         assert_eq!(requests.len(), 1, "one send is one request");
 
-        // 401: the message is unchanged and the status bar shows the fixed reason.
+        // 401: the message stays in place, now marked Failed, and the status bar shows the fixed
+        // reason.
         let server = MockServer::start().await;
         mount_send_status(&server, 401).await;
         let mut app = seeded();
-        let before = app.messages[&general()].clone();
+        let mut before = app.messages[&general()].clone();
         for action in run(Ok(client_for(&server)), send_effect()).await {
             update(&mut app, action);
         }
+        before[k].send = SendState::Failed;
         assert_eq!(app.messages[&general()], before);
         assert_eq!(app.messages[&general()][k].author, "me");
         let Some(crate::app::StatusMsg::Error(text)) = &app.status_msg else {

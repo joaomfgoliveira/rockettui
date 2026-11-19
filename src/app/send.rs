@@ -25,9 +25,11 @@ use crate::effect::{Effect, SendText};
 /// Enter in Insert mode (D-15): turn the draft into a pending message of the open room, clear the
 /// draft, stay in Insert mode and start the send when the room has none in flight.
 ///
-/// Nothing happens for a blank draft (D-09). With no room open the draft is kept and the status
-/// bar says so. There is no check of history state, length or permission here: the server decides
-/// (D-11, D-12), and a send while history is Loading or Failed goes out like any other (D-19).
+/// Nothing happens for a blank draft (D-09). With no room open, or an encrypted room open, the
+/// draft is kept and the status bar says why; the encrypted guard sits before the draft is taken,
+/// so no plaintext leaves the process (D-11). There is no check of history state, length or
+/// permission here: the server decides (D-12), and a send while history is Loading or Failed goes
+/// out like any other (D-19).
 pub fn submit(app: &mut App) {
     if app.mode != Mode::Insert || app.input.text().trim().is_empty() {
         return;
@@ -38,6 +40,10 @@ pub fn submit(app: &mut App) {
         ));
         return;
     };
+    if app.rooms.iter().any(|r| r.id == room && r.encrypted) {
+        app.status_msg = Some(StatusMsg::Error("encrypted, not supported".into()));
+        return;
+    }
     let body = app.input.take();
     app.local_seq += 1;
     let message = Message {
@@ -102,11 +108,21 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
     }
 }
 
-/// The send of message `id` of `room` failed: show the fixed reason on the status bar (D-06). The
-/// message keeps its place; its own Failed or Unconfirmed state arrives with `SendState` in a
-/// later plan (D-07, D-18).
-pub fn on_failed(app: &mut App, _room: RoomId, _id: String, error: ApiError) {
+/// The send of message `id` of `room` failed: the message becomes `Failed` and keeps its place, the
+/// fixed reason goes to the status bar (D-06), and the next queued message of the room goes out
+/// (D-16). Plan 04-03 splits `Unconfirmed` out of this for an unknown outcome (D-07, D-18).
+pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
     app.status_msg = Some(StatusMsg::Error(send_error_text(error)));
+    let Some(held) = app.messages.get_mut(&room) else {
+        return;
+    };
+    if let Some(slot) = held
+        .iter_mut()
+        .find(|m| m.id == id && m.send == SendState::Sending)
+    {
+        slot.send = SendState::Failed;
+        pump(app, &room);
+    }
 }
 
 /// `message not sent: <reason>` with one fixed reason per error kind. It is deliberately not
@@ -215,8 +231,7 @@ mod tests {
         assert_eq!(crate::app::messages::view(&app, &general()).cursor, before);
     }
 
-    /// Run every recorded send of `app` through the reducer as if it had been answered: the
-    /// helpers below answer one message at a time instead, so this is only for `states` checks.
+    /// Answer the send of message `id` with the server's copy, through the reducer.
     fn answer_sent(app: &mut App, id: &str, ts: i64) {
         let message = msg(&general(), id, "smoke", ts, "answer");
         update(
@@ -229,6 +244,7 @@ mod tests {
         );
     }
 
+    /// Fail the send of message `id`, through the reducer.
     fn answer_failed(app: &mut App, id: &str) {
         update(
             app,
