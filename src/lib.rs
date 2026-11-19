@@ -66,6 +66,14 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// The per-process prefix of every client message id: `rt` followed by 32 lowercase hex digits.
+/// The only place the program reads OS randomness (through `RandomState`'s per-process keys). Ids
+/// need to be unique across runs, not secret, and the server accepts any string as an `_id`
+/// (RESEARCH Pattern 2, probe P1). Drawn once in `run`, never in the reducer.
+fn session_id_prefix() -> String {
+    String::new()
+}
+
 /// The run loop: queue input, then repeatedly apply a batch of Actions through the single reducer
 /// call site, spawn the fetches the reducer asked for, draw once, and wait for the next Action.
 ///
@@ -140,3 +148,26 @@ pub async fn run(
 mod redaction;
 #[cfg(test)]
 pub(crate) mod test_util;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_prefix_shape() {
+        let prefix = session_id_prefix();
+        assert_eq!(prefix.len(), 34, "{prefix}");
+        assert!(prefix.starts_with("rt"), "{prefix}");
+        assert!(
+            prefix[2..]
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{prefix}"
+        );
+        assert_ne!(
+            prefix,
+            session_id_prefix(),
+            "two runs must not share a prefix"
+        );
+    }
+}

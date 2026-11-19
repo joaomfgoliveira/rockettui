@@ -61,7 +61,9 @@ pub enum StatusMsg {
 /// Upper bound on the command line length, in characters.
 pub const MAX_CMDLINE: usize = 256;
 
-/// Author of every locally composed message until Phase 4 sends them to the server (T-01-23).
+/// The author of a pending row while the own username is unknown (D-17): `App.own_username` is
+/// `None` until the username arrives from `GET /api/v1/me` (plan 04-06), and a message composed in
+/// that time shows this name. Once the server answers, the server's copy carries the real author.
 pub const LOCAL_AUTHOR: &str = "me";
 
 /// The whole application state. No `Debug`: it holds typed text and message bodies.
@@ -94,6 +96,14 @@ pub struct App {
     pub input: input_buf::InputBuffer,
     /// Counter behind the ids of locally appended messages.
     pub local_seq: u64,
+    /// The prefix of every client message id: ids are `id_prefix` + `local_seq` (built by
+    /// `send::submit`, plan 04-02). `with_config` sets `local-`, so test ids are `local-1`,
+    /// `local-2`; `run()` replaces it once with a random session prefix, so a restarted client
+    /// never reuses an id the server already stored (D-07).
+    pub id_prefix: String,
+    /// The user's own username (D-17), set from `GET /api/v1/me` by plan 04-06 and kept in memory
+    /// only. While it is `None` a pending row falls back to `LOCAL_AUTHOR`.
+    pub own_username: Option<String>,
     pub status_msg: Option<StatusMsg>,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
@@ -140,6 +150,8 @@ impl App {
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
             local_seq: 0,
+            id_prefix: String::new(),
+            own_username: None,
             status_msg: None,
             keymap: config.keymap,
             theme: config.theme,
@@ -287,6 +299,16 @@ mod tests {
         let ready = status_row(&app);
         assert!(!ready.contains("unauthorized"), "{ready}");
         assert!(!ready.contains("Connecting"), "{ready}");
+    }
+
+    #[test]
+    fn send_fields_default() {
+        let app = App::new(Size::new(80, 24));
+        assert_eq!(app.id_prefix, "local-");
+        assert_eq!(app.own_username, None);
+        // Test ids are built from the prefix and the counter: local-1, local-2.
+        assert_eq!(format!("{}{}", app.id_prefix, 1), "local-1");
+        assert_eq!(format!("{}{}", app.id_prefix, 2), "local-2");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::config::connection::{
 };
 use crate::config::{Sources, load_from_sources};
 use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind};
-use crate::effect::Effect;
+use crate::effect::{Effect, SendText};
 use crate::test_util::{press, render_to_string};
 use ratatui::layout::Size;
 
@@ -178,6 +178,18 @@ fn sentinel_sweep() {
     };
     no_sentinel("Effect::LoadHistory", &format!("{effect:?}"));
     no_sentinel("Effect::LoadRooms", &format!("{:?}", Effect::LoadRooms));
+    // The send path: the text of a message being sent, and its effect and results (D-14).
+    no_sentinel(
+        "SendText",
+        &format!("{:?}", SendText::new(BODY.to_string())),
+    );
+    let send = Effect::SendMessage {
+        room: RoomId("r-general".to_string()),
+        id: "rt-test-1".to_string(),
+        text: SendText::new(BODY.to_string()),
+        reconcile: true,
+    };
+    no_sentinel("Effect::SendMessage", &format!("{send:?}"));
     let actions = [
         Action::LoadFailed(ApiError::Unauthorized),
         Action::HistoryLoaded {
@@ -206,9 +218,22 @@ fn sentinel_sweep() {
             room_ids: vec![RoomId("r-general".to_string())],
         }]),
         Action::MessagesLoaded(RoomId("r-general".to_string()), vec![message_with_body()]),
+        Action::MessageSent {
+            room: RoomId("r-general".to_string()),
+            id: "rt-test-1".to_string(),
+            message: message_with_body(),
+        },
     ];
     for action in &actions {
         no_sentinel("Action", &format!("{action:?}"));
+    }
+    for error in ALL_ERRORS {
+        let failed = Action::SendFailed {
+            room: RoomId("r-general".to_string()),
+            id: "rt-test-1".to_string(),
+            error,
+        };
+        no_sentinel("Action::SendFailed", &format!("{failed:?}"));
     }
 }
 
