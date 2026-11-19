@@ -9,16 +9,21 @@
 //! - at most one request is in flight per room: a message is `Queued` until the room has no
 //!   `Sending` message, and every result starts the next queued message of its room (D-03);
 //! - a message that failed never holds back the ones queued after it (D-16);
+//! - a failure whose outcome is unknown (timeout, 5xx, lost connection) is `Unconfirmed`, not
+//!   `Failed`: its retry asks the server first, so a lost answer never becomes a duplicate (D-07);
 //! - a result is applied to the room the message was sent from, found by room and message id,
 //!   never to the current room (the user may have opened another room meanwhile);
 //! - a server answer replaces the message in place, at the same index, so nothing moves and no
 //!   history is fetched again (D-04);
 //! - a result for a message the room no longer holds changes nothing;
 //! - the status line for a failure is one fixed string per error kind: never server text, never
-//!   the message body, never a hint at `:reconnect`, which D-08 keeps separate from sending.
+//!   the message body, never a hint at `:reconnect`, which D-08 keeps separate from sending;
+//! - a `Failed` or `Unconfirmed` message is recovered only by the user: `retry` puts it back in its
+//!   room's queue under the same client id and `discard` removes it (D-06). Nothing resends on its
+//!   own, on a timer, on `:reconnect` or when the next message is sent (D-08).
 
 use crate::api::ApiError;
-use crate::app::{App, LOCAL_AUTHOR, Mode, StatusMsg, messages};
+use crate::app::{App, Focus, LOCAL_AUTHOR, Mode, StatusMsg, messages};
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, SendText};
 
@@ -92,6 +97,76 @@ pub fn pump(app: &mut App, room: &RoomId) {
     app.effects.push(effect);
 }
 
+/// The room and index of the message under the messages-pane cursor when it is `Failed` or
+/// `Unconfirmed`: the one guard `retry` and `discard` share. `None` for any other message, for any
+/// other pane and when no room is open or it holds nothing, so both keys are silent no-ops there.
+/// The cursor is read from `messages::view` on every call, so a counted repeat acts on whichever
+/// message sits under the cursor then.
+fn unsent_under_cursor(app: &App) -> Option<(RoomId, usize)> {
+    if app.focus != Focus::Messages {
+        return None;
+    }
+    let room = app.current_room.clone()?;
+    let held = app.messages.get(&room)?;
+    if held.is_empty() {
+        return None;
+    }
+    let cursor = messages::view(app, &room).cursor;
+    matches!(
+        held.get(cursor)?.send,
+        SendState::Failed | SendState::Unconfirmed
+    )
+    .then_some((room, cursor))
+}
+
+/// `r` (D-06): put the `Failed` or `Unconfirmed` message under the cursor back in its room's queue
+/// under the same client id (D-07), at the same position (D-16: it may now land after messages typed
+/// later). An `Unconfirmed` one is queued with `reconcile` set, so the request first asks the server
+/// whether it already holds the message (D-15). A silent no-op on anything else. It touches no
+/// connection state, no history and no other room (D-08).
+pub fn retry(app: &mut App) {
+    let Some((room, index)) = unsent_under_cursor(app) else {
+        return;
+    };
+    let Some(message) = app
+        .messages
+        .get_mut(&room)
+        .and_then(|held| held.get_mut(index))
+    else {
+        return;
+    };
+    message.send = SendState::Queued {
+        reconcile: message.send == SendState::Unconfirmed,
+    };
+    pump(app, &room);
+}
+
+/// `dd` (D-06): remove the `Failed` or `Unconfirmed` message under the cursor from its room. A
+/// silent no-op on anything else.
+pub fn discard(app: &mut App) {
+    let Some((room, index)) = unsent_under_cursor(app) else {
+        return;
+    };
+    remove_at(app, &room, index);
+    pump(app, &room);
+}
+
+/// Remove message `index` of `room`. A stored cursor below the removed message moves up by one, so
+/// the same message stays selected (T-04-12); one on the removed message stays and now selects its
+/// successor, which `messages::view` clamps at the end. A followed room has no stored view.
+fn remove_at(app: &mut App, room: &RoomId, index: usize) {
+    if let Some(held) = app.messages.get_mut(room)
+        && index < held.len()
+    {
+        held.remove(index);
+    }
+    if let Some(view) = app.msg_views.get_mut(room)
+        && view.cursor > index
+    {
+        view.cursor -= 1;
+    }
+}
+
 /// The server accepted message `id` of `room` and answered with its stored copy: replace the held
 /// message with that id by `message`, marked `Sent`, at the same index (D-04), then start the next
 /// queued message of the room (D-03). When `room` holds no message with that id nothing changes.
@@ -108,11 +183,14 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
     }
 }
 
-/// The send of message `id` of `room` failed: the message becomes `Failed` and keeps its place, the
-/// fixed reason goes to the status bar (D-06), and the next queued message of the room goes out
-/// (D-16). Plan 04-03 splits `Unconfirmed` out of this for an unknown outcome (D-07, D-18).
+/// The send of message `id` of `room` failed. A definite failure (the server refused it or the
+/// request never left) makes the message `Failed`; an unknown outcome (a timeout, any 5xx, a lost
+/// connection, an unreadable answer) makes it `Unconfirmed`, because the server may have stored it
+/// (D-06, D-07, D-18). Either way it keeps its place, the fixed reason goes to the status bar, and
+/// the next queued message of the room goes out (D-16). Nothing here resends it: only `retry` does.
 pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
-    app.status_msg = Some(StatusMsg::Error(send_error_text(error)));
+    let unconfirmed = error.outcome_unknown();
+    app.status_msg = Some(StatusMsg::Error(send_error_text(error, unconfirmed)));
     let Some(held) = app.messages.get_mut(&room) else {
         return;
     };
@@ -120,14 +198,19 @@ pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
         .iter_mut()
         .find(|m| m.id == id && m.send == SendState::Sending)
     {
-        slot.send = SendState::Failed;
+        slot.send = if unconfirmed {
+            SendState::Unconfirmed
+        } else {
+            SendState::Failed
+        };
         pump(app, &room);
     }
 }
 
-/// `message not sent: <reason>` with one fixed reason per error kind. It is deliberately not
-/// `ApiError`'s `Display`, whose hints point at `:reconnect` (D-08), and it never holds server text.
-pub fn send_error_text(error: ApiError) -> String {
+/// `message not sent: <reason>`, or `message may not have been sent: <reason>` when the outcome is
+/// unknown, with one fixed reason per error kind. It is deliberately not `ApiError`'s `Display`,
+/// whose hints point at `:reconnect` (D-08), and it never holds server text or the message body.
+pub fn send_error_text(error: ApiError, unconfirmed: bool) -> String {
     let reason = match error {
         ApiError::Unauthorized => "unauthorized, check the user id and token".to_string(),
         ApiError::Forbidden => "not allowed in this room".to_string(),
@@ -140,14 +223,21 @@ pub fn send_error_text(error: ApiError) -> String {
         ApiError::BadResponse => "unexpected response".to_string(),
         ApiError::TooLarge => "response too large".to_string(),
         ApiError::Client => "cannot build the HTTP client".to_string(),
+        ApiError::Rejected => "rejected (read-only, muted or too long)".to_string(),
+        ApiError::ConnectionLost => "connection lost".to_string(),
     };
-    format!("message not sent: {reason}")
+    if unconfirmed {
+        format!("message may not have been sent: {reason}")
+    } else {
+        format!("message not sent: {reason}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::action::Action;
+    use crate::app::Focus;
     use crate::app::update::update;
     use crate::test_util::{app_80x24, press};
 
@@ -251,7 +341,7 @@ mod tests {
             Action::SendFailed {
                 room: general(),
                 id: id.to_string(),
-                error: ApiError::Timeout,
+                error: ApiError::Forbidden,
             },
         );
     }
@@ -363,6 +453,251 @@ mod tests {
         }
     }
 
+    /// `general` holding one message `local-1` that was sent and failed, the messages pane focused
+    /// with the cursor on it, and no effect recorded.
+    fn app_with_failed() -> App {
+        let mut app = open_general_app();
+        press(&mut app, "iboom<CR>");
+        answer_failed(&mut app, "local-1");
+        press(&mut app, "<Esc>");
+        app.effects.clear();
+        assert_eq!(app.focus, Focus::Messages);
+        assert_eq!(
+            app.messages[&general()].last().unwrap().send,
+            SendState::Failed
+        );
+        app
+    }
+
+    /// `general` replaced by `[m0, F1, m2, m3]` with F1 `Failed` and no stored view.
+    fn app_with_four() -> App {
+        let mut app = open_general_app();
+        let room = general();
+        let mut failed = msg(&room, "F1", "me", 2, "failed text");
+        failed.send = SendState::Failed;
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg(&room, "m0", "a", 1, "zero"),
+                failed,
+                msg(&room, "m2", "a", 3, "two"),
+                msg(&room, "m3", "a", 4, "three"),
+            ],
+        );
+        app.msg_views.clear();
+        app
+    }
+
+    fn ids(app: &App) -> Vec<String> {
+        app.messages[&general()]
+            .iter()
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn retry_failed_requeues_same_id() {
+        let mut app = app_with_failed();
+        press(&mut app, "r");
+        assert_eq!(
+            app.messages[&general()].last().unwrap().send,
+            SendState::Sending
+        );
+        assert_eq!(
+            sends(&app),
+            vec![(
+                "general".to_string(),
+                "local-1".to_string(),
+                "boom".to_string(),
+                false
+            )]
+        );
+
+        // An Unconfirmed message is retried with reconcile set (D-15).
+        let mut app = app_with_failed();
+        app.messages
+            .get_mut(&general())
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .send = SendState::Unconfirmed;
+        press(&mut app, "r");
+        assert_eq!(
+            app.messages[&general()].last().unwrap().send,
+            SendState::Sending
+        );
+        assert_eq!(
+            sends(&app),
+            vec![(
+                "general".to_string(),
+                "local-1".to_string(),
+                "boom".to_string(),
+                true
+            )]
+        );
+    }
+
+    #[test]
+    fn retry_waits_behind_a_message_in_flight() {
+        let mut app = app_with_failed();
+        press(&mut app, "ix<CR>");
+        press(&mut app, "<Esc>");
+        let last = app.messages[&general()].len() - 1;
+        assert_eq!(app.messages[&general()][last].send, SendState::Sending);
+        app.effects.clear();
+        // Put the cursor on the Failed message (the one before the in-flight one).
+        press(&mut app, "G");
+        press(&mut app, "k");
+        assert_eq!(app.messages[&general()][last - 1].send, SendState::Failed);
+        press(&mut app, "r");
+        // One request in flight per room: it is queued, not started.
+        assert_eq!(
+            app.messages[&general()][last - 1].send,
+            SendState::Queued { reconcile: false }
+        );
+        assert!(sends(&app).is_empty());
+        // A counted repeat does not queue anything twice.
+        press(&mut app, "3r");
+        assert!(sends(&app).is_empty());
+    }
+
+    #[test]
+    fn retry_discard_noop_elsewhere() {
+        // The cursor message is not Failed or Unconfirmed: nothing happens.
+        for state in [
+            SendState::Sent,
+            SendState::Queued { reconcile: false },
+            SendState::Sending,
+        ] {
+            let mut app = app_with_failed();
+            app.messages
+                .get_mut(&general())
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .send = state;
+            let before = app.messages[&general()].clone();
+            press(&mut app, "rdd");
+            assert_eq!(app.messages[&general()], before, "{state:?}");
+            assert!(app.effects.is_empty(), "{state:?}");
+            assert!(app.status_msg.is_none(), "{state:?}");
+        }
+
+        // The pane is not the messages pane.
+        for focus in [Focus::Sidebar, Focus::Input] {
+            let mut app = app_with_failed();
+            app.focus = focus;
+            let before = app.messages[&general()].clone();
+            press(&mut app, "rdd");
+            assert_eq!(app.messages[&general()], before, "{focus:?}");
+            assert!(app.effects.is_empty(), "{focus:?}");
+            assert!(app.status_msg.is_none(), "{focus:?}");
+        }
+
+        // No room is open.
+        let mut app = app_80x24();
+        app.focus = Focus::Messages;
+        assert!(app.current_room.is_none());
+        press(&mut app, "rdd");
+        assert!(app.effects.is_empty());
+        assert!(app.status_msg.is_none());
+
+        // A room that holds no message.
+        let mut app = open_general_app();
+        app.messages.insert(general(), Vec::new());
+        press(&mut app, "rdd");
+        assert!(app.effects.is_empty());
+    }
+
+    #[test]
+    fn discard_removes_and_fixes_cursor() {
+        // The cursor on F1 (index 1): dd removes it and the cursor stays at 1, now m2.
+        let mut app = app_with_four();
+        press(&mut app, "ggj");
+        assert_eq!(messages::view(&app, &general()).cursor, 1);
+        press(&mut app, "dd");
+        assert_eq!(ids(&app), ["m0", "m2", "m3"]);
+        assert_eq!(messages::view(&app, &general()).cursor, 1);
+        assert_eq!(app.messages[&general()][1].id, "m2");
+        assert!(app.effects.is_empty(), "a discard sends nothing");
+
+        // A followed room (no stored view): the cursor stays on the newest message.
+        let mut app = open_general_app();
+        let room = general();
+        let mut failed = msg(&room, "F1", "me", 2, "failed text");
+        failed.send = SendState::Failed;
+        app.messages
+            .insert(room.clone(), vec![msg(&room, "m0", "a", 1, "zero"), failed]);
+        app.msg_views.clear();
+        press(&mut app, "dd");
+        assert_eq!(ids(&app), ["m0"]);
+        assert_eq!(messages::view(&app, &room).cursor, 0);
+
+        // A stored cursor below the removed message moves up by one, so m3 stays selected.
+        let mut app = app_with_four();
+        app.msg_views.insert(
+            general(),
+            messages::MsgView {
+                cursor: 3,
+                top_row: 0,
+            },
+        );
+        remove_at(&mut app, &general(), 1);
+        assert_eq!(ids(&app), ["m0", "m2", "m3"]);
+        assert_eq!(app.msg_views[&general()].cursor, 2);
+        assert_eq!(app.messages[&general()][2].id, "m3");
+
+        // A stored cursor above the removed message does not move.
+        let mut app = app_with_four();
+        app.msg_views.insert(
+            general(),
+            messages::MsgView {
+                cursor: 0,
+                top_row: 0,
+            },
+        );
+        remove_at(&mut app, &general(), 1);
+        assert_eq!(app.msg_views[&general()].cursor, 0);
+    }
+
+    #[test]
+    fn discard_counted() {
+        // Two adjacent Failed messages: 2dd removes both.
+        let mut app = open_general_app();
+        let room = general();
+        let failed = |id: &str| {
+            let mut m = msg(&room, id, "me", 2, "failed text");
+            m.send = SendState::Failed;
+            m
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg(&room, "m0", "a", 1, "zero"),
+                failed("F1"),
+                failed("F2"),
+                msg(&room, "m3", "a", 4, "three"),
+            ],
+        );
+        app.msg_views.clear();
+        press(&mut app, "ggj2dd");
+        assert_eq!(ids(&app), ["m0", "m3"]);
+
+        // One Failed then a Sent message: 3dd removes only the Failed one.
+        let mut app = open_general_app();
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg(&room, "m0", "a", 1, "zero"),
+                failed("F1"),
+                msg(&room, "m2", "a", 3, "two"),
+            ],
+        );
+        app.msg_views.clear();
+        press(&mut app, "ggj3dd");
+        assert_eq!(ids(&app), ["m0", "m2"]);
+    }
+
     #[test]
     fn edge_empty_and_text_as_is() {
         // A one-character draft is sent as one message.
@@ -418,7 +753,7 @@ mod tests {
         assert_eq!(sends(&app).len(), 1);
 
         // A stored cursor, to prove the swap does not move it.
-        press(&mut app, "<Esc>gg");
+        press(&mut app, "<Esc>");
         let cursor = crate::app::messages::view(&app, &general());
         app.effects.clear();
 
@@ -507,49 +842,128 @@ mod tests {
         assert!(!app.messages.contains_key(&empty));
     }
 
+    /// Every `ApiError` value, with whether it leaves the outcome of a send unknown (D-07, D-18).
+    /// Written out here on purpose: it is the spec `outcome_unknown` is checked against.
+    fn all_errors() -> [(ApiError, bool); 13] {
+        [
+            (ApiError::Unauthorized, false),
+            (ApiError::Forbidden, false),
+            (ApiError::NotFound, false),
+            (ApiError::RateLimited, false),
+            (ApiError::Redirected, false),
+            (ApiError::Rejected, false),
+            (ApiError::Unreachable, false),
+            (ApiError::Client, false),
+            (ApiError::Timeout, true),
+            (ApiError::Server(502), true),
+            (ApiError::ConnectionLost, true),
+            (ApiError::BadResponse, true),
+            (ApiError::TooLarge, true),
+        ]
+    }
+
     #[test]
-    fn fail_status_has_no_body() {
-        let errors = [
-            ApiError::Unauthorized,
-            ApiError::Forbidden,
-            ApiError::NotFound,
-            ApiError::RateLimited,
-            ApiError::Redirected,
-            ApiError::Server(502),
-            ApiError::Unreachable,
-            ApiError::Timeout,
-            ApiError::BadResponse,
-            ApiError::TooLarge,
-            ApiError::Client,
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for error in errors {
+    fn fail_classification() {
+        for (error, unknown) in all_errors() {
             let mut app = open_general_app();
-            app.messages.entry(general()).or_default().push(msg(
-                &general(),
-                "rt-test-1",
-                "me",
-                0,
-                BODY,
-            ));
-            let before = app.messages[&general()].clone();
-            on_failed(&mut app, general(), "rt-test-1".to_string(), error);
+            press(&mut app, &format!("i{BODY}<CR>"));
+            let index = app.messages[&general()].len() - 1;
+            assert_eq!(app.messages[&general()][index].send, SendState::Sending);
+            let before = app.messages[&general()].len();
+
+            on_failed(&mut app, general(), "local-1".to_string(), error);
+            let held = &app.messages[&general()];
+            assert_eq!(held.len(), before, "{error:?}: the message keeps its place");
+            let expected = if unknown {
+                SendState::Unconfirmed
+            } else {
+                SendState::Failed
+            };
+            assert_eq!(held[index].send, expected, "{error:?}");
+            assert_eq!(held[index].body, BODY, "{error:?}: the row keeps its text");
             let Some(StatusMsg::Error(text)) = &app.status_msg else {
                 panic!("{error:?}: no error status");
             };
-            assert!(text.starts_with("message not sent: "), "{text}");
-            assert!(!text.contains(BODY), "{text}");
-            assert!(!text.contains(":reconnect"), "{text}");
-            assert!(seen.insert(text.clone()), "one reason per kind: {text}");
-            assert_eq!(
-                app.messages[&general()],
-                before,
-                "the message keeps its place"
-            );
+            let prefix = if unknown {
+                "message may not have been sent: "
+            } else {
+                "message not sent: "
+            };
+            assert!(text.starts_with(prefix), "{error:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn fail_text_fixed() {
+        for unconfirmed in [false, true] {
+            let mut seen = std::collections::HashSet::new();
+            for (error, _) in all_errors() {
+                let text = send_error_text(error, unconfirmed);
+                assert!(!text.contains(BODY), "{text}");
+                assert!(!text.contains(":reconnect"), "{text}");
+                assert!(!text.contains("http"), "{text}");
+                assert!(seen.insert(text.clone()), "one reason per kind: {text}");
+            }
         }
         assert_eq!(
-            send_error_text(ApiError::Server(503)),
+            send_error_text(ApiError::Server(503), false),
             "message not sent: server error (HTTP 503)"
         );
+        assert_eq!(
+            send_error_text(ApiError::Server(502), true),
+            "message may not have been sent: server error (HTTP 502)"
+        );
+        assert_eq!(
+            send_error_text(ApiError::Rejected, false),
+            "message not sent: rejected (read-only, muted or too long)"
+        );
+        assert_eq!(
+            send_error_text(ApiError::ConnectionLost, true),
+            "message may not have been sent: connection lost"
+        );
+    }
+
+    #[test]
+    fn unsent_never_resent_on_its_own() {
+        // One Failed and one Unconfirmed message; nothing the app does by itself sends them again:
+        // not a clock tick, not the next message, not `:reconnect`, not a result of another message.
+        let mut app = open_general_app();
+        let room = general();
+        let mut failed = msg(&room, "F1", "me", 2, "failed text");
+        failed.send = SendState::Failed;
+        let mut unknown = msg(&room, "U1", "me", 3, "unknown text");
+        unknown.send = SendState::Unconfirmed;
+        app.messages.entry(room.clone()).or_default().push(failed);
+        app.messages.entry(room.clone()).or_default().push(unknown);
+
+        update(&mut app, Action::Clock(1_794_909_600));
+        press(&mut app, ":reconnect<CR>");
+        press(&mut app, "inext<CR>");
+        answer_sent(&mut app, "local-1", 20);
+        update(&mut app, Action::Clock(1_794_909_700));
+        press(&mut app, "<Esc>:reconnect<CR>");
+
+        let sent: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(sent, ["local-1"], "only the new message was sent");
+        let held = &app.messages[&room];
+        let state_of = |id: &str| held.iter().find(|m| m.id == id).map(|m| m.send);
+        assert_eq!(state_of("F1"), Some(SendState::Failed));
+        assert_eq!(state_of("U1"), Some(SendState::Unconfirmed));
+    }
+
+    #[test]
+    fn discard_unconfirmed() {
+        // An Unconfirmed message is discarded like a Failed one (D-06).
+        let mut app = app_with_failed();
+        app.messages
+            .get_mut(&general())
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .send = SendState::Unconfirmed;
+        let before = app.messages[&general()].len();
+        press(&mut app, "dd");
+        assert_eq!(app.messages[&general()].len(), before - 1);
+        assert!(app.effects.is_empty());
     }
 }

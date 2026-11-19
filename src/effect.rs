@@ -43,9 +43,11 @@ pub enum Effect {
         before: Option<String>,
     },
     /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
-    /// `id` as the message `_id` (D-07, D-15). `reconcile` selects the `chat.getMessage`-first
-    /// branch of a retry (plan 04-03); this plan POSTs in every case. The answer comes back as
-    /// `Action::MessageSent` or `Action::SendFailed`, both addressed by `room` and `id`.
+    /// `id` as the message `_id` (D-07, D-15). With `reconcile` (a retry of an `Unconfirmed`
+    /// message) the server is asked first with `GET chat.getMessage`: a 200 is the answer and no
+    /// POST is sent; after a failing POST it is asked once more, and a 200 still counts as sent. The
+    /// answer comes back as `Action::MessageSent` or `Action::SendFailed`, both addressed by `room`
+    /// and `id`.
     SendMessage {
         room: RoomId,
         id: String,
@@ -100,10 +102,28 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Err(error) => vec![Action::HistoryFailed { room, older, error }],
             }
         }
-        Effect::SendMessage { room, id, text, .. } => {
+        Effect::SendMessage {
+            room,
+            id,
+            text,
+            reconcile,
+        } => {
+            // A retry of an Unconfirmed message first asks the server whether it already holds the
+            // message (D-15): a lost response must never become a duplicate in the room. Any
+            // answer but a 200 means "not stored", and the POST follows.
+            if reconcile && let Ok(message) = client.get_message(&room, &id).await {
+                return vec![Action::MessageSent { room, id, message }];
+            }
             match client.send_message(&room, &id, text.as_str()).await {
                 Ok(message) => vec![Action::MessageSent { room, id, message }],
-                Err(error) => vec![Action::SendFailed { room, id, error }],
+                Err(error) => {
+                    // The attempt may have landed meanwhile, or a duplicate `_id` was answered
+                    // with an error (probe P2): ask once more, and a 200 still counts as sent.
+                    if reconcile && let Ok(message) = client.get_message(&room, &id).await {
+                        return vec![Action::MessageSent { room, id, message }];
+                    }
+                    vec![Action::SendFailed { room, id, error }]
+                }
             }
         }
     }
@@ -300,6 +320,138 @@ mod tests {
                 error: ApiError::Client,
             }]
         );
+    }
+
+    fn reconcile_effect(reconcile: bool) -> Effect {
+        Effect::SendMessage {
+            room: general(),
+            id: "rt-test-1".to_string(),
+            text: SendText::new(SENTINEL.to_string()),
+            reconcile,
+        }
+    }
+
+    /// Mount `GET chat.getMessage` answering `status`; a 200 carries the stored message. `times`
+    /// limits how many requests the mock answers, so a later mock can answer the next ones.
+    async fn mount_get_message(server: &MockServer, status: u16, times: Option<u64>) {
+        let template = if status == 200 {
+            ResponseTemplate::new(200)
+                .set_body_raw(answer("rt-test-1", SENTINEL), "application/json")
+        } else {
+            ResponseTemplate::new(status).set_body_string("{\"success\":false}")
+        };
+        let mock = Mock::given(method("GET"))
+            .and(path("/api/v1/chat.getMessage"))
+            .respond_with(template);
+        match times {
+            Some(n) => mock.up_to_n_times(n).mount(server).await,
+            None => mock.mount(server).await,
+        }
+    }
+
+    /// The (method, path) of every request the server received, in order.
+    async fn seen(server: &MockServer) -> Vec<(String, String)> {
+        server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .iter()
+            .map(|r| (r.method.to_string(), r.url.path().to_string()))
+            .collect()
+    }
+
+    fn get_message_call() -> (String, String) {
+        ("GET".to_string(), "/api/v1/chat.getMessage".to_string())
+    }
+
+    fn post_call() -> (String, String) {
+        ("POST".to_string(), "/api/v1/chat.sendMessage".to_string())
+    }
+
+    fn is_sent(actions: &[Action]) -> bool {
+        matches!(actions, [Action::MessageSent { .. }])
+    }
+
+    #[tokio::test]
+    async fn reconcile_found_skips_post() {
+        let server = MockServer::start().await;
+        mount_get_message(&server, 200, None).await;
+        mount_send_ok(&server).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(true)).await;
+        assert!(is_sent(&actions), "{actions:?}");
+        if let [Action::MessageSent { id, message, .. }] = &actions[..] {
+            assert_eq!(id, "rt-test-1");
+            assert_eq!(message.author, "smoke");
+        }
+        assert_eq!(seen(&server).await, [get_message_call()], "no POST");
+    }
+
+    #[tokio::test]
+    async fn reconcile_absent_posts() {
+        let server = MockServer::start().await;
+        mount_get_message(&server, 400, None).await;
+        mount_send_ok(&server).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(true)).await;
+        assert!(is_sent(&actions), "{actions:?}");
+        assert_eq!(seen(&server).await, [get_message_call(), post_call()]);
+    }
+
+    #[tokio::test]
+    async fn reconcile_post_error_rechecks() {
+        // The first check says absent, the POST fails, the second check finds the message: sent.
+        let server = MockServer::start().await;
+        mount_get_message(&server, 400, Some(1)).await;
+        mount_get_message(&server, 200, None).await;
+        mount_send_status(&server, 400).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(true)).await;
+        assert!(is_sent(&actions), "{actions:?}");
+        assert_eq!(
+            seen(&server).await,
+            [get_message_call(), post_call(), get_message_call()]
+        );
+
+        // Both checks say absent: the POST's own error is reported.
+        let server = MockServer::start().await;
+        mount_get_message(&server, 400, None).await;
+        mount_send_status(&server, 400).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(true)).await;
+        assert_eq!(
+            actions,
+            [Action::SendFailed {
+                room: general(),
+                id: "rt-test-1".to_string(),
+                error: ApiError::Rejected,
+            }]
+        );
+        assert_eq!(
+            seen(&server).await,
+            [get_message_call(), post_call(), get_message_call()]
+        );
+    }
+
+    #[tokio::test]
+    async fn no_reconcile_never_gets() {
+        let server = MockServer::start().await;
+        mount_get_message(&server, 200, None).await;
+        mount_send_ok(&server).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(false)).await;
+        assert!(is_sent(&actions), "{actions:?}");
+        assert_eq!(seen(&server).await, [post_call()]);
+
+        // A failing POST of a plain send is reported without any check.
+        let server = MockServer::start().await;
+        mount_get_message(&server, 200, None).await;
+        mount_send_status(&server, 500).await;
+        let actions = run(Ok(client_for(&server)), reconcile_effect(false)).await;
+        assert_eq!(
+            actions,
+            [Action::SendFailed {
+                room: general(),
+                id: "rt-test-1".to_string(),
+                error: ApiError::Server(500),
+            }]
+        );
+        assert_eq!(seen(&server).await, [post_call()]);
     }
 
     #[test]

@@ -45,6 +45,14 @@ pub enum Action {
     CursorEnd,
     /// Enter in Insert mode: send the draft to the open room (D-15).
     SubmitInput,
+    /// Normal mode, messages pane focused, cursor on a `Failed` or `Unconfirmed` message of the open
+    /// room: put it back in its room's queue under the same client id (D-06, D-07). Anything else
+    /// is a silent no-op. Not a motion, so a count repeats it.
+    RetrySend,
+    /// Normal mode, messages pane focused, cursor on a `Failed` or `Unconfirmed` message of the open
+    /// room: remove it from the room (D-06). Anything else is a silent no-op. Not a motion, so a
+    /// count repeats it, each repetition re-reading the cursor message.
+    DiscardSend,
     ExecuteCommand,
     Quit,
     /// A `:` command line bound in keymap.toml as `cmd:<command>`; produced only by the keymap.
@@ -150,6 +158,8 @@ impl std::fmt::Debug for Action {
             Action::CursorHome => write!(f, "CursorHome"),
             Action::CursorEnd => write!(f, "CursorEnd"),
             Action::SubmitInput => write!(f, "SubmitInput"),
+            Action::RetrySend => write!(f, "RetrySend"),
+            Action::DiscardSend => write!(f, "DiscardSend"),
             Action::ExecuteCommand => write!(f, "ExecuteCommand"),
             Action::Quit => write!(f, "Quit"),
             Action::RunCommand(_) => write!(f, "RunCommand(..)"),

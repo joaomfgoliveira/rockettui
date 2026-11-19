@@ -44,6 +44,11 @@ pub enum ApiError {
     BadResponse,
     TooLarge,
     Client,
+    /// A send-path 4xx other than 401, 403, 404 and 429 (read-only or muted room, text too long):
+    /// the server refused the request outright.
+    Rejected,
+    /// The connection broke after it was made, so the request may or may not have been processed.
+    ConnectionLost,
 }
 
 /// One fixed, actionable line per error (D-06). It is the status-bar text.
@@ -84,7 +89,30 @@ impl fmt::Display for ApiError {
                 f,
                 "cannot build the HTTP client: check the user id and token characters"
             ),
+            ApiError::Rejected => write!(
+                f,
+                "server rejected the request: read-only or muted room, or text too long"
+            ),
+            ApiError::ConnectionLost => {
+                write!(f, "connection lost during the request: check the network")
+            }
         }
+    }
+}
+
+impl ApiError {
+    /// D-07 for the send path: true when the server may have stored the message although the
+    /// client got no clean answer (timeout, 5xx per D-18, lost connection, an answer that could
+    /// not be read). Such a message is `Unconfirmed` and is reconciled before it is posted again.
+    pub fn outcome_unknown(self) -> bool {
+        matches!(
+            self,
+            ApiError::Timeout
+                | ApiError::Server(_)
+                | ApiError::ConnectionLost
+                | ApiError::BadResponse
+                | ApiError::TooLarge
+        )
     }
 }
 
@@ -115,17 +143,28 @@ fn send_error(e: &reqwest::Error) -> ApiError {
     } else if e.is_decode() || e.is_body() {
         ApiError::BadResponse
     } else {
-        ApiError::Unreachable
+        // A transport error after the connection was made (a reset, a close before the answer).
+        ApiError::ConnectionLost
     }
 }
 
 /// Send `request`, check the HTTP status, read the body under the size cap and decode it. Shared
 /// by every GET and by the one `chat.sendMessage` POST, so they all keep the same rules: the status
 /// first (a redirect is an error, never followed), then the capped body, then lenient decoding.
-async fn read_json<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T, ApiError> {
+///
+/// `client_error` is what a 4xx status other than 401, 403, 404 and 429 becomes: `BadResponse` for
+/// a GET, `Rejected` for the send (D-12). A body that cannot be decoded stays `BadResponse` on both.
+async fn read_json<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    client_error: ApiError,
+) -> Result<T, ApiError> {
     let mut response = request.send().await.map_err(|e| send_error(&e))?;
     if let Some(error) = status_error(response.status()) {
-        return Err(error);
+        return Err(if error == ApiError::BadResponse {
+            client_error
+        } else {
+            error
+        });
     }
     if response
         .content_length()
@@ -262,7 +301,17 @@ impl Client {
         if !query.is_empty() {
             request = request.query(query);
         }
-        read_json(request).await
+        read_json(request, ApiError::BadResponse).await
+    }
+
+    /// Ask the server for message `id` of `room` with `GET chat.getMessage` (D-15): the reconcile
+    /// step before a retried `Unconfirmed` message is posted again. Any error means the answer is
+    /// not known; the caller treats every non-200 as "not stored".
+    pub async fn get_message(&self, room: &RoomId, id: &str) -> Result<Message, ApiError> {
+        let resp: wire::MessageResp = self
+            .get_json("chat.getMessage", &[("msgId", id.to_string())])
+            .await?;
+        Ok(map::message(room, resp.message))
     }
 
     /// Load the user's joined rooms and sidebar folders: `subscriptions.get`, `rooms.get` and
@@ -328,7 +377,7 @@ impl Client {
             .http
             .post(self.endpoint("chat.sendMessage"))
             .json(&body);
-        let resp: wire::MessageResp = read_json(request).await?;
+        let resp: wire::MessageResp = read_json(request, ApiError::Rejected).await?;
         Ok(map::message(room, resp.message))
     }
 }
@@ -554,6 +603,8 @@ mod tests {
             ApiError::BadResponse,
             ApiError::TooLarge,
             ApiError::Client,
+            ApiError::Rejected,
+            ApiError::ConnectionLost,
         ] {
             assert!(!format!("{error:?}").contains(TOKEN));
             assert!(!error.to_string().contains(TOKEN));
@@ -699,6 +750,175 @@ mod tests {
         assert_eq!(error, ApiError::Redirected);
         let received = target.received_requests().await.expect("recorded");
         assert!(received.is_empty(), "the redirect target got a request");
+    }
+
+    /// A POST of `send_message` answered with `status`, as the error it gives.
+    async fn send_status_error(status: u16) -> ApiError {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status).set_body_string("{\"success\":false}"))
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .await
+            .expect_err("a non-2xx status fails")
+    }
+
+    #[tokio::test]
+    async fn send_rejected() {
+        // Every send-path 4xx other than 401, 403, 404 and 429 is Rejected (D-12).
+        for status in [400, 409, 413, 418] {
+            assert_eq!(
+                send_status_error(status).await,
+                ApiError::Rejected,
+                "{status}"
+            );
+        }
+        assert_eq!(send_status_error(401).await, ApiError::Unauthorized);
+        assert_eq!(send_status_error(403).await, ApiError::Forbidden);
+        assert_eq!(send_status_error(404).await, ApiError::NotFound);
+        assert_eq!(send_status_error(429).await, ApiError::RateLimited);
+        assert_eq!(send_status_error(500).await, ApiError::Server(500));
+        assert_eq!(send_status_error(503).await, ApiError::Server(503));
+    }
+
+    #[tokio::test]
+    async fn send_undecodable_answer_is_bad_response() {
+        // A 200 whose body is not a message stays BadResponse: only a 4xx status is Rejected.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("not json", "application/json"))
+            .mount(&server)
+            .await;
+        let error = client_for(&server)
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .await
+            .expect_err("an undecodable answer fails");
+        assert_eq!(error, ApiError::BadResponse);
+    }
+
+    #[tokio::test]
+    async fn send_timeout_is_unconfirmed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("{}")
+                    .set_delay(Duration::from_millis(1500)),
+            )
+            .mount(&server)
+            .await;
+        let error = quick_client(&server.uri())
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .await
+            .expect_err("the request times out");
+        assert_eq!(error, ApiError::Timeout);
+        assert!(error.outcome_unknown());
+    }
+
+    #[test]
+    fn outcome_unknown_table() {
+        let unknown = [
+            ApiError::Timeout,
+            ApiError::Server(502),
+            ApiError::Server(500),
+            ApiError::ConnectionLost,
+            ApiError::BadResponse,
+            ApiError::TooLarge,
+        ];
+        let known = [
+            ApiError::Unauthorized,
+            ApiError::Forbidden,
+            ApiError::NotFound,
+            ApiError::RateLimited,
+            ApiError::Redirected,
+            ApiError::Rejected,
+            ApiError::Unreachable,
+            ApiError::Client,
+        ];
+        for error in unknown {
+            assert!(error.outcome_unknown(), "{error:?}");
+        }
+        for error in known {
+            assert!(!error.outcome_unknown(), "{error:?}");
+        }
+    }
+
+    /// A one-shot server that accepts a connection, reads the request and closes it without any
+    /// answer: the connection breaks after it was made.
+    fn dropping_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut head = [0u8; 4096];
+            let _ = stream.read(&mut head);
+            // Dropping the stream closes it with no response.
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[tokio::test]
+    async fn connection_reset_is_connection_lost() {
+        // On the send path and on a GET alike; a connect failure stays Unreachable (error_mapping).
+        let (url, handle) = dropping_server();
+        let error = Client::new(&connection(&url, USER, TOKEN))
+            .expect("client")
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .await
+            .expect_err("the connection is dropped");
+        handle.join().expect("server thread");
+        assert_eq!(error, ApiError::ConnectionLost);
+        assert!(error.outcome_unknown());
+
+        let (url, handle) = dropping_server();
+        let client = Client::new(&connection(&url, USER, TOKEN)).expect("client");
+        let error = mapped_error(&client).await;
+        handle.join().expect("server thread");
+        assert_eq!(error, ApiError::ConnectionLost);
+    }
+
+    #[tokio::test]
+    async fn get_message_found_and_absent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/chat.getMessage"))
+            .and(wiremock::matchers::query_param("msgId", "m1"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(send_answer("m1", "stored"), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/chat.getMessage"))
+            .and(wiremock::matchers::query_param("msgId", "gone"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("{\"success\":false}"))
+            .mount(&server)
+            .await;
+        let room = RoomId("r-general".to_string());
+        let client = client_for(&server);
+        let message = client.get_message(&room, "m1").await.expect("found");
+        assert_eq!(message.id, "m1");
+        assert_eq!(message.room_id, room);
+        assert_eq!(message.author, "smoke");
+        assert_eq!(message.body, "stored");
+        assert_eq!(message.send, SendState::Sent);
+
+        let error = client.get_message(&room, "gone").await.expect_err("absent");
+        assert_eq!(error, ApiError::BadResponse, "a GET 400 stays BadResponse");
+
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+        assert_eq!(
+            query_of(&requests[0]),
+            [("msgId".to_string(), "m1".to_string())]
+        );
     }
 
     const HISTORY: &str = include_str!("fixtures/history.json");

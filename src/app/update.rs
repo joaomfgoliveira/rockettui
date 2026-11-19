@@ -159,6 +159,8 @@ pub fn update(app: &mut App, action: Action) {
         Action::CursorHome => edit_input(app, InputBuffer::home),
         Action::CursorEnd => edit_input(app, InputBuffer::end),
         Action::SubmitInput => send::submit(app),
+        Action::RetrySend => send::retry(app),
+        Action::DiscardSend => send::discard(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
