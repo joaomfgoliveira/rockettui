@@ -24,6 +24,7 @@
 
 use crate::api::ApiError;
 use crate::app::{App, Focus, LOCAL_AUTHOR, Mode, StatusMsg, messages};
+use crate::config::settings::FollowOnSend;
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, SendText};
 
@@ -63,15 +64,26 @@ pub fn submit(app: &mut App) {
         kind: MessageKind::Normal,
         send: SendState::Queued { reconcile: false },
     };
+    // Measured before the row is appended: an append shifts no existing index, so leaving
+    // `msg_views` alone keeps the pane exactly where it was (D-05).
+    let at_bottom = messages::is_at_bottom(app, &room);
     app.messages.entry(room.clone()).or_default().push(message);
-    messages::follow_newest(app, &room);
+    if app.settings.follow_on_send == FollowOnSend::Always || at_bottom {
+        messages::follow_newest(app, &room);
+    }
     pump(app, &room);
 }
 
 /// Start the next send of `room`: nothing while a message of the room is `Sending`; otherwise the
 /// first `Queued` message in order becomes `Sending` and its effect is recorded. `Failed` and
-/// `Unconfirmed` messages are skipped, so a failure never blocks the queue behind it (D-16).
+/// `Unconfirmed` messages are skipped, so a failure never blocks the queue behind it (D-16). Nothing
+/// starts either while `App.awaiting_answer` has an entry for the room: that row was confirmed by a
+/// server copy but its own request has not answered, so the slot is still taken (D-03).
 pub fn pump(app: &mut App, room: &RoomId) {
+    // A row confirmed early by a server copy still has its POST outstanding (D-03).
+    if app.awaiting_answer.contains_key(room) {
+        return;
+    }
     let Some(held) = app.messages.get_mut(room) else {
         return;
     };
@@ -169,18 +181,33 @@ fn remove_at(app: &mut App, room: &RoomId, index: usize) {
 
 /// The server accepted message `id` of `room` and answered with its stored copy: replace the held
 /// message with that id by `message`, marked `Sent`, at the same index (D-04), then start the next
-/// queued message of the room (D-03). When `room` holds no message with that id nothing changes.
+/// queued message of the room (D-03). When `room` no longer holds that id the server's message goes
+/// through `messages::merge_incoming` instead (D-13, D-21), and the answer releases the room's
+/// `awaiting_answer` entry when it names this id.
 pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
-    let Some(held) = app.messages.get_mut(&room) else {
-        return;
-    };
-    if let Some(slot) = held.iter_mut().find(|m| m.id == id) {
-        *slot = Message {
-            send: SendState::Sent,
-            ..message
-        };
-        pump(app, &room);
+    let slot = app
+        .messages
+        .get_mut(&room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == id));
+    match slot {
+        Some(slot) => {
+            *slot = Message {
+                send: SendState::Sent,
+                ..message
+            };
+        }
+        // The row is gone (discarded meanwhile): the server holds the message, so it goes through
+        // the one append path, which also keeps a repeated answer from adding it twice (D-13).
+        None => {
+            messages::merge_incoming(app, &room, message);
+        }
     }
+    // This answer is the end of the request that kept the in-flight slot of a row confirmed early
+    // by a server copy (D-03).
+    if app.awaiting_answer.get(&room) == Some(&id) {
+        app.awaiting_answer.remove(&room);
+    }
+    pump(app, &room);
 }
 
 /// The send of message `id` of `room` failed. A definite failure (the server refused it or the
@@ -188,7 +215,16 @@ pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
 /// connection, an unreadable answer) makes it `Unconfirmed`, because the server may have stored it
 /// (D-06, D-07, D-18). Either way it keeps its place, the fixed reason goes to the status bar, and
 /// the next queued message of the room goes out (D-16). Nothing here resends it: only `retry` does.
+///
+/// When `App.awaiting_answer` names this id, the row was already confirmed `Sent` by the server's
+/// own copy: the entry is dropped, no row changes, no status error is shown, and the queue goes on
+/// (D-03, D-21).
 pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
+    if app.awaiting_answer.get(&room) == Some(&id) {
+        app.awaiting_answer.remove(&room);
+        pump(app, &room);
+        return;
+    }
     let unconfirmed = error.outcome_unknown();
     app.status_msg = Some(StatusMsg::Error(send_error_text(error, unconfirmed)));
     let Some(held) = app.messages.get_mut(&room) else {
@@ -826,8 +862,8 @@ mod tests {
         let general_after = |app: &App| app.messages[&general()].clone();
         assert_eq!(general_after(&app), general_before);
 
-        // An id the room does not hold changes nothing, in a room that has messages and in one
-        // that has none.
+        // An id the room does not hold is appended once through `merge_incoming` (D-13), in a room
+        // that has messages and in one that has none; the existing rows are untouched.
         let snapshot = app.messages[&other].clone();
         let stray = msg(&other, "rt-unknown", "smoke", 5, BODY);
         on_sent(
@@ -836,10 +872,17 @@ mod tests {
             "rt-unknown".to_string(),
             stray.clone(),
         );
-        assert_eq!(app.messages[&other], snapshot);
+        assert_eq!(app.messages[&other].len(), snapshot.len() + 1);
+        assert_eq!(app.messages[&other][..snapshot.len()], snapshot[..]);
+        assert_eq!(app.messages[&other][snapshot.len()], stray);
         let empty = RoomId("r-none".to_string());
-        on_sent(&mut app, empty.clone(), "rt-unknown".to_string(), stray);
-        assert!(!app.messages.contains_key(&empty));
+        on_sent(
+            &mut app,
+            empty.clone(),
+            "rt-unknown".to_string(),
+            msg(&empty, "rt-unknown", "smoke", 5, BODY),
+        );
+        assert_eq!(app.messages[&empty].len(), 1);
     }
 
     /// Every `ApiError` value, with whether it leaves the outcome of a send unknown (D-07, D-18).
@@ -949,6 +992,140 @@ mod tests {
         let state_of = |id: &str| held.iter().find(|m| m.id == id).map(|m| m.send);
         assert_eq!(state_of("F1"), Some(SendState::Failed));
         assert_eq!(state_of("U1"), Some(SendState::Unconfirmed));
+    }
+
+    /// `general` with the sentinel body sent from the messages pane after `gg`, under `toml`.
+    fn app_scrolled_up_and_sent(toml: &str) -> App {
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, "gg");
+        press(&mut app, &format!("i{BODY}<CR>"));
+        app
+    }
+
+    #[test]
+    fn follow_always_jumps() {
+        let app = app_scrolled_up_and_sent("");
+        assert!(app.msg_views.is_empty(), "the stored view is gone");
+        let last = app.messages[&general()].len() - 1;
+        assert_eq!(messages::view(&app, &general()).cursor, last);
+        assert!(crate::test_util::render_to_string(&app, 80, 24).contains(BODY));
+    }
+
+    #[test]
+    fn follow_if_at_bottom_stays() {
+        let toml = "follow_on_send = \"if_at_bottom\"\n";
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, "gg");
+        let before = app.msg_views[&general()];
+        assert_eq!((before.cursor, before.top_row), (0, 0));
+        press(&mut app, &format!("i{BODY}<CR>"));
+        assert_eq!(app.msg_views[&general()], before, "the pane did not move");
+        assert_eq!(sends(&app).len(), 1, "the message was still sent");
+        let screen = crate::test_util::render_to_string(&app, 80, 24);
+        assert!(!screen.contains(BODY), "the new row is below the window");
+    }
+
+    #[test]
+    fn follow_if_at_bottom_follows() {
+        let toml = "follow_on_send = \"if_at_bottom\"\n";
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, &format!("i{BODY}<CR>"));
+        assert!(app.msg_views.is_empty());
+        let last = app.messages[&general()].len() - 1;
+        assert_eq!(messages::view(&app, &general()).cursor, last);
+        assert!(crate::test_util::render_to_string(&app, 80, 24).contains(BODY));
+    }
+
+    #[test]
+    fn sent_after_discard_appends() {
+        let mut app = open_general_app();
+        press(&mut app, "ia<CR>");
+        let index = app.messages[&general()].len() - 1;
+        // The row was removed meanwhile; the server's answer still carries the message.
+        remove_at(&mut app, &general(), index);
+        let before = app.messages[&general()].len();
+        answer_sent(&mut app, "local-1", 10);
+        assert_eq!(app.messages[&general()].len(), before + 1);
+        assert_eq!(app.messages[&general()][before].id, "local-1");
+        assert_eq!(app.messages[&general()][before].send, SendState::Sent);
+        // The same answer again adds nothing.
+        answer_sent(&mut app, "local-1", 10);
+        assert_eq!(app.messages[&general()].len(), before + 1);
+    }
+
+    /// `general` holding Sending `local-1` (a) and Queued `local-2` (b), after `merge_incoming`
+    /// confirmed a from a server copy: one SendMessage effect so far, and a's POST outstanding.
+    fn app_with_confirmed_sending() -> (App, usize) {
+        let mut app = open_general_app();
+        press(&mut app, "ia<CR>b<CR>");
+        assert_eq!(
+            states(&app, 2),
+            [SendState::Sending, SendState::Queued { reconcile: false }]
+        );
+        assert_eq!(sends(&app).len(), 1);
+        let index = app.messages[&general()].len() - 2;
+        let copy = msg(&general(), "local-1", "smoke", 1_794_909_605, "a");
+        let outcome = messages::merge_incoming(&mut app, &general(), copy);
+        assert_eq!(outcome, messages::Merge::Confirmed(index));
+        (app, index)
+    }
+
+    #[test]
+    fn confirm_sending_keeps_slot() {
+        let (mut app, index) = app_with_confirmed_sending();
+        assert_eq!(app.messages[&general()][index].send, SendState::Sent);
+        assert_eq!(
+            app.awaiting_answer.get(&general()).map(String::as_str),
+            Some("local-1")
+        );
+        assert_eq!(sends(&app).len(), 1, "a confirmation records no effect");
+
+        // A third Enter and a direct pump start nothing while a's POST is outstanding.
+        press(&mut app, "c<CR>");
+        pump(&mut app, &general());
+        assert_eq!(sends(&app).len(), 1);
+
+        // A Queued message of another room is not blocked by the entry.
+        let other = RoomId("random".to_string());
+        let mut queued = msg(&other, "local-77", "me", 0, "elsewhere");
+        queued.send = SendState::Queued { reconcile: false };
+        app.messages.entry(other.clone()).or_default().push(queued);
+        pump(&mut app, &other);
+        assert_eq!(sends(&app).len(), 2);
+        assert_eq!(sends(&app)[1].0, "random");
+
+        // a's own answer releases the slot and starts b only; c stays Queued.
+        answer_sent(&mut app, "local-1", 11);
+        assert!(app.awaiting_answer.is_empty());
+        let started: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(started, ["local-1", "local-77", "local-2"]);
+        assert_eq!(
+            states(&app, 3),
+            [
+                SendState::Sent,
+                SendState::Sending,
+                SendState::Queued { reconcile: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn confirmed_row_failure_is_silent() {
+        let (mut app, index) = app_with_confirmed_sending();
+        app.status_msg = None;
+        answer_failed(&mut app, "local-1");
+        assert_eq!(app.messages[&general()][index].send, SendState::Sent);
+        assert_eq!(app.messages[&general()][index].id, "local-1");
+        assert!(app.status_msg.is_none(), "no error for a delivered message");
+        assert!(app.awaiting_answer.is_empty());
+        let started: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(started, ["local-1", "local-2"], "b starts");
     }
 
     #[test]
