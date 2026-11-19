@@ -242,9 +242,35 @@ impl App {
         (pane.width.saturating_sub(2), pane.height.saturating_sub(2))
     }
 
-    /// Open a room: it becomes the current room and the messages pane takes focus (D-02).
+    /// Open a room: it becomes the current room and the messages pane takes focus (D-02). This is
+    /// the single place a room becomes current, and so the single place drafts move (D-10).
+    ///
+    /// Opening the room that is already current only focuses the messages pane. Opening another
+    /// room stores the live draft under the old room (unless it is empty) and shows the new room's
+    /// own draft, empty when it has none. With no room open yet, a non-empty live draft stays in
+    /// the input bar so text typed before the first room is not lost. The buffer is re-settled to
+    /// the input viewport, so the input bar height follows the restored draft. A switch never sends
+    /// anything and never touches disk.
     pub fn open_room(&mut self, id: RoomId) {
-        self.current_room = Some(id);
+        if self.current_room.as_ref() != Some(&id) {
+            match self.current_room.clone() {
+                Some(old) => {
+                    let live = std::mem::take(&mut self.input);
+                    if !live.is_empty() {
+                        self.drafts.insert(old, live);
+                    }
+                    self.input = self.drafts.remove(&id).unwrap_or_default();
+                }
+                None => {
+                    if self.input.is_empty() {
+                        self.input = self.drafts.remove(&id).unwrap_or_default();
+                    }
+                }
+            }
+            self.current_room = Some(id);
+            let (width, height) = self.input_viewport();
+            self.input.settle(width, height);
+        }
         self.focus = Focus::Messages;
     }
 
