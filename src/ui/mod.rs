@@ -91,6 +91,7 @@ mod tests {
                 ts: 0,
                 body: "\u{1b}[2Jclear\u{9b}31m\ttab".to_string(),
                 kind: MessageKind::Normal,
+                send: crate::data::SendState::Sent,
             },
         );
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");

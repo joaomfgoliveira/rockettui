@@ -217,6 +217,7 @@ mod tests {
             ts: 0,
             body: body.to_string(),
             kind: MessageKind::Normal,
+            send: crate::data::SendState::Sent,
         }
     }
 

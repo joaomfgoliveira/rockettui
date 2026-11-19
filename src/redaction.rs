@@ -17,7 +17,7 @@ use crate::config::connection::{
     ConnEnv, Connection, EnvValue, FileConn, Secret, parse_file, parse_server_url,
 };
 use crate::config::{Sources, load_from_sources};
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind};
+use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
 use crate::effect::{Effect, SendText};
 use crate::test_util::{press, render_to_string};
 use ratatui::layout::Size;
@@ -92,6 +92,11 @@ macro_rules! sweep_both {
 }
 
 fn message_with_body() -> Message {
+    message_in_state(SendState::Sent)
+}
+
+/// A message holding the sentinel body, in the given send state.
+fn message_in_state(send: SendState) -> Message {
     Message {
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),
@@ -99,8 +104,19 @@ fn message_with_body() -> Message {
         ts: 0,
         body: BODY.to_string(),
         kind: MessageKind::Normal,
+        send,
     }
 }
+
+/// Every `SendState` value; a message in any of them must keep its text out of `Debug` (D-14).
+const ALL_SEND_STATES: [SendState; 6] = [
+    SendState::Sent,
+    SendState::Queued { reconcile: false },
+    SendState::Queued { reconcile: true },
+    SendState::Sending,
+    SendState::Failed,
+    SendState::Unconfirmed,
+];
 
 const ALL_ERRORS: [ApiError; 11] = [
     ApiError::Unauthorized,
@@ -167,6 +183,12 @@ fn sentinel_sweep() {
     };
     no_sentinel("HistoryPage", &format!("{page:?}"));
     no_sentinel("Message", &format!("{:?}", message_with_body()));
+    for state in ALL_SEND_STATES {
+        no_sentinel(
+            "Message (send state)",
+            &format!("{:?}", message_in_state(state)),
+        );
+    }
 
     // Effects and actions.
     let effect = Effect::LoadHistory {

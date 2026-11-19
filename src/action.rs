@@ -43,7 +43,7 @@ pub enum Action {
     CursorDown,
     CursorHome,
     CursorEnd,
-    /// Enter in Insert mode: send the draft (Phase 1 appends it locally, D-15).
+    /// Enter in Insert mode: send the draft to the open room (D-15).
     SubmitInput,
     ExecuteCommand,
     Quit,
@@ -197,7 +197,7 @@ impl std::fmt::Debug for Action {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::MessageKind;
+    use crate::data::{MessageKind, SendState};
     use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
@@ -220,6 +220,7 @@ mod tests {
             ts: 0,
             body: "SENTINEL-BODY-7f3a".to_string(),
             kind: MessageKind::Normal,
+            send: SendState::Sent,
         };
         let loaded = format!(
             "{:?}",
@@ -250,6 +251,7 @@ mod tests {
                 ts: 0,
                 body: "SENTINEL-BODY-7f3a".to_string(),
                 kind: MessageKind::Normal,
+                send: SendState::Sent,
             }],
             oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
             older: false,
@@ -283,6 +285,7 @@ mod tests {
                 author: "smoke".to_string(),
                 ts: 0,
                 body: "SENTINEL-BODY-7f3a".to_string(),
+                send: SendState::Sent,
                 kind: MessageKind::Normal,
             },
         };

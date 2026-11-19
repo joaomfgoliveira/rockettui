@@ -317,7 +317,7 @@ mod tests {
     #[tokio::test]
     async fn send_round_trip_swaps_in_place() {
         use crate::app::update::update;
-        use crate::data::{Message, MessageKind};
+        use crate::data::{Message, MessageKind, SendState};
         use crate::test_util::app_80x24;
 
         let pending = Message {
@@ -327,6 +327,7 @@ mod tests {
             ts: 0,
             body: SENTINEL.to_string(),
             kind: MessageKind::Normal,
+            send: SendState::Sending,
         };
         let seeded = || {
             let mut app = app_80x24();

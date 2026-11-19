@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use crate::app::history::HistoryState;
     use crate::app::messages::{row_starts, view};
-    use crate::data::{Message, MessageKind, RoomId};
+    use crate::data::{Message, MessageKind, RoomId, SendState};
     use crate::test_util::{app_80x24, press};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -499,6 +499,7 @@ mod tests {
                 ts: 0,
                 body: "short".to_string(),
                 kind: MessageKind::Normal,
+                send: SendState::Sent,
             });
         let terminal = render_pane(&app);
         let text = all_text(&terminal);
@@ -526,6 +527,7 @@ mod tests {
             ts: 0,
             body: "\u{1b}]52;c;ZXZpbA==\u{7}clip\u{9b}2Jboard\u{202e}x\ty".to_string(),
             kind: MessageKind::Normal,
+            send: SendState::Sent,
         });
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
@@ -562,6 +564,7 @@ mod tests {
             ts,
             body: body.to_string(),
             kind,
+            send: SendState::Sent,
         };
         app.messages.insert(
             room.clone(),
