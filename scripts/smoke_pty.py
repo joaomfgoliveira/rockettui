@@ -22,6 +22,7 @@ import json
 import os
 import pty
 import re
+import secrets
 import select
 import shutil
 import signal
@@ -1349,6 +1350,76 @@ def scenario_docker_read(binary):
         raise SmokeFail("the token appears in the terminal output")
 
 
+def history_settled(b):
+    """The open room's history has neither a Loading placeholder nor a load failure on screen."""
+    screen = screen_of(b)
+    return not screen.contains("Loading") and not screen.contains("Could not load")
+
+
+def scenario_docker_send(binary):
+    """MSG-02 against a real local Rocket.Chat (T-04-22, T-04-23): the binary opens the throwaway
+    rt-private room, sends a fresh text from Insert mode and the row turns into the server's copy
+    (its time and the `dev` author); a second run of the binary finds the same text in rt-private's
+    history, so the message persisted on the server.
+
+    Sends go only to rt-private, never to rt-public, so docker_read's newest-page checks stay valid
+    however often this runs. `docker_env` reads the state file in-process, refuses a non-loopback
+    server and never prints a value; the scenario fails if the token reaches the terminal output.
+    """
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    env = docker_env(project)
+    token = env["ROCKETTUI_TOKEN"].encode()
+    text = "ds-" + secrets.token_hex(4)  # fresh per run, short enough for one row of the pane
+    clock = re.compile(r"\d\d:\d\d")
+
+    # First run: send the text and wait for the server's copy.
+    pid, fd = spawn(binary, extra_env=env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-private")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("rt-private history never settled (Loading or Could not load)")
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, text.encode())
+    type_keys(fd, buf, b"\r")
+
+    def confirmed(b):
+        # The confirmed row: pending and failed rows show a marker instead of the time.
+        return any(text in row and "dev" in row and clock.search(row) for row in screen_of(b).rows())
+
+    if not read_until(fd, buf, confirmed, 15):
+        raise SmokeFail("the sent message never turned into a confirmed row with its time and `dev`")
+    status = screen_of(buf).rows()[22]
+    if "message not sent" in status or "may not have been sent" in status:
+        raise SmokeFail("the status row reports a failed send")
+    # A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key.
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"first run: exit code {code}, expected 0")
+    if token in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output (first run)")
+
+    # Second run: the text must come back from the server's history.
+    pid, fd = spawn(binary, extra_env=env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-private")
+    persisted = lambda b: any(text in row for row in screen_of(b).rows())
+    if not read_until(fd, buf, persisted, 15):
+        raise SmokeFail("the sent message is not in rt-private's history after a restart")
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"second run: exit code {code}, expected 0")
+    if token in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output (second run)")
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -1367,6 +1438,7 @@ SCENARIOS = {
     "perm_warning": scenario_perm_warning,
     "unauthorized": scenario_unauthorized,
     "docker_read": scenario_docker_read,
+    "docker_send": scenario_docker_send,
 }
 
 

@@ -117,6 +117,24 @@ RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui
 | 8.9.1 (`rockettui-dev`, port 3100) | pass | rooms, Favorites and Work folders, paging to `Beginning of history`, join and attachment lines, `encrypted, not supported`, clean `:q`, token never in the pty output |
 | 9.0.0 (`rockettui-dev9`, port 3101) | pass | same scenario, no client change needed; the stack was seeded with the same script and removed afterwards |
 
+Sending (Phase 4), checked on 2026-11-19 with the `docker_send` pty scenario and the send probe.
+`docker_send` starts the real binary with the PAT from the stack's state file, opens `rt-private`
+(never `rt-public`, so `docker_read` stays valid however often it runs), sends a fresh text from
+Insert mode, waits for the confirmed row (server time and the `dev` author), quits, starts the
+binary again and finds the same text in `rt-private`'s history, so the message persisted:
+
+```sh
+python3 -I dev/probe_send.py                                                              # 8.9.1
+python3 -I scripts/smoke_pty.py target/debug/rockettui docker_send                        # 8.9.1
+RT_PROJECT=rockettui-dev9 python3 -I dev/probe_send.py                                    # 9.0.0
+RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui docker_send   # 9.0.0
+```
+
+| Server | Result | Notes |
+|--------|--------|-------|
+| 8.9.1 | pass | `PROBE OK`, `SMOKE OK: docker_send`; the `_id`, `rid`, `msg` body is accepted and the text is in the history after a restart |
+| 9.0.0 | pass | `PROBE OK`, `SMOKE OK: docker_send`; the same body is accepted, so no client change was needed. One difference: for the replaced `chat.postMessage` (P7) the error type is `error-invalid-params` here and `invalid-params` on 8.9.1; nothing in the client reads it |
+
 Known differences and limits:
 
 - `/api/info` reports `version` as major.minor (`8.9`, `9.0`), not the patch release.
