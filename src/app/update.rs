@@ -258,7 +258,7 @@ mod tests {
     use crate::action::Action;
     use crate::app::{App, Focus, MAX_CMDLINE, sidebar};
     use crate::app::{Mode, update::update};
-    use crate::data::{RoomId, SendState, fake};
+    use crate::data::{Message, MessageKind, RoomId, SendState, fake};
     use crate::test_util::{app_80x24, press};
     use ratatui::layout::Size;
 
@@ -812,6 +812,72 @@ mod tests {
         assert_eq!(sent.body, "hello");
         assert_eq!(sent.author, "smoke");
         assert!(sent.send.is_unsent());
+    }
+
+    fn row(room: &str, id: &str, author: &str, send: SendState) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: RoomId(room.to_string()),
+            author: author.to_string(),
+            ts: 0,
+            body: "text".to_string(),
+            kind: MessageKind::Normal,
+            send,
+        }
+    }
+
+    fn authors(app: &App, room: &str) -> Vec<String> {
+        app.messages[&RoomId(room.to_string())]
+            .iter()
+            .map(|m| m.author.clone())
+            .collect()
+    }
+
+    #[test]
+    fn me_loaded_renames_pending() {
+        let mut app = app_80x24();
+        let general_before = app.messages[&general()].len();
+        let random = RoomId("random".to_string());
+        let random_before = app.messages[&random].len();
+        app.messages.get_mut(&general()).unwrap().extend([
+            row("general", "g-sending", "me", SendState::Sending),
+            row("general", "g-failed", "me", SendState::Failed),
+            row("general", "g-unconfirmed", "me", SendState::Unconfirmed),
+            row("general", "g-sent", "me", SendState::Sent),
+        ]);
+        app.messages.get_mut(&random).unwrap().push(row(
+            "random",
+            "r-queued",
+            "me",
+            SendState::Queued { reconcile: false },
+        ));
+
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+
+        let general_authors = authors(&app, "general");
+        assert_eq!(
+            general_authors[general_before..],
+            ["smoke", "smoke", "smoke", "me"],
+            "the three unsent rows are renamed, the Sent one is left alone"
+        );
+        assert_eq!(authors(&app, "random")[random_before..], ["smoke"]);
+        assert_eq!(app.own_username.as_deref(), Some("smoke"));
+    }
+
+    #[test]
+    fn me_loaded_keeps_other_authors() {
+        let mut app = app_80x24();
+        let before = app.messages[&general()].len();
+        app.messages.get_mut(&general()).unwrap().extend([
+            row("general", "g-other", "alice", SendState::Failed),
+            row("general", "g-mine", "me", SendState::Failed),
+        ]);
+        update(&mut app, Action::MeLoaded("smoke".to_string()));
+        assert_eq!(authors(&app, "general")[before..], ["alice", "smoke"]);
+        // A second, different name does not rename rows that already carry the first one.
+        update(&mut app, Action::MeLoaded("other".to_string()));
+        assert_eq!(authors(&app, "general")[before..], ["alice", "smoke"]);
+        assert_eq!(app.own_username.as_deref(), Some("other"));
     }
 
     #[test]
