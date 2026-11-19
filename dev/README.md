@@ -59,6 +59,40 @@ synthetic seed text.
 set -a; . dev/state/rockettui-dev/.env.local; set +a; cargo run
 ```
 
+## Probe the send contract
+
+`dev/probe_send.py` is the Wave 0 probe of Phase 4 (sending messages). It asks the local server how
+`chat.sendMessage` behaves, so the client is built on measured answers and not on documentation.
+It reads the PAT and the admin password from the state directory in-process.
+
+```sh
+python3 -I dev/probe_send.py
+RT_PROJECT=rockettui-dev9 python3 -I dev/probe_send.py   # the 9.0.0 stack
+```
+
+One line per probe:
+
+| Probe | What it asks |
+|-------|--------------|
+| P0 | `GET /api/v1/me`: does the own-username call return a username (D-17) |
+| P1 | `chat.sendMessage` with a client-chosen `_id`: status, message keys, `_id` echoed, `ts` shape (D-15) |
+| P2 | the identical body again: how the server answers a repeated `_id` (A1) |
+| P3a / P3b | `chat.getMessage` for a known and for an unknown id |
+| P4 | a send into a read-only room |
+| P5a / P5b | a send as a muted user (`SKIPPED` when the mute call is unavailable, A7), a send into an archived room |
+| P6 | a text of the server's `Message_MaxAllowedSize` plus one character |
+| P7 | the replaced endpoint `chat.postMessage` with an `_id` |
+
+Output rule: only statuses, top-level key names, yes/no flags and closed error classes are
+printed. No credential, message text, response body, header or server error text ever appears,
+and every line is checked against the secret values before it is printed. The last line is
+`PROBE OK` only when P1 returned the client's `_id` and every room the run created was deleted.
+
+Cleanup guarantee: the probe creates three `rt-probe-*` rooms (plus one more when the mute probe
+leaves the user muted), and deletes exactly those room ids in a `finally` block (`cleanup
+deleted=n/m`). It never touches the seeded rooms or a container, and refuses a server that is not
+on loopback.
+
 ## Second stack: Rocket.Chat 9.0.0
 
 A fully independent stack (own project, state directory and volume) for the compatibility pass:
