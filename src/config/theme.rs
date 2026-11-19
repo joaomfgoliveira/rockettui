@@ -41,6 +41,8 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.author",
     "messages.body",
     "messages.notice",
+    "messages.pending",
+    "messages.failed",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -79,6 +81,9 @@ const MARKER_KEYS: &[&str] = &[
     "discussion",
     "team",
     "direct_message",
+    "sending",
+    "failed",
+    "unconfirmed",
 ];
 
 /// Border types a `type` key accepts (A6).
@@ -104,6 +109,13 @@ pub struct Markers {
     pub discussion: String,
     pub team: String,
     pub direct_message: String,
+    /// Drawn in place of the time of a message that is `Queued` or `Sending` (D-01).
+    pub sending: String,
+    /// Drawn in place of the time of a send that did not reach the server (D-06).
+    pub failed: String,
+    /// Drawn in place of the time of a send whose outcome is unknown: a timeout, a lost
+    /// connection or a 5xx (D-07, D-18).
+    pub unconfirmed: String,
 }
 
 impl Default for Markers {
@@ -120,6 +132,9 @@ impl Default for Markers {
             discussion: glyph(RoomKind::Discussion),
             team: glyph(RoomKind::Team),
             direct_message: glyph(RoomKind::DirectMessage),
+            sending: "\u{2026}".to_string(),
+            failed: "!".to_string(),
+            unconfirmed: "?".to_string(),
         }
     }
 }
@@ -149,6 +164,9 @@ impl Markers {
             "discussion" => &mut self.discussion,
             "team" => &mut self.team,
             "direct_message" => &mut self.direct_message,
+            "sending" => &mut self.sending,
+            "failed" => &mut self.failed,
+            "unconfirmed" => &mut self.unconfirmed,
             _ => return None,
         };
         Some((slot, MAX_MARKER_WIDTH))
@@ -185,6 +203,11 @@ pub struct Theme {
     pub messages_body: Style,
     /// The "No room open" and "No messages yet" lines.
     pub messages_notice: Style,
+    /// Author, marker and body of a message the server has not confirmed yet: `Queued` or
+    /// `Sending` (D-01).
+    pub messages_pending: Style,
+    /// Author, marker and body of a message that is `Failed` or `Unconfirmed` (D-06).
+    pub messages_failed: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -220,6 +243,8 @@ impl Default for Theme {
             messages_author: plain.add_modifier(Modifier::BOLD),
             messages_body: plain,
             messages_notice: plain.add_modifier(Modifier::DIM),
+            messages_pending: plain.add_modifier(Modifier::DIM),
+            messages_failed: plain.fg(Color::Red),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -254,6 +279,8 @@ impl Theme {
             ("messages", "author") => Some(&mut self.messages_author),
             ("messages", "body") => Some(&mut self.messages_body),
             ("messages", "notice") => Some(&mut self.messages_notice),
+            ("messages", "pending") => Some(&mut self.messages_pending),
+            ("messages", "failed") => Some(&mut self.messages_failed),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -751,8 +778,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            22,
-            "16 chrome and border paths plus the six messages elements"
+            24,
+            "16 chrome and border paths plus the eight messages elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -979,6 +1006,58 @@ mod tests {
     }
 
     #[test]
+    fn send_marker_defaults() {
+        assert_eq!(Markers::default().sending, "\u{2026}");
+        assert_eq!(
+            Theme::default().messages_pending,
+            Style::default().add_modifier(Modifier::DIM)
+        );
+        assert_eq!(Markers::default().failed, "!");
+        assert_eq!(Markers::default().unconfirmed, "?");
+        assert_eq!(
+            Theme::default().messages_failed,
+            Style::default().fg(Color::Red)
+        );
+    }
+
+    #[test]
+    fn send_vocabulary_parses() {
+        let (theme, out) =
+            parse_str("[markers]\nsending = \"~\"\n[messages.pending]\nfg = \"blue\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.markers.sending, "~");
+        assert_eq!(theme.messages_pending.fg, Some(Color::Blue));
+        // The default dim survives when only fg is set.
+        assert_eq!(theme.messages_pending.add_modifier, Modifier::DIM);
+        for bad in ["12345", "\\u001b[2J", "a\\u202eb"] {
+            let out = marker_problems(&format!("[markers]\nsending = \"{bad}\"\n"));
+            assert_eq!(out.len(), 1, "{bad}: {out:?}");
+            assert_eq!(out[0].severity, Severity::Error);
+            assert_eq!(out[0].key.as_deref(), Some("markers.sending"));
+        }
+        let (theme, out) = parse_str(
+            "[markers]\nfailed = \"x\"\nunconfirmed = \"??\"\n[messages.failed]\nbg = \"yellow\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.markers.failed, "x");
+        assert_eq!(theme.markers.unconfirmed, "??");
+        assert_eq!(theme.messages_failed.bg, Some(Color::Yellow));
+        // The default red survives when only bg is set.
+        assert_eq!(theme.messages_failed.fg, Some(Color::Red));
+        for key in ["failed", "unconfirmed"] {
+            for bad in ["12345", "\\u001b[2J", "a\\u202eb"] {
+                let out = marker_problems(&format!("[markers]\n{key} = \"{bad}\"\n"));
+                assert_eq!(out.len(), 1, "{key} {bad}: {out:?}");
+                assert_eq!(out[0].severity, Severity::Error);
+                assert_eq!(
+                    out[0].key.as_deref(),
+                    Some(format!("markers.{key}").as_str())
+                );
+            }
+        }
+    }
+
+    #[test]
     fn equal_values_allowed() {
         // Two elements with the same color, and fg equal to bg.
         let (theme, out) = parse_str(
@@ -1015,8 +1094,8 @@ mod tests {
         }
         let m = Markers::default();
         toml.push_str(&format!(
-            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\n",
-            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message
+            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\nsending = {:?}\nfailed = {:?}\nunconfirmed = {:?}\n",
+            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message, m.sending, m.failed, m.unconfirmed
         ));
         let (theme, out) = parse_str(&toml);
         assert!(out.is_empty(), "{out:?}\n{toml}");
