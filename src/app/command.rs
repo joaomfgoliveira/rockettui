@@ -14,13 +14,33 @@ pub const COMMANDS: &[CommandDef] = &[
         run: cmd_quit,
     },
     CommandDef {
+        names: &["q!", "quit!"],
+        run: cmd_force_quit,
+    },
+    CommandDef {
         names: &["reconnect", "retry"],
         run: cmd_reconnect,
     },
 ];
 
-/// `:q` / `:quit` — the only way to leave the app.
+/// `:q` / `:quit` — leaves the app, but warns once while messages are undelivered (D-20): the
+/// first `:q` only shows how many there are, the next one quits. The text is built from the count
+/// alone, so it never holds a message, an author or a room name (D-14).
 pub fn cmd_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
+    let count = app.undelivered_count();
+    if count == 0 || app.quit_warned {
+        app.should_quit = true;
+        return Ok(());
+    }
+    app.quit_warned = true;
+    let noun = if count == 1 { "message" } else { "messages" };
+    Err(format!(
+        "{count} {noun} not delivered: :q again or :q! to quit"
+    ))
+}
+
+/// `:q!` / `:quit!` (D-20): leave at once. Undelivered messages live in memory only and are lost.
+pub fn cmd_force_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
     app.should_quit = true;
     Ok(())
 }
@@ -45,6 +65,11 @@ pub fn execute(app: &mut App, line: &str) {
         return;
     };
     let args: Vec<&str> = tokens.collect();
+    // Only a `:q` straight after the warning quits through it (D-20): any other command disarms
+    // it. `q!` and `quit!` quit anyway, and an empty line (returned above) leaves the arm alone.
+    if !matches!(name, "q" | "quit") {
+        app.quit_warned = false;
+    }
     match COMMANDS.iter().find(|def| def.names.contains(&name)) {
         Some(def) => {
             if let Err(msg) = (def.run)(app, &args) {
@@ -251,6 +276,168 @@ mod tests {
             "nothing is sent: {:?}",
             app.effects
         );
+    }
+
+    /// A fake-data app with `general` open and one undelivered message in it.
+    fn app_with_failed() -> App {
+        let mut app = crate::test_util::app_80x24();
+        app.open_room(rid("general"));
+        app.messages
+            .get_mut(&rid("general"))
+            .expect("general")
+            .push(Message {
+                id: "u-1".to_string(),
+                room_id: rid("general"),
+                author: "me".to_string(),
+                ts: 0,
+                body: "SENTINEL-BODY-7f3a".to_string(),
+                kind: MessageKind::Normal,
+                send: SendState::Failed,
+            });
+        app
+    }
+
+    fn status_text(app: &App) -> String {
+        match &app.status_msg {
+            Some(StatusMsg::Error(m)) | Some(StatusMsg::Info(m)) => m.clone(),
+            None => String::new(),
+        }
+    }
+
+    #[test]
+    fn quit_warns_then_quits() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit);
+        assert_eq!(
+            status_text(&app),
+            "1 message not delivered: :q again or :q! to quit"
+        );
+        assert!(!status_text(&app).contains("SENTINEL"));
+        press(&mut app, ":q<CR>");
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn force_quit_skips_warning() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q!<CR>");
+        assert!(app.should_quit);
+        let mut fresh = app_with_failed();
+        press(&mut fresh, ":quit!<CR>");
+        assert!(fresh.should_quit);
+    }
+
+    fn push_message(app: &mut App, room: &str, n: usize, send: SendState) {
+        app.messages
+            .get_mut(&rid(room))
+            .expect("room")
+            .push(Message {
+                id: format!("w-{n}"),
+                room_id: rid(room),
+                author: "me".to_string(),
+                ts: 0,
+                body: "text".to_string(),
+                kind: MessageKind::Normal,
+                send,
+            });
+    }
+
+    #[test]
+    fn warning_counts_states_and_rooms() {
+        let mut app = crate::test_util::app_80x24();
+        let states = [
+            ("general", SendState::Queued { reconcile: false }),
+            ("random", SendState::Sending),
+            ("general", SendState::Failed),
+            ("random", SendState::Unconfirmed),
+            ("general", SendState::Sent),
+            ("random", SendState::Sent),
+        ];
+        for (n, (room, send)) in states.into_iter().enumerate() {
+            push_message(&mut app, room, n, send);
+        }
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit);
+        assert_eq!(
+            status_text(&app),
+            "4 messages not delivered: :q again or :q! to quit"
+        );
+    }
+
+    #[test]
+    fn other_command_disarms() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q<CR>");
+        assert!(app.quit_warned);
+        press(&mut app, ":foo<CR>");
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit, "an unknown command disarms the warning");
+        assert_eq!(
+            status_text(&app),
+            "1 message not delivered: :q again or :q! to quit"
+        );
+
+        let mut app = app_with_failed();
+        press(&mut app, ":q<CR>");
+        press(&mut app, ":reconnect<CR>");
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit, ":reconnect disarms the warning");
+        press(&mut app, ":q<CR>");
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn empty_line_keeps_warning_armed() {
+        let mut app = app_with_failed();
+        press(&mut app, ":q<CR>");
+        press(&mut app, ":<CR>");
+        press(&mut app, ":q<CR>");
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn warning_holds_no_text() {
+        let mut app = crate::test_util::app_80x24();
+        app.rooms[0].name = "SENTINEL-ROOM".to_string();
+        let id = app.rooms[0].id.clone();
+        app.messages.get_mut(&id).expect("room").push(Message {
+            id: "s-1".to_string(),
+            room_id: id,
+            author: "SENTINEL-AUTHOR-2b9d".to_string(),
+            ts: 0,
+            body: "SENTINEL-BODY-7f3a".to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Unconfirmed,
+        });
+        press(&mut app, ":q<CR>");
+        let shown = status_text(&app);
+        assert!(shown.contains("not delivered"), "{shown}");
+        for sentinel in [
+            "SENTINEL-BODY-7f3a",
+            "SENTINEL-AUTHOR-2b9d",
+            "SENTINEL-ROOM",
+        ] {
+            assert!(!shown.contains(sentinel), "{shown}");
+        }
+    }
+
+    #[test]
+    fn quit_warning_leaves_sends() {
+        let mut app = app_with_failed();
+        push_message(
+            &mut app,
+            "general",
+            1,
+            SendState::Queued { reconcile: true },
+        );
+        push_message(&mut app, "random", 2, SendState::Sending);
+        let before = app.messages.clone();
+        let effects = app.effects.len();
+        press(&mut app, ":q<CR>");
+        assert!(!app.should_quit);
+        assert_eq!(app.messages, before, "no state, order or row changes");
+        assert_eq!(app.effects.len(), effects, "no effect is recorded");
     }
 
     #[test]
