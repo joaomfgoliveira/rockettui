@@ -741,6 +741,188 @@ mod tests {
         ));
     }
 
+    /// A message of `r-general` as the server would return it: author `alice`, time `ts`.
+    fn server(id: &str, ts: i64, body: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: rid("r-general"),
+            author: "alice".to_string(),
+            ts,
+            body: body.to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        }
+    }
+
+    /// A message this client composed, in `send` state.
+    fn local(id: &str, send: SendState) -> Message {
+        Message {
+            author: "me".to_string(),
+            ..server(id, 1, "typed")
+        }
+        .with_send(send)
+    }
+
+    trait WithSend {
+        fn with_send(self, send: SendState) -> Self;
+    }
+
+    impl WithSend for Message {
+        fn with_send(mut self, send: SendState) -> Self {
+            self.send = send;
+            self
+        }
+    }
+
+    fn send_effects(app: &App) -> usize {
+        app.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::SendMessage { .. }))
+            .count()
+    }
+
+    #[test]
+    fn first_page_confirms_held_pending() {
+        let mut app = fixture_app();
+        press(&mut app, "<CR>");
+        let room = rid("r-general");
+        app.messages.insert(
+            room.clone(),
+            vec![
+                local("u1", SendState::Unconfirmed),
+                local("f1", SendState::Failed),
+                local("s1", SendState::Sending),
+            ],
+        );
+        app.msg_views.insert(
+            room.clone(),
+            MsgView {
+                cursor: 0,
+                top_row: 0,
+            },
+        );
+        app.effects.clear();
+
+        let page = vec![
+            server("old1", 10, "older one"),
+            server("old2", 11, "older two"),
+            server("u1", 20, "typed"),
+            server("f1", 21, "typed"),
+            server("s1", 22, "typed"),
+        ];
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: room.clone(),
+                messages: page,
+                oldest_ts: Some("x".to_string()),
+                older: false,
+            },
+        );
+        let held = &app.messages[&room];
+        let ids: Vec<&str> = held.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["old1", "old2", "u1", "f1", "s1"]);
+        for (index, ts) in [(2, 20), (3, 21), (4, 22)] {
+            assert_eq!(held[index].send, SendState::Sent, "{}", held[index].id);
+            assert_eq!(held[index].author, "alice");
+            assert_eq!(held[index].ts, ts);
+        }
+        assert_eq!(app.msg_views[&room].cursor, 2, "still selects u1");
+        assert_eq!(held[app.msg_views[&room].cursor].id, "u1");
+        assert_eq!(
+            app.awaiting_answer.get(&room).map(String::as_str),
+            Some("s1")
+        );
+        assert_eq!(send_effects(&app), 0, "a confirmation records no send");
+    }
+
+    #[test]
+    fn first_page_ignores_held_sent() {
+        let mut app = fixture_app();
+        press(&mut app, "<CR>");
+        let room = rid("r-general");
+        let mut mine = local("h1", SendState::Sent);
+        mine.body = "mine".to_string();
+        app.messages.insert(room.clone(), vec![mine.clone()]);
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: room.clone(),
+                messages: vec![
+                    server("old1", 10, "older"),
+                    server("h1", 99, "a different body"),
+                ],
+                oldest_ts: Some("x".to_string()),
+                older: false,
+            },
+        );
+        let held = &app.messages[&room];
+        let ids: Vec<&str> = held.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["old1", "h1"], "no id twice");
+        assert_eq!(held[1], mine, "the held Sent row is left exactly as it was");
+        assert!(app.awaiting_answer.is_empty());
+    }
+
+    #[test]
+    fn older_page_confirms_held_pending() {
+        let mut app = loaded_general();
+        let room = rid("r-general");
+        app.messages
+            .get_mut(&room)
+            .expect("room")
+            .push(local("f1", SendState::Failed));
+        press(&mut app, "gg");
+        let id = app.messages[&room][0].id.clone();
+        let starts = messages::row_starts(&app, &room);
+        let before = messages::view(&app, &room);
+        let offset = starts[before.cursor] as isize - before.top_row as isize;
+
+        update(
+            &mut app,
+            older_action(
+                vec![server("p000", 0, "body p000"), server("f1", 77, "typed")],
+                Some("x"),
+            ),
+        );
+        let held = &app.messages[&room];
+        assert_eq!(held.len(), 52);
+        assert_eq!(held.iter().filter(|m| m.id == "f1").count(), 1);
+        assert_eq!(held.iter().filter(|m| m.id == "p000").count(), 1);
+        assert_eq!(held[0].id, "p000");
+        let f1 = held.last().expect("last");
+        assert_eq!(f1.id, "f1", "replaced in place at the end");
+        assert_eq!(f1.send, SendState::Sent);
+        assert_eq!(f1.ts, 77);
+        let after = messages::view(&app, &room);
+        assert_eq!(held[after.cursor].id, id, "same message selected");
+        let starts = messages::row_starts(&app, &room);
+        assert_eq!(
+            starts[after.cursor] as isize - after.top_row as isize,
+            offset,
+            "same screen row"
+        );
+    }
+
+    #[test]
+    fn older_page_ignores_held_sent() {
+        let mut app = loaded_general();
+        let room = rid("r-general");
+        press(&mut app, "gg");
+        let held_before = app.messages[&room][0].clone();
+        let mut repeated = held_before.clone();
+        repeated.body = "different".to_string();
+        repeated.ts += 1000;
+        update(
+            &mut app,
+            older_action(vec![repeated, server("b000", 0, "body b000")], Some("x")),
+        );
+        let held = &app.messages[&room];
+        assert_eq!(held.len(), 51);
+        assert_eq!(held[0].id, "b000");
+        assert_eq!(held[1], held_before, "the held Sent row is unchanged");
+        assert_eq!(held.iter().filter(|m| m.id == held_before.id).count(), 1);
+    }
+
     #[test]
     fn no_trigger_outside_a_loaded_room() {
         // Loading, Failed, no state and no room never request an older page.

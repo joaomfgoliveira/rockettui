@@ -7,7 +7,7 @@
 
 use crate::action::Action;
 use crate::app::App;
-use crate::data::RoomId;
+use crate::data::{Message, RoomId, SendState};
 use crate::ui::wrap;
 
 /// Where a room's message pane is looking: the selected message and the first visible row.
@@ -161,6 +161,29 @@ pub fn is_at_bottom(app: &App, room: &RoomId) -> bool {
     let total = row_starts(app, room).last().copied().unwrap_or(0);
     let viewport_h = usize::from(viewport(app).1);
     view(app, room).top_row + viewport_h >= total
+}
+
+/// What `merge_incoming` did with a server message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Merge {
+    /// The `_id` was absent: the message was appended to the room.
+    Appended,
+    /// The `_id` is held by a `Sent` message: nothing changed.
+    Ignored,
+    /// The `_id` was held by a still-pending message (Queued, Sending, Failed or Unconfirmed): it
+    /// was replaced in place, at this index, and marked `Sent`.
+    Confirmed(usize),
+}
+
+/// The held-id rule of D-13 as amended by D-21, for one server message. See the implementation.
+pub fn confirm_held(_app: &mut App, _room: &RoomId, _message: &Message) -> Option<Merge> {
+    None
+}
+
+/// The one append path for a server message outside a history page (D-13, D-21).
+pub fn merge_incoming(app: &mut App, room: &RoomId, message: Message) -> Merge {
+    app.messages.entry(room.clone()).or_default().push(message);
+    Merge::Appended
 }
 
 /// Forget the stored view so the room shows its newest message again (plan 01-06 calls this
@@ -507,6 +530,99 @@ mod tests {
             },
         );
         assert!(is_at_bottom(&app, &room));
+    }
+
+    fn server_copy(room: &RoomId, id: &str, body: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: "smoke".to_string(),
+            ts: 1_794_909_605,
+            body: body.to_string(),
+            kind: crate::data::MessageKind::Normal,
+            send: SendState::Sent,
+        }
+    }
+
+    #[test]
+    fn merge_incoming_absent_appends() {
+        let mut app = open_general();
+        let room = general();
+        let before = app.messages[&room].len();
+        let outcome = merge_incoming(&mut app, &room, server_copy(&room, "srv-1", "hello"));
+        assert_eq!(outcome, Merge::Appended);
+        let held = &app.messages[&room];
+        assert_eq!(held.len(), before + 1);
+        assert_eq!(held[before].id, "srv-1");
+        assert_eq!(held[before].send, SendState::Sent);
+
+        // A room with no vector gets one.
+        let fresh = RoomId("fresh".to_string());
+        assert!(!app.messages.contains_key(&fresh));
+        let outcome = merge_incoming(&mut app, &fresh, server_copy(&fresh, "srv-2", "x"));
+        assert_eq!(outcome, Merge::Appended);
+        assert_eq!(app.messages[&fresh].len(), 1);
+        assert!(app.awaiting_answer.is_empty());
+    }
+
+    #[test]
+    fn merge_incoming_sent_ignored() {
+        let mut app = open_general();
+        let room = general();
+        let held_id = app.messages[&room][5].id.clone();
+        let before = app.messages[&room].clone();
+        let outcome = merge_incoming(
+            &mut app,
+            &room,
+            server_copy(&room, &held_id, "a different body"),
+        );
+        assert_eq!(outcome, Merge::Ignored);
+        assert_eq!(app.messages[&room], before);
+        assert!(app.awaiting_answer.is_empty());
+    }
+
+    #[test]
+    fn merge_incoming_pending_confirms() {
+        for pending in [
+            SendState::Queued { reconcile: false },
+            SendState::Sending,
+            SendState::Failed,
+            SendState::Unconfirmed,
+        ] {
+            let mut app = open_general();
+            let room = general();
+            let mut held = server_copy(&room, "local-9", "typed");
+            held.author = "me".to_string();
+            held.ts = 1;
+            held.send = pending;
+            app.messages.get_mut(&room).expect("room").push(held);
+            let index = app.messages[&room].len() - 1;
+            let view = MsgView {
+                cursor: 5,
+                top_row: 2,
+            };
+            app.msg_views.insert(room.clone(), view);
+            let len = app.messages[&room].len();
+
+            let outcome = merge_incoming(&mut app, &room, server_copy(&room, "local-9", "typed"));
+            assert_eq!(outcome, Merge::Confirmed(index), "{pending:?}");
+            let held = &app.messages[&room];
+            assert_eq!(held.len(), len, "{pending:?}: replaced, not appended");
+            assert_eq!(held[index].id, "local-9");
+            assert_eq!(
+                held[index].author, "smoke",
+                "{pending:?}: the server's copy"
+            );
+            assert_eq!(held[index].send, SendState::Sent, "{pending:?}");
+            assert_eq!(app.msg_views[&room], view, "{pending:?}: cursor unchanged");
+            // Only a confirmed Sending copy keeps the in-flight slot (D-03).
+            let expected = (pending == SendState::Sending).then(|| "local-9".to_string());
+            assert_eq!(
+                app.awaiting_answer.get(&room),
+                expected.as_ref(),
+                "{pending:?}"
+            );
+        }
     }
 
     #[test]

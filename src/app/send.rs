@@ -832,8 +832,8 @@ mod tests {
         let general_after = |app: &App| app.messages[&general()].clone();
         assert_eq!(general_after(&app), general_before);
 
-        // An id the room does not hold changes nothing, in a room that has messages and in one
-        // that has none.
+        // An id the room does not hold is appended once through `merge_incoming` (D-13), in a room
+        // that has messages and in one that has none; the existing rows are untouched.
         let snapshot = app.messages[&other].clone();
         let stray = msg(&other, "rt-unknown", "smoke", 5, BODY);
         on_sent(
@@ -842,10 +842,17 @@ mod tests {
             "rt-unknown".to_string(),
             stray.clone(),
         );
-        assert_eq!(app.messages[&other], snapshot);
+        assert_eq!(app.messages[&other].len(), snapshot.len() + 1);
+        assert_eq!(app.messages[&other][..snapshot.len()], snapshot[..]);
+        assert_eq!(app.messages[&other][snapshot.len()], stray);
         let empty = RoomId("r-none".to_string());
-        on_sent(&mut app, empty.clone(), "rt-unknown".to_string(), stray);
-        assert!(!app.messages.contains_key(&empty));
+        on_sent(
+            &mut app,
+            empty.clone(),
+            "rt-unknown".to_string(),
+            msg(&empty, "rt-unknown", "smoke", 5, BODY),
+        );
+        assert_eq!(app.messages[&empty].len(), 1);
     }
 
     /// Every `ApiError` value, with whether it leaves the outcome of a send unknown (D-07, D-18).
@@ -1003,6 +1010,92 @@ mod tests {
         let last = app.messages[&general()].len() - 1;
         assert_eq!(messages::view(&app, &general()).cursor, last);
         assert!(crate::test_util::render_to_string(&app, 80, 24).contains(BODY));
+    }
+
+    #[test]
+    fn sent_after_discard_appends() {
+        let mut app = open_general_app();
+        press(&mut app, "ia<CR>");
+        let index = app.messages[&general()].len() - 1;
+        // The row was removed meanwhile; the server's answer still carries the message.
+        remove_at(&mut app, &general(), index);
+        let before = app.messages[&general()].len();
+        answer_sent(&mut app, "local-1", 10);
+        assert_eq!(app.messages[&general()].len(), before + 1);
+        assert_eq!(app.messages[&general()][before].id, "local-1");
+        assert_eq!(app.messages[&general()][before].send, SendState::Sent);
+        // The same answer again adds nothing.
+        answer_sent(&mut app, "local-1", 10);
+        assert_eq!(app.messages[&general()].len(), before + 1);
+    }
+
+    /// `general` holding Sending `local-1` (a) and Queued `local-2` (b), after `merge_incoming`
+    /// confirmed a from a server copy: one SendMessage effect so far, and a's POST outstanding.
+    fn app_with_confirmed_sending() -> (App, usize) {
+        let mut app = open_general_app();
+        press(&mut app, "ia<CR>b<CR>");
+        assert_eq!(
+            states(&app, 2),
+            [SendState::Sending, SendState::Queued { reconcile: false }]
+        );
+        assert_eq!(sends(&app).len(), 1);
+        let index = app.messages[&general()].len() - 2;
+        let copy = msg(&general(), "local-1", "smoke", 1_794_909_605, "a");
+        let outcome = messages::merge_incoming(&mut app, &general(), copy);
+        assert_eq!(outcome, messages::Merge::Confirmed(index));
+        (app, index)
+    }
+
+    #[test]
+    fn confirm_sending_keeps_slot() {
+        let (mut app, index) = app_with_confirmed_sending();
+        assert_eq!(app.messages[&general()][index].send, SendState::Sent);
+        assert_eq!(
+            app.awaiting_answer.get(&general()).map(String::as_str),
+            Some("local-1")
+        );
+        assert_eq!(sends(&app).len(), 1, "a confirmation records no effect");
+
+        // A third Enter and a direct pump start nothing while a's POST is outstanding.
+        press(&mut app, "c<CR>");
+        pump(&mut app, &general());
+        assert_eq!(sends(&app).len(), 1);
+
+        // A Queued message of another room is not blocked by the entry.
+        let other = RoomId("random".to_string());
+        let mut queued = msg(&other, "local-77", "me", 0, "elsewhere");
+        queued.send = SendState::Queued { reconcile: false };
+        app.messages.entry(other.clone()).or_default().push(queued);
+        pump(&mut app, &other);
+        assert_eq!(sends(&app).len(), 2);
+        assert_eq!(sends(&app)[1].0, "random");
+
+        // a's own answer releases the slot and starts b only; c stays Queued.
+        answer_sent(&mut app, "local-1", 11);
+        assert!(app.awaiting_answer.is_empty());
+        let started: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(started, ["local-1", "local-77", "local-2"]);
+        assert_eq!(
+            states(&app, 3),
+            [
+                SendState::Sent,
+                SendState::Sending,
+                SendState::Queued { reconcile: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn confirmed_row_failure_is_silent() {
+        let (mut app, index) = app_with_confirmed_sending();
+        app.status_msg = None;
+        answer_failed(&mut app, "local-1");
+        assert_eq!(app.messages[&general()][index].send, SendState::Sent);
+        assert_eq!(app.messages[&general()][index].id, "local-1");
+        assert!(app.status_msg.is_none(), "no error for a delivered message");
+        assert!(app.awaiting_answer.is_empty());
+        let started: Vec<String> = sends(&app).into_iter().map(|s| s.1).collect();
+        assert_eq!(started, ["local-1", "local-2"], "b starts");
     }
 
     #[test]

@@ -100,6 +100,12 @@ pub struct App {
     /// is sent only by Enter in its own room. An empty draft is not stored. `InputBuffer`'s `Debug`
     /// redacts the text.
     pub drafts: HashMap<RoomId, input_buf::InputBuffer>,
+    /// The client id of a send whose row was confirmed `Sent` by an incoming server copy (a
+    /// realtime echo or a history page, D-21) while its POST had not answered yet. The entry keeps
+    /// that room's single in-flight slot occupied until the request's own `MessageSent` or
+    /// `SendFailed` arrives (D-03). Consulted by `send::pump`, set only by `messages::confirm_held`
+    /// and released only by `send::on_sent` and `send::on_failed`.
+    pub awaiting_answer: HashMap<RoomId, String>,
     /// Counter behind the ids of locally appended messages.
     pub local_seq: u64,
     /// The prefix of every client message id: ids are `id_prefix` + `local_seq` (built by
@@ -156,6 +162,7 @@ impl App {
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
             drafts: HashMap::new(),
+            awaiting_answer: HashMap::new(),
             local_seq: 0,
             id_prefix: "local-".to_string(),
             own_username: None,
