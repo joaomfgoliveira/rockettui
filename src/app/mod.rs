@@ -11,11 +11,12 @@ pub mod send;
 pub mod sidebar;
 pub mod update;
 
-use crate::data::{Folder, Message, Room, RoomId};
+use crate::data::{Folder, Message, Room, RoomId, SendState};
 use crate::input::keymap::Keymap;
 use crate::input::matcher::Matcher;
 use ratatui::layout::Size;
 use std::collections::HashMap;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
@@ -190,11 +191,27 @@ impl App {
                 msgs,
                 &self.settings.timestamp_format,
                 self.zone,
-            ),
+            )
+            .max(self.unsent_marker_column(msgs)),
             time_format: &self.settings.timestamp_format,
             zone: self.zone,
             theme: &self.theme,
         }
+    }
+
+    /// Display width of the widest marker an unsent message of `msgs` shows where its time would
+    /// be. `row_ctx` raises the room's time column to it, so a marker wider than the formatted time
+    /// never moves a body (D-01).
+    fn unsent_marker_column(&self, msgs: &[Message]) -> usize {
+        let markers = &self.theme.markers;
+        msgs.iter()
+            .filter(|m| m.send.is_unsent())
+            .map(|m| match m.send {
+                SendState::Queued { .. } | SendState::Sending => markers.sending.width(),
+                SendState::Sent | SendState::Failed | SendState::Unconfirmed => 0,
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     /// Rows the input bar occupies: the draft's visual rows, from 1 up to `MAX_INPUT_ROWS`.

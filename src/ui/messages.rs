@@ -96,8 +96,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::Action;
     use crate::app::history::HistoryState;
     use crate::app::messages::{row_starts, view};
+    use crate::app::update::update;
     use crate::data::{Message, MessageKind, RoomId, SendState};
     use crate::test_util::{app_80x24, press};
     use ratatui::Terminal;
@@ -612,5 +614,59 @@ mod tests {
             assert!(!cell.modifier.contains(Modifier::BOLD), "{needle} is bold");
         }
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn send_pending_52x20() {
+        let mut app = open_general_80x25();
+        press(&mut app, "ihello pending<CR>");
+        let sent = app.messages[&general()].last().expect("pending row");
+        assert!(sent.send.is_pending(), "{:?}", sent.send);
+        let terminal = render_pane(&app);
+        let last = row_text(&terminal, 18);
+        assert!(last.contains("\u{2026}"), "{last:?}");
+        assert!(last.contains("hello pending"), "{last:?}");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn pending_theme_end_to_end() {
+        let config = crate::test_util::config_from_theme(
+            "[markers]\nsending = \"~\"\n[messages.pending]\nfg = \"blue\"\n",
+        );
+        let mut app = crate::test_util::app_with_config(config, 80, 25);
+        app.open_room(general());
+        press(&mut app, "ihi<CR>");
+        let id = app.messages[&general()].last().expect("row").id.clone();
+
+        let terminal = render_pane(&app);
+        let row = row_text(&terminal, 18);
+        assert!(row.starts_with("\u{2502}~"), "{row:?}");
+        let buffer = terminal.backend().buffer();
+        let x = row.chars().position(|c| c == 'h').expect("body") as u16;
+        assert_eq!(buffer[(x, 18)].symbol(), "h");
+        assert_eq!(buffer[(x, 18)].fg, Color::Blue);
+        assert_eq!(buffer[(1, 18)].fg, Color::Blue, "marker");
+
+        // The server's copy replaces the row: its time is back and the body is plain.
+        let mut server = app.messages[&general()].last().expect("row").clone();
+        server.ts = 34_440;
+        server.author = "me".to_string();
+        update(
+            &mut app,
+            Action::MessageSent {
+                room: general(),
+                id,
+                message: server,
+            },
+        );
+        let terminal = render_pane(&app);
+        let row = row_text(&terminal, 18);
+        assert!(row.contains("09:34"), "{row:?}");
+        assert!(!row.contains('~'), "{row:?}");
+        let buffer = terminal.backend().buffer();
+        let x = row.chars().position(|c| c == 'h').expect("body") as u16;
+        assert_eq!(buffer[(x, 18)].fg, Color::Reset);
+        assert_eq!(buffer[(x, 18)].modifier, Modifier::empty());
     }
 }

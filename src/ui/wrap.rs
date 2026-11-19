@@ -2,7 +2,7 @@
 //! and the renderer (drawing) can never disagree about a message's height.
 
 use crate::config::settings::TimeFormat;
-use crate::data::{Message, MessageKind};
+use crate::data::{Message, MessageKind, SendState};
 use crate::ui::palette::author_color;
 use crate::ui::sanitize::{sanitize, sanitize_line};
 use crate::ui::timefmt::{Zone, format_ts};
@@ -114,25 +114,32 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 /// `theme.messages_time` and body text `theme.messages_body`; padding and indent stay raw spans.
 /// A `MessageKind::System` message takes `theme.messages_notice` for its author and its text.
 ///
+/// The send state decides the rest (`send_look`, D-01): a `Queued` or `Sending` message draws
+/// `theme.markers.sending` where its time would be, and the time cell, the author and the body all
+/// take `theme.messages_pending`. Other states keep the confirmed look here until they get their own.
+/// The marker is padded and measured exactly like the time, so no body moves.
+///
 /// Compact caps the author column at `width - (time_col + 1 + 2 + MIN_BODY)` (saturating), so the
 /// body keeps at least `MIN_BODY` columns. An author wider than the capped column is cut on a
 /// grapheme boundary and ends in an ellipsis. When the width leaves no room the column is 0 and
 /// the author is omitted; the body keeps `MIN_BODY` and the paragraph clips any overflow. The cap
 /// lives here, so the renderer and the reducer's row model always use the same value.
 pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>> {
-    let time = format_ts(ctx.time_format, msg.ts, ctx.zone);
+    let (time, state_style) = send_look(msg, ctx);
     let author = sanitize_line(&msg.author).into_owned();
-    let time_style = ctx.theme.messages_time;
+    let time_style = state_style.unwrap_or(ctx.theme.messages_time);
     let system = msg.kind == MessageKind::System;
-    let body_style = if system {
+    let body_style = state_style.unwrap_or(if system {
         ctx.theme.messages_notice
     } else {
         ctx.theme.messages_body
-    };
+    });
     // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
     // at every width. An explicit fg on messages.author wins over the palette for every author.
     // A system message (D-15) draws its author dim like its text, outside the palette.
-    let name = if system {
+    let name = if let Some(style) = state_style {
+        style
+    } else if system {
         ctx.theme.messages_notice
     } else if ctx.theme.messages_author.fg.is_some() {
         ctx.theme.messages_author
@@ -191,6 +198,21 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
                     }),
                 )
                 .collect()
+        }
+    }
+}
+
+/// What takes the time's place in a message's first row, and the style of the time cell, the
+/// author and the body when the send state overrides the normal look (D-01). One match on
+/// `msg.send`, so every row of every state is chosen in one place.
+fn send_look(msg: &Message, ctx: &RowCtx) -> (String, Option<ratatui::style::Style>) {
+    match msg.send {
+        SendState::Queued { .. } | SendState::Sending => (
+            sanitize_line(&ctx.theme.markers.sending).into_owned(),
+            Some(ctx.theme.messages_pending),
+        ),
+        SendState::Sent | SendState::Failed | SendState::Unconfirmed => {
+            (format_ts(ctx.time_format, msg.ts, ctx.zone), None)
         }
     }
 }
@@ -717,6 +739,72 @@ mod tests {
             let head = &rows[0].spans[author_span];
             assert_eq!(head.content, "carol");
             assert_eq!(head.style, notice, "{layout:?} author");
+        }
+    }
+
+    fn with_state(send: crate::data::SendState, author: &str, body: &str) -> Message {
+        Message {
+            send,
+            ..msg(author, body)
+        }
+    }
+
+    #[test]
+    fn pending_row_compact() {
+        let theme = Theme::default();
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+        };
+        let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
+        for state in [
+            crate::data::SendState::Sending,
+            crate::data::SendState::Queued { reconcile: false },
+        ] {
+            let rows = render_rows(&with_state(state, "alice", "hello there"), 60, &ctx);
+            assert_eq!(rows.len(), 1);
+            let first = text(&rows[0]);
+            assert_eq!(first, "\u{2026}     alice  hello there", "{state:?}");
+            // The body starts at the same column as a Sent message's body.
+            let body_x = |line: &Line<'_>| {
+                let t = text(line);
+                t[..t.find("hello").expect("body")].width()
+            };
+            assert_eq!(body_x(&rows[0]), body_x(&sent[0]));
+            // Marker, author and body all carry messages_pending.
+            for span in [0usize, 2, 4] {
+                assert_eq!(rows[0].spans[span].style, theme.messages_pending, "{span}");
+            }
+        }
+    }
+
+    #[test]
+    fn pending_rows_count_equals_render() {
+        let theme = Theme::default();
+        let format = TimeFormat::default();
+        let long = "word ".repeat(30);
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let ctx = RowCtx {
+                layout,
+                author_col: 5,
+                time_col: 5,
+                time_format: &format,
+                zone: Zone::Utc,
+                theme: &theme,
+            };
+            for state in [
+                crate::data::SendState::Sending,
+                crate::data::SendState::Queued { reconcile: true },
+            ] {
+                let m = with_state(state, "alice", &long);
+                assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
+                assert!(message_rows(&m, 40, &ctx) > 2, "{layout:?}");
+            }
         }
     }
 }

@@ -41,6 +41,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.author",
     "messages.body",
     "messages.notice",
+    "messages.pending",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -79,6 +80,7 @@ const MARKER_KEYS: &[&str] = &[
     "discussion",
     "team",
     "direct_message",
+    "sending",
 ];
 
 /// Border types a `type` key accepts (A6).
@@ -104,6 +106,8 @@ pub struct Markers {
     pub discussion: String,
     pub team: String,
     pub direct_message: String,
+    /// Drawn in place of the time of a message that is `Queued` or `Sending` (D-01).
+    pub sending: String,
 }
 
 impl Default for Markers {
@@ -120,6 +124,7 @@ impl Default for Markers {
             discussion: glyph(RoomKind::Discussion),
             team: glyph(RoomKind::Team),
             direct_message: glyph(RoomKind::DirectMessage),
+            sending: "\u{2026}".to_string(),
         }
     }
 }
@@ -149,6 +154,7 @@ impl Markers {
             "discussion" => &mut self.discussion,
             "team" => &mut self.team,
             "direct_message" => &mut self.direct_message,
+            "sending" => &mut self.sending,
             _ => return None,
         };
         Some((slot, MAX_MARKER_WIDTH))
@@ -185,6 +191,9 @@ pub struct Theme {
     pub messages_body: Style,
     /// The "No room open" and "No messages yet" lines.
     pub messages_notice: Style,
+    /// Author, marker and body of a message the server has not confirmed yet: `Queued` or
+    /// `Sending` (D-01).
+    pub messages_pending: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -220,6 +229,7 @@ impl Default for Theme {
             messages_author: plain.add_modifier(Modifier::BOLD),
             messages_body: plain,
             messages_notice: plain.add_modifier(Modifier::DIM),
+            messages_pending: plain.add_modifier(Modifier::DIM),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -254,6 +264,7 @@ impl Theme {
             ("messages", "author") => Some(&mut self.messages_author),
             ("messages", "body") => Some(&mut self.messages_body),
             ("messages", "notice") => Some(&mut self.messages_notice),
+            ("messages", "pending") => Some(&mut self.messages_pending),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -751,8 +762,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            22,
-            "16 chrome and border paths plus the six messages elements"
+            23,
+            "16 chrome and border paths plus the seven messages elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -979,6 +990,32 @@ mod tests {
     }
 
     #[test]
+    fn send_marker_defaults() {
+        assert_eq!(Markers::default().sending, "\u{2026}");
+        assert_eq!(
+            Theme::default().messages_pending,
+            Style::default().add_modifier(Modifier::DIM)
+        );
+    }
+
+    #[test]
+    fn send_vocabulary_parses() {
+        let (theme, out) =
+            parse_str("[markers]\nsending = \"~\"\n[messages.pending]\nfg = \"blue\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.markers.sending, "~");
+        assert_eq!(theme.messages_pending.fg, Some(Color::Blue));
+        // The default dim survives when only fg is set.
+        assert_eq!(theme.messages_pending.add_modifier, Modifier::DIM);
+        for bad in ["12345", "\\u001b[2J", "a\\u202eb"] {
+            let out = marker_problems(&format!("[markers]\nsending = \"{bad}\"\n"));
+            assert_eq!(out.len(), 1, "{bad}: {out:?}");
+            assert_eq!(out[0].severity, Severity::Error);
+            assert_eq!(out[0].key.as_deref(), Some("markers.sending"));
+        }
+    }
+
+    #[test]
     fn equal_values_allowed() {
         // Two elements with the same color, and fg equal to bg.
         let (theme, out) = parse_str(
@@ -1015,8 +1052,8 @@ mod tests {
         }
         let m = Markers::default();
         toml.push_str(&format!(
-            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\n",
-            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message
+            "[markers]\nfold_open = {:?}\nfold_closed = {:?}\nunread = {:?}\ncursor = {:?}\nencrypted = {:?}\nchannel = {:?}\nprivate_group = {:?}\ndiscussion = {:?}\nteam = {:?}\ndirect_message = {:?}\nsending = {:?}\n",
+            m.fold_open, m.fold_closed, m.unread, m.cursor, m.encrypted, m.channel, m.private_group, m.discussion, m.team, m.direct_message, m.sending
         ));
         let (theme, out) = parse_str(&toml);
         assert!(out.is_empty(), "{out:?}\n{toml}");
