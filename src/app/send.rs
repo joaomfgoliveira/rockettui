@@ -24,6 +24,7 @@
 
 use crate::api::ApiError;
 use crate::app::{App, Focus, LOCAL_AUTHOR, Mode, StatusMsg, messages};
+use crate::config::settings::FollowOnSend;
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, SendText};
 
@@ -63,8 +64,13 @@ pub fn submit(app: &mut App) {
         kind: MessageKind::Normal,
         send: SendState::Queued { reconcile: false },
     };
+    // Measured before the row is appended: an append shifts no existing index, so leaving
+    // `msg_views` alone keeps the pane exactly where it was (D-05).
+    let at_bottom = messages::is_at_bottom(app, &room);
     app.messages.entry(room.clone()).or_default().push(message);
-    messages::follow_newest(app, &room);
+    if app.settings.follow_on_send == FollowOnSend::Always || at_bottom {
+        messages::follow_newest(app, &room);
+    }
     pump(app, &room);
 }
 
@@ -949,6 +955,54 @@ mod tests {
         let state_of = |id: &str| held.iter().find(|m| m.id == id).map(|m| m.send);
         assert_eq!(state_of("F1"), Some(SendState::Failed));
         assert_eq!(state_of("U1"), Some(SendState::Unconfirmed));
+    }
+
+    /// `general` with the sentinel body sent from the messages pane after `gg`, under `toml`.
+    fn app_scrolled_up_and_sent(toml: &str) -> App {
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, "gg");
+        press(&mut app, &format!("i{BODY}<CR>"));
+        app
+    }
+
+    #[test]
+    fn follow_always_jumps() {
+        let app = app_scrolled_up_and_sent("");
+        assert!(app.msg_views.is_empty(), "the stored view is gone");
+        let last = app.messages[&general()].len() - 1;
+        assert_eq!(messages::view(&app, &general()).cursor, last);
+        assert!(crate::test_util::render_to_string(&app, 80, 24).contains(BODY));
+    }
+
+    #[test]
+    fn follow_if_at_bottom_stays() {
+        let toml = "follow_on_send = \"if_at_bottom\"\n";
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, "gg");
+        let before = app.msg_views[&general()];
+        assert_eq!((before.cursor, before.top_row), (0, 0));
+        press(&mut app, &format!("i{BODY}<CR>"));
+        assert_eq!(app.msg_views[&general()], before, "the pane did not move");
+        assert_eq!(sends(&app).len(), 1, "the message was still sent");
+        let screen = crate::test_util::render_to_string(&app, 80, 24);
+        assert!(!screen.contains(BODY), "the new row is below the window");
+    }
+
+    #[test]
+    fn follow_if_at_bottom_follows() {
+        let toml = "follow_on_send = \"if_at_bottom\"\n";
+        let mut app =
+            crate::test_util::app_with_config(crate::test_util::config_from_toml(toml), 80, 24);
+        app.open_room(general());
+        press(&mut app, &format!("i{BODY}<CR>"));
+        assert!(app.msg_views.is_empty());
+        let last = app.messages[&general()].len() - 1;
+        assert_eq!(messages::view(&app, &general()).cursor, last);
+        assert!(crate::test_util::render_to_string(&app, 80, 24).contains(BODY));
     }
 
     #[test]

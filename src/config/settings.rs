@@ -26,6 +26,17 @@ pub enum KeymapPreset {
     VimExtras,
 }
 
+/// What the messages pane does after the user sends a message (config.toml `follow_on_send`, D-05).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FollowOnSend {
+    /// Jump to the newest message after every send (`always`, the default).
+    #[default]
+    Always,
+    /// Follow only when the newest row was already visible before the send (`if_at_bottom`), so a
+    /// user reading older messages is not pulled away from them.
+    IfAtBottom,
+}
+
 /// A strftime pattern for message times. The field is private: the only way to build one from
 /// user input is `TimeFormat::parse`, which proves the pattern is valid and renders on one line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +95,9 @@ pub struct Settings {
     pub timestamp_format: TimeFormat,
     pub message_layout: MessageLayout,
     pub key_timeout_ms: u64,
+    /// config.toml key `follow_on_send` (D-05): `"always"` (default) jumps to the newest message
+    /// after every send; `"if_at_bottom"` follows only when the newest row was already visible.
+    pub follow_on_send: FollowOnSend,
 }
 
 impl Default for Settings {
@@ -95,6 +109,7 @@ impl Default for Settings {
             timestamp_format: TimeFormat::default(),
             message_layout: MessageLayout::Compact,
             key_timeout_ms: DEFAULT_KEY_TIMEOUT_MS,
+            follow_on_send: FollowOnSend::Always,
         }
     }
 }
@@ -106,6 +121,7 @@ const KNOWN_KEYS: &[&str] = &[
     "timestamp_format",
     "message_layout",
     "key_timeout_ms",
+    "follow_on_send",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
     "server_url",
     "user_id",
@@ -172,6 +188,18 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
     {
         settings.message_layout = layout;
     }
+    if let Some(value) = table.get("follow_on_send")
+        && let Some(follow) = reader.one_of(
+            value,
+            "follow_on_send",
+            &[
+                ("always", FollowOnSend::Always),
+                ("if_at_bottom", FollowOnSend::IfAtBottom),
+            ],
+        )
+    {
+        settings.follow_on_send = follow;
+    }
     if let Some(value) = table.get("key_timeout_ms") {
         let (lo, hi) = KEY_TIMEOUT_MS_RANGE;
         if let Some(n) = reader.int_in(value, "key_timeout_ms", lo, hi) {
@@ -211,6 +239,38 @@ mod tests {
         assert!(out[0].message.contains("expected a string"));
     }
 
+    #[test]
+    fn follow_on_send_values() {
+        let (s, out) = errors_of("");
+        assert_eq!(s.follow_on_send, FollowOnSend::Always);
+        assert!(out.is_empty());
+        let (s, out) = errors_of("follow_on_send = \"always\"\n");
+        assert_eq!(s.follow_on_send, FollowOnSend::Always);
+        assert!(out.is_empty());
+        let (s, out) = errors_of("follow_on_send = \"if_at_bottom\"\n");
+        assert_eq!(s.follow_on_send, FollowOnSend::IfAtBottom);
+        assert!(out.is_empty(), "known key, no warning: {out:?}");
+
+        let (s, out) = errors_of("follow_on_send = \"sometimes\"\n");
+        assert_eq!(s.follow_on_send, FollowOnSend::Always);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].file, ConfigFile::Config);
+        assert_eq!(out[0].pos.map(|(line, _)| line), Some(1));
+        assert_eq!(out[0].key.as_deref(), Some("follow_on_send"));
+        assert_eq!(out[0].severity, Severity::Error);
+        assert!(out[0].message.contains("\"always\""), "{}", out[0].message);
+        assert!(
+            out[0].message.contains("\"if_at_bottom\""),
+            "{}",
+            out[0].message
+        );
+
+        let (s, out) = errors_of("follow_on_send = 1\n");
+        assert_eq!(s.follow_on_send, FollowOnSend::Always);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("expected a string"));
+    }
+
     fn errors_of(src: &str) -> (Settings, Vec<Problem>) {
         let mut out = Vec::new();
         let settings = parse(Some(src), &mut out);
@@ -226,6 +286,7 @@ mod tests {
         assert_eq!(defaults.timestamp_format.as_str(), "%H:%M");
         assert_eq!(defaults.message_layout, MessageLayout::Compact);
         assert_eq!(defaults.key_timeout_ms, 1000);
+        assert_eq!(defaults.follow_on_send, FollowOnSend::Always);
         for src in ["", "# only a comment\n"] {
             let (settings, out) = errors_of(src);
             assert_eq!(settings, defaults);

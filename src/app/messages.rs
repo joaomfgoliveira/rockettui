@@ -151,6 +151,18 @@ pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     app.msg_views.insert(room, MsgView { cursor, top_row });
 }
 
+/// True when the last row of `room` is visible in the effective view. Call it before a new row is
+/// appended: a room with no stored view shows its newest rows, so it counts as at the bottom, and a
+/// room shorter than the window is at the bottom with any view (D-05).
+pub fn is_at_bottom(app: &App, room: &RoomId) -> bool {
+    if !app.msg_views.contains_key(room) {
+        return true;
+    }
+    let total = row_starts(app, room).last().copied().unwrap_or(0);
+    let viewport_h = usize::from(viewport(app).1);
+    view(app, room).top_row + viewport_h >= total
+}
+
 /// Forget the stored view so the room shows its newest message again (plan 01-06 calls this
 /// after appending a local message).
 pub fn follow_newest(app: &mut App, room: &RoomId) {
@@ -466,6 +478,35 @@ mod tests {
         follow_newest(&mut app, &general());
         assert_eq!(view(&app, &general()), newest);
         assert!(app.msg_views.is_empty());
+    }
+
+    #[test]
+    fn is_at_bottom_cases() {
+        // No stored view: the default newest view, at the bottom.
+        let mut app = open_general();
+        assert!(is_at_bottom(&app, &general()));
+        // `gg` stores a view at the top of a long room: not at the bottom.
+        press(&mut app, "gg");
+        assert!(!is_at_bottom(&app, &general()));
+        // `G` goes back to the last message: at the bottom again.
+        press(&mut app, "G");
+        assert!(is_at_bottom(&app, &general()));
+        // A room with nothing in it, and a room that never had a view, are at the bottom.
+        assert!(is_at_bottom(&app, &RoomId("quiet".to_string())));
+
+        // A room shorter than the viewport is at the bottom with any stored view.
+        let mut app = open_general();
+        let room = general();
+        let short: Vec<crate::data::Message> = app.messages[&room][..2].to_vec();
+        app.messages.insert(room.clone(), short);
+        app.msg_views.insert(
+            room.clone(),
+            MsgView {
+                cursor: 0,
+                top_row: 0,
+            },
+        );
+        assert!(is_at_bottom(&app, &room));
     }
 
     #[test]
