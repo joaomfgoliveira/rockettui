@@ -71,7 +71,11 @@ fn unix_now() -> i64 {
 /// need to be unique across runs, not secret, and the server accepts any string as an `_id`
 /// (RESEARCH Pattern 2, probe P1). Drawn once in `run`, never in the reducer.
 fn session_id_prefix() -> String {
-    String::new()
+    use std::hash::BuildHasher;
+    // Every `RandomState::new()` carries its own random keys, so each hash is an independent draw.
+    let high = std::hash::RandomState::new().hash_one(0u8);
+    let low = std::hash::RandomState::new().hash_one(1u8);
+    format!("rt{high:016x}{low:016x}")
 }
 
 /// The run loop: queue input, then repeatedly apply a batch of Actions through the single reducer
@@ -98,6 +102,8 @@ pub async fn run(
     // The binary shows local time (RESEARCH A2, confirmed by the author on 2026-11-16). `App::new`
     // and the tests stay on UTC, and the reducer still never reads a clock or a zone.
     app.zone = ui::timefmt::Zone::Local;
+    // One prefix per process, so a restarted client never reuses a message id (D-07).
+    app.id_prefix = session_id_prefix();
     app.conn = ConnState::Connecting;
     app.effects.push(Effect::LoadRooms);
     let mut batch: Vec<Action> = Vec::new();

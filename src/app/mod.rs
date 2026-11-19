@@ -150,7 +150,7 @@ impl App {
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
             local_seq: 0,
-            id_prefix: String::new(),
+            id_prefix: "local-".to_string(),
             own_username: None,
             status_msg: None,
             keymap: config.keymap,
