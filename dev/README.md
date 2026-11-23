@@ -117,7 +117,7 @@ RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui
 | 8.9.1 (`rockettui-dev`, port 3100) | pass | rooms, Favorites and Work folders, paging to `Beginning of history`, join and attachment lines, `encrypted, not supported`, clean `:q`, token never in the pty output |
 | 9.0.0 (`rockettui-dev9`, port 3101) | pass | same scenario, no client change needed; the stack was seeded with the same script and removed afterwards |
 
-Sending (Phase 4), checked on 2026-11-19 with the `docker_send` pty scenario and the send probe.
+Sending (Phase 4), checked on 2026-11-23 with the `docker_send` pty scenario and the send probe.
 `docker_send` starts the real binary with the PAT from the stack's state file, opens `rt-private`
 (never `rt-public`, so `docker_read` stays valid however often it runs), sends a fresh text from
 Insert mode, waits for the confirmed row (server time and the `dev` author), quits, starts the
