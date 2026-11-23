@@ -262,6 +262,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(n, send)| Message {
+                edited: false,
                 id: format!("rt-{n}"),
                 room_id: rid("r-a"),
                 author: "me".to_string(),
@@ -291,6 +292,7 @@ mod tests {
             .get_mut(&rid("general"))
             .expect("general")
             .push(Message {
+                edited: false,
                 id: "u-1".to_string(),
                 room_id: rid("general"),
                 author: "me".to_string(),
@@ -338,6 +340,7 @@ mod tests {
             .get_mut(&rid(room))
             .expect("room")
             .push(Message {
+                edited: false,
                 id: format!("w-{n}"),
                 room_id: rid(room),
                 author: "me".to_string(),
@@ -407,6 +410,7 @@ mod tests {
         app.rooms[0].name = "SENTINEL-ROOM".to_string();
         let id = app.rooms[0].id.clone();
         app.messages.get_mut(&id).expect("room").push(Message {
+            edited: false,
             id: "s-1".to_string(),
             room_id: id,
             author: "SENTINEL-AUTHOR-2b9d".to_string(),

@@ -78,6 +78,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::RtRejected => realtime::on_rejected(app),
         Action::RtMessage(message) => realtime::on_message(app, message),
         Action::RtSubscription { room, unread } => realtime::on_subscription(app, &room, unread),
+        Action::RtDeleted { room, id } => realtime::on_deleted(app, &room, &id),
         Action::Resize(w, h) => {
             app.size = Size::new(w, h);
         }
@@ -834,6 +835,7 @@ mod tests {
 
     fn row(room: &str, id: &str, author: &str, send: SendState) -> Message {
         Message {
+            edited: false,
             id: id.to_string(),
             room_id: RoomId(room.to_string()),
             author: author.to_string(),

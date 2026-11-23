@@ -124,6 +124,11 @@ pub fn sub_frame(id: &str, name: &str, params: &[Value]) -> String {
     json!({"msg": "sub", "id": id, "name": name, "params": params}).to_string()
 }
 
+/// An `unsub` frame ending the subscription that was started with `id`.
+pub fn unsub_frame(id: &str) -> String {
+    json!({"msg": "unsub", "id": id}).to_string()
+}
+
 /// The id of the login `method` call, so the answer can be told from other results.
 pub const LOGIN_ID: &str = "login";
 

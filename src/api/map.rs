@@ -155,6 +155,11 @@ const ENCRYPTED_TEXT: &str = "[encrypted message]";
 /// - otherwise the text, followed by ` [attachment: <name>]` for the file, each listed file and
 ///   each attachment title, every name once.
 fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
+    // `rm`: the server keeps a deleted message as this type when it shows deleted status. It is a
+    // tombstone, not a system message; its text is already gone.
+    if msg.t.as_deref() == Some("rm") {
+        return (MessageKind::Deleted, String::new());
+    }
     let system_type = msg.t.as_deref().filter(|t| *t != "e2e");
     if msg.t.as_deref() == Some("e2e") || (system_type.is_none() && msg.content.is_some()) {
         return (MessageKind::Normal, ENCRYPTED_TEXT.to_string());
@@ -199,6 +204,7 @@ fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
 /// per-message mapper: history uses it for every message and `chat.sendMessage` for its answer.
 pub fn message(room: &RoomId, msg: WireMsg) -> Message {
     let (kind, body) = kind_and_body(&msg);
+    let edited = msg.edited_at.is_some() && kind != MessageKind::Deleted;
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -207,6 +213,7 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         body,
         kind,
         send: SendState::Sent,
+        edited,
     }
 }
 
@@ -739,5 +746,36 @@ mod tests {
         assert_eq!(single.send, SendState::Sent);
         let page = history(&room, vec![wire()]);
         assert_eq!(page.messages, [single]);
+    }
+
+    #[test]
+    fn edited_flag_follows_edited_at() {
+        let room = RoomId("r-general".to_string());
+        let base = |extra: &str| -> Message {
+            let json = format!(
+                r#"{{"_id":"m1","rid":"r-general","msg":"hello","ts":"2026-11-17T10:00:00.123Z","u":{{"username":"alice"}}{extra}}}"#
+            );
+            message(&room, serde_json::from_str(&json).expect("wire message"))
+        };
+        assert!(!base("").edited);
+        let edited = base(
+            r#","editedAt":"2026-11-17T10:05:00.000Z","editedBy":{"_id":"u2","username":"bob"}"#,
+        );
+        assert!(edited.edited);
+        // The EJSON date form (live stream) counts too.
+        assert!(base(r#","editedAt":{"$date":1794909900000}"#).edited);
+        assert_eq!(edited.body, "hello");
+    }
+
+    #[test]
+    fn rm_message_is_a_tombstone_not_a_system_message() {
+        let json = r#"{"_id":"m1","rid":"r","msg":"","t":"rm","ts":"2026-11-17T10:00:00.000Z","editedAt":"2026-11-17T10:05:00.000Z","u":{"username":"joliveira"}}"#;
+        let m = message(
+            &RoomId("r".to_string()),
+            serde_json::from_str(json).unwrap(),
+        );
+        assert_eq!(m.kind, MessageKind::Deleted);
+        assert_eq!(m.body, "");
+        assert!(!m.edited);
     }
 }

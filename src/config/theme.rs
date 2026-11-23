@@ -43,6 +43,8 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.notice",
     "messages.pending",
     "messages.failed",
+    "messages.edited",
+    "messages.deleted",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -208,6 +210,10 @@ pub struct Theme {
     pub messages_pending: Style,
     /// Author, marker and body of a message that is `Failed` or `Unconfirmed` (D-06).
     pub messages_failed: Style,
+    /// The ` (edited)` marker after the body of a message the server reports as edited.
+    pub messages_edited: Style,
+    /// The whole line of a deleted message: author, time and `message deleted`.
+    pub messages_deleted: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -245,6 +251,8 @@ impl Default for Theme {
             messages_notice: plain.add_modifier(Modifier::DIM),
             messages_pending: plain.add_modifier(Modifier::DIM),
             messages_failed: plain.fg(Color::Red),
+            messages_edited: plain.add_modifier(Modifier::DIM),
+            messages_deleted: plain.add_modifier(Modifier::DIM),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -281,6 +289,8 @@ impl Theme {
             ("messages", "notice") => Some(&mut self.messages_notice),
             ("messages", "pending") => Some(&mut self.messages_pending),
             ("messages", "failed") => Some(&mut self.messages_failed),
+            ("messages", "edited") => Some(&mut self.messages_edited),
+            ("messages", "deleted") => Some(&mut self.messages_deleted),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -778,8 +788,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            24,
-            "16 chrome and border paths plus the eight messages elements"
+            26,
+            "16 chrome and border paths plus the ten messages elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -801,6 +811,9 @@ mod tests {
         assert_eq!(theme.status_error.fg, Some(Color::Indexed(10)));
         assert_eq!(theme.messages_author.add_modifier, Modifier::BOLD);
         assert_eq!(theme.messages_cursor.add_modifier, Modifier::REVERSED);
+        // The edited marker and the deleted line are dim unless the theme says otherwise.
+        assert_eq!(theme.messages_edited.add_modifier, Modifier::DIM);
+        assert_eq!(theme.messages_deleted.add_modifier, Modifier::DIM);
     }
 
     #[test]

@@ -115,6 +115,12 @@ pub enum Action {
         room: RoomId,
         unread: bool,
     },
+    /// A message of `room` was deleted (`stream-notify-room` `<rid>/deleteMessage`). The payload
+    /// has only the id, so there is no text to print.
+    RtDeleted {
+        room: RoomId,
+        id: String,
+    },
     /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
     KeyTimeout,
     /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
@@ -223,6 +229,7 @@ impl std::fmt::Debug for Action {
             Action::RtSubscription { room, unread } => {
                 write!(f, "RtSubscription({room:?}, unread={unread})")
             }
+            Action::RtDeleted { room, id } => write!(f, "RtDeleted({room:?}, {id})"),
             Action::KeyTimeout => write!(f, "KeyTimeout"),
             Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),
         }
@@ -249,6 +256,7 @@ mod tests {
         assert!(!key.contains('Z'));
 
         let message = Message {
+            edited: false,
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "alice".to_string(),
@@ -284,6 +292,7 @@ mod tests {
         let history = Action::HistoryLoaded {
             room: RoomId("r-general".to_string()),
             messages: vec![Message {
+                edited: false,
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "alice".to_string(),
@@ -319,6 +328,7 @@ mod tests {
             room: RoomId("r-general".to_string()),
             id: "rt-test-1".to_string(),
             message: Message {
+                edited: false,
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "smoke".to_string(),

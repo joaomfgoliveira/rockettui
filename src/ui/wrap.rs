@@ -24,6 +24,11 @@ pub enum MessageLayout {
     TwoLine,
 }
 
+/// The marker drawn after the body of an edited message, and the text of a deleted message's line.
+/// Fixed strings; the styles are the theme's `messages.edited` and `messages.deleted`.
+pub const EDITED_MARKER: &str = " (edited)";
+pub const DELETED_TEXT: &str = "message deleted";
+
 /// Narrowest body column the wrapper will use, however narrow the pane gets (A9). The Compact
 /// author column is capped so the body keeps this many columns; below an inner width of 19 that
 /// leaves no author column at all.
@@ -114,6 +119,11 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 /// `theme.messages_time` and body text `theme.messages_body`; padding and indent stay raw spans.
 /// A `MessageKind::System` message takes `theme.messages_notice` for its author and its text.
 ///
+/// An edited message (`msg.edited`) ends with `EDITED_MARKER` in `theme.messages_edited`: on the
+/// last body row when it fits in the body width, on a row of its own otherwise. A
+/// `MessageKind::Deleted` message is always one row, in both layouts: its author, its time and
+/// `DELETED_TEXT`, all in `theme.messages_deleted`; it never shows a body.
+///
 /// The send state decides the rest (`send_look`, D-01, D-06): a `Queued` or `Sending` message draws
 /// `theme.markers.sending` where its time would be and a `Failed` one `markers.failed`, an
 /// `Unconfirmed` one `markers.unconfirmed`; the time cell, the author and the body then all take
@@ -128,17 +138,28 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
 pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>> {
     let (time, state_style) = send_look(msg, ctx);
     let author = sanitize_line(&msg.author).into_owned();
-    let time_style = state_style.unwrap_or(ctx.theme.messages_time);
-    let system = msg.kind == MessageKind::System;
-    let body_style = state_style.unwrap_or(if system {
-        ctx.theme.messages_notice
+    let deleted = msg.kind == MessageKind::Deleted;
+    let time_style = if deleted {
+        ctx.theme.messages_deleted
     } else {
-        ctx.theme.messages_body
-    });
+        state_style.unwrap_or(ctx.theme.messages_time)
+    };
+    let system = msg.kind == MessageKind::System;
+    let body_style = if deleted {
+        ctx.theme.messages_deleted
+    } else {
+        state_style.unwrap_or(if system {
+            ctx.theme.messages_notice
+        } else {
+            ctx.theme.messages_body
+        })
+    };
     // Keyed on the full sanitized name, before Compact truncates it, so a name keeps its color
     // at every width. An explicit fg on messages.author wins over the palette for every author.
     // A system message (D-15) draws its author dim like its text, outside the palette.
-    let name = if let Some(style) = state_style {
+    let name = if deleted {
+        ctx.theme.messages_deleted
+    } else if let Some(style) = state_style {
         style
     } else if system {
         ctx.theme.messages_notice
@@ -164,43 +185,87 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             let prefix_width = time_col + 1 + col + 2;
             let body_width = width.saturating_sub(prefix_width).max(MIN_BODY);
             let indent = " ".repeat(prefix_width);
-            wrap_body(&msg.body, body_width)
+            body_rows(msg, body_width, body_style, ctx)
                 .into_iter()
                 .enumerate()
-                .map(|(i, row)| {
+                .map(|(i, mut spans)| {
                     if i == 0 {
-                        Line::from(vec![
-                            Span::styled(time.clone(), time_style),
-                            Span::raw(" "),
-                            Span::styled(author.clone(), name),
-                            Span::raw(pad.clone()),
-                            Span::styled(row, body_style),
-                        ])
+                        spans.splice(
+                            0..0,
+                            [
+                                Span::styled(time.clone(), time_style),
+                                Span::raw(" "),
+                                Span::styled(author.clone(), name),
+                                Span::raw(pad.clone()),
+                            ],
+                        );
                     } else {
-                        Line::from(vec![
-                            Span::raw(indent.clone()),
-                            Span::styled(row, body_style),
-                        ])
+                        spans.insert(0, Span::raw(indent.clone()));
                     }
+                    Line::from(spans)
                 })
                 .collect()
         }
         MessageLayout::TwoLine => {
             let body_width = width.saturating_sub(2).max(MIN_BODY);
-            let header = Line::from(vec![
+            let mut header = vec![
                 Span::styled(author, name),
                 Span::raw("  "),
                 Span::styled(time, time_style),
-            ]);
-            std::iter::once(header)
+            ];
+            if deleted {
+                // A tombstone is one row: the text sits on the header row.
+                header.push(Span::raw("  "));
+                header.push(Span::styled(DELETED_TEXT, body_style));
+                return vec![Line::from(header)];
+            }
+            std::iter::once(Line::from(header))
                 .chain(
-                    wrap_body(&msg.body, body_width).into_iter().map(|row| {
-                        Line::from(vec![Span::raw("  "), Span::styled(row, body_style)])
-                    }),
+                    body_rows(msg, body_width, body_style, ctx)
+                        .into_iter()
+                        .map(|mut spans| {
+                            spans.insert(0, Span::raw("  "));
+                            Line::from(spans)
+                        }),
                 )
                 .collect()
         }
     }
+}
+
+/// The body rows of `msg` at `width` columns, as spans without any prefix. A deleted message is
+/// the one `DELETED_TEXT` row. An edited message gets `EDITED_MARKER` (in `theme.messages_edited`)
+/// after its last row when it fits in `width`, on a new row of its own (without the leading space)
+/// when it does not.
+fn body_rows(
+    msg: &Message,
+    width: usize,
+    body_style: ratatui::style::Style,
+    ctx: &RowCtx,
+) -> Vec<Vec<Span<'static>>> {
+    if msg.kind == MessageKind::Deleted {
+        return vec![vec![Span::styled(DELETED_TEXT, body_style)]];
+    }
+    let mut rows: Vec<Vec<Span<'static>>> = wrap_body(&msg.body, width)
+        .into_iter()
+        .map(|row| vec![Span::styled(row, body_style)])
+        .collect();
+    if msg.edited {
+        let last_width: usize = rows
+            .last()
+            .map_or(0, |row| row.iter().map(|s| s.content.width()).sum());
+        if last_width + EDITED_MARKER.width() <= width {
+            if let Some(last) = rows.last_mut() {
+                last.push(Span::styled(EDITED_MARKER, ctx.theme.messages_edited));
+            }
+        } else {
+            rows.push(vec![Span::styled(
+                EDITED_MARKER.trim_start(),
+                ctx.theme.messages_edited,
+            )]);
+        }
+    }
+    rows
 }
 
 /// What takes the time's place in a message's first row, and the style of the time cell, the
@@ -240,6 +305,7 @@ mod tests {
 
     fn msg(author: &str, body: &str) -> Message {
         Message {
+            edited: false,
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
             author: author.to_string(),
@@ -887,5 +953,131 @@ mod tests {
             t[..t.find(needle).expect("body")].width()
         };
         assert_eq!(at(&msgs[0], "sent"), at(&msgs[1], "failed"));
+    }
+
+    fn edited(author: &str, body: &str) -> Message {
+        Message {
+            edited: true,
+            ..msg(author, body)
+        }
+    }
+
+    fn deleted(author: &str) -> Message {
+        Message {
+            kind: MessageKind::Deleted,
+            body: String::new(),
+            ..msg(author, "")
+        }
+    }
+
+    #[test]
+    fn edited_marker_ends_the_last_row_in_both_layouts() {
+        let theme = Theme::default();
+        let m = edited("alice", "hello there");
+        let compact = rows_themed(&m, 60, MessageLayout::Compact, &theme);
+        assert_eq!(texts(&compact), ["00:00 alice  hello there (edited)"]);
+        let marker = compact[0].spans.last().expect("marker span");
+        assert_eq!(marker.content, EDITED_MARKER);
+        assert_eq!(marker.style, theme.messages_edited);
+        assert_ne!(marker.style, theme.messages_body, "the marker must differ");
+        let two = rows_themed(&m, 60, MessageLayout::TwoLine, &theme);
+        assert_eq!(texts(&two), ["alice  00:00", "  hello there (edited)"]);
+        // An unedited message is unchanged.
+        let plain = rows_themed(
+            &msg("alice", "hello there"),
+            60,
+            MessageLayout::Compact,
+            &theme,
+        );
+        assert_eq!(texts(&plain), ["00:00 alice  hello there"]);
+    }
+
+    #[test]
+    fn edited_marker_moves_to_its_own_row_when_it_does_not_fit() {
+        let theme = Theme::default();
+        // Body width at 40 columns in Compact is 40 - (5 + 1 + 5 + 2) = 27; the body fills it.
+        let body = "x".repeat(27);
+        let m = edited("alice", &body);
+        let rows = rows_at(&m, 40, MessageLayout::Compact, 5);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(text(&rows[1]).trim(), "(edited)");
+        assert_eq!(rows[1].spans.last().unwrap().style, theme.messages_edited);
+        // The row count the scroll model uses matches what is drawn.
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+        };
+        assert_eq!(message_rows(&m, 40, &ctx), 2);
+    }
+
+    #[test]
+    fn deleted_line_is_one_dim_row_with_author_and_time() {
+        let theme = Theme::default();
+        let m = deleted("alice");
+        let compact = rows_themed(&m, 60, MessageLayout::Compact, &theme);
+        assert_eq!(texts(&compact), ["00:00 alice  message deleted"]);
+        let two = rows_themed(&m, 60, MessageLayout::TwoLine, &theme);
+        assert_eq!(texts(&two), ["alice  00:00  message deleted"]);
+        for rows in [&compact, &two] {
+            assert_eq!(rows.len(), 1);
+            for span in rows[0]
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty())
+            {
+                assert_eq!(span.style, theme.messages_deleted, "{:?}", span.content);
+            }
+        }
+        // Whatever the model still holds, the text never shows and nor does an edited marker.
+        let sneaky = Message {
+            body: "SECRET-TEXT".to_string(),
+            edited: true,
+            ..deleted("alice")
+        };
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_themed(&sneaky, 60, layout, &theme);
+            let shown = texts(&rows).join("\n");
+            assert!(!shown.contains("SECRET-TEXT"), "{shown}");
+            assert!(!shown.contains("edited"), "{shown}");
+        }
+        // The line never says who deleted it.
+        assert!(!texts(&compact).join(" ").contains("deleted by"));
+    }
+
+    #[test]
+    fn edited_and_deleted_styles_follow_the_theme() {
+        let config = crate::test_util::config_from_theme(
+            "[messages.edited]\nfg = \"blue\"\n[messages.deleted]\nfg = \"magenta\"\n",
+        );
+        let theme = config.theme;
+        assert_eq!(theme.messages_edited.fg, Some(Color::Blue));
+        assert_eq!(theme.messages_edited.add_modifier, Modifier::DIM);
+        assert_eq!(theme.messages_deleted.fg, Some(Color::Magenta));
+        let rows = rows_themed(&edited("alice", "hi"), 60, MessageLayout::Compact, &theme);
+        assert_eq!(rows[0].spans.last().unwrap().style.fg, Some(Color::Blue));
+        let rows = rows_themed(&deleted("alice"), 60, MessageLayout::TwoLine, &theme);
+        assert!(
+            rows[0]
+                .spans
+                .iter()
+                .any(|s| s.style.fg == Some(Color::Magenta))
+        );
+    }
+
+    #[test]
+    fn edited_and_deleted_survive_narrow_widths() {
+        for width in [0u16, 1, 4, 9, 12, 19, 25] {
+            for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+                for m in [edited("alice", "some words to wrap"), deleted("alice")] {
+                    let rows = rows_at(&m, width, layout, 5);
+                    assert!(!rows.is_empty(), "{width} {layout:?}");
+                }
+            }
+        }
     }
 }

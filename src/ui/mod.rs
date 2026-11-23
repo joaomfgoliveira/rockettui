@@ -85,6 +85,7 @@ mod tests {
         app.messages.entry(id.clone()).or_default().insert(
             0,
             Message {
+                edited: false,
                 id: "hostile-0".to_string(),
                 room_id: RoomId(id.0.clone()),
                 author: "\u{202e}mallory".to_string(),

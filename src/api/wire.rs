@@ -157,6 +157,9 @@ pub struct WireMsg {
     #[serde(default)]
     pub attachments: Vec<WireAttach>,
     pub content: Option<serde_json::Value>,
+    /// Present when the message was edited; only its presence is read.
+    #[serde(rename = "editedAt")]
+    pub edited_at: Option<serde_json::Value>,
 }
 
 /// An uploaded file of a message; only its name is used.

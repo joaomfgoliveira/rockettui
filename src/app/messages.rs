@@ -7,7 +7,7 @@
 
 use crate::action::Action;
 use crate::app::App;
-use crate::data::{Message, RoomId, SendState};
+use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::ui::wrap;
 
 /// Where a room's message pane is looking: the selected message and the first visible row.
@@ -219,6 +219,110 @@ pub fn merge_incoming(app: &mut App, room: &RoomId, message: Message) -> Merge {
         ..message
     });
     Merge::Appended
+}
+
+/// Run `change` on `app` and keep a stored view of `room` on the same message at the same screen
+/// row afterwards. For a change that alters row heights without moving an index (an edit, a
+/// tombstone): the cursor message and its row inside the window are read first, then put back by
+/// message id. A room with no stored view follows the newest rows and needs nothing.
+pub fn anchored<R>(app: &mut App, room: &RoomId, change: impl FnOnce(&mut App) -> R) -> R {
+    let anchor = app.msg_views.contains_key(room).then(|| {
+        let view = view(app, room);
+        let starts = row_starts(app, room);
+        let id = app.messages[room][view.cursor].id.clone();
+        (id, starts[view.cursor] as isize - view.top_row as isize)
+    });
+    let result = change(app);
+    if let Some((id, offset)) = anchor
+        && let Some(cursor) = app
+            .messages
+            .get(room)
+            .and_then(|held| held.iter().position(|m| m.id == id))
+    {
+        let starts = row_starts(app, room);
+        let top_row = (starts[cursor] as isize - offset).max(0) as usize;
+        app.msg_views
+            .insert(room.clone(), MsgView { cursor, top_row });
+    }
+    result
+}
+
+/// True when `message` is a live edit of a message `room` holds: the held copy is a server
+/// message (`Sent`, not a tombstone) whose text or edited state differs. An equal copy (a
+/// reaction, a pin) and a copy of a pending local row are not edits.
+pub fn is_edit(app: &App, room: &RoomId, message: &Message) -> bool {
+    app.messages
+        .get(room)
+        .and_then(|held| held.iter().find(|m| m.id == message.id))
+        .is_some_and(|held| {
+            held.send == SendState::Sent
+                && held.kind != MessageKind::Deleted
+                && (held.body != message.body || held.edited != message.edited)
+        })
+}
+
+/// Replace the held server message with `message.id` by `message`, in place (no index moves), and
+/// keep a stored view on the same message and screen row. A no-op for anything but a held `Sent`,
+/// non-deleted message.
+pub fn replace_edited(app: &mut App, room: &RoomId, message: Message) {
+    if is_edit(app, room, &message) {
+        anchored(app, room, |app| apply_edit(app, room, message));
+    }
+}
+
+/// The unanchored half of `replace_edited`, for a caller that anchors the view itself (a history
+/// merge). Replaces the held message with `message.id` when `is_edit` says it is one.
+pub fn apply_edit(app: &mut App, room: &RoomId, message: Message) {
+    if !is_edit(app, room, &message) {
+        return;
+    }
+    if let Some(slot) = app
+        .messages
+        .get_mut(room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == message.id))
+    {
+        // An `rm` copy comes from the deleter: keep the original author and time.
+        let keep = (message.kind == MessageKind::Deleted).then(|| (slot.author.clone(), slot.ts));
+        *slot = Message {
+            send: SendState::Sent,
+            ..message
+        };
+        if let Some((author, ts)) = keep {
+            slot.author = author;
+            slot.ts = ts;
+        }
+    }
+}
+
+/// Turn the held server message `id` of `room` into a tombstone: author and time stay, the body is
+/// cleared, the kind becomes `Deleted`. Returns whether anything changed: an unknown id, a pending
+/// local row (any state but `Sent`) and an already deleted message change nothing. No index moves;
+/// a stored view keeps the same message and screen row.
+pub fn tombstone(app: &mut App, room: &RoomId, id: &str) -> bool {
+    let deletable = app
+        .messages
+        .get(room)
+        .and_then(|held| held.iter().find(|m| m.id == id))
+        .is_some_and(|m| m.send == SendState::Sent && m.kind != MessageKind::Deleted);
+    if !deletable {
+        return false;
+    }
+    anchored(app, room, |app| tombstone_in_place(app, room, id));
+    true
+}
+
+/// The unanchored half of `tombstone`, for a caller that anchors the view itself (a history merge).
+/// The caller has already checked the message is a deletable server message.
+pub fn tombstone_in_place(app: &mut App, room: &RoomId, id: &str) {
+    if let Some(slot) = app
+        .messages
+        .get_mut(room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == id))
+    {
+        slot.body.clear();
+        slot.kind = MessageKind::Deleted;
+        slot.edited = false;
+    }
 }
 
 /// Forget the stored view so the room shows its newest message again (plan 01-06 calls this
@@ -478,6 +582,7 @@ mod tests {
             .get_mut(&general())
             .expect("general")
             .push(crate::data::Message {
+                edited: false,
                 id: "long-author".to_string(),
                 room_id: general(),
                 author: "firstname.lastname.contractor.external".to_string(),
@@ -569,6 +674,7 @@ mod tests {
 
     fn server_copy(room: &RoomId, id: &str, body: &str) -> Message {
         Message {
+            edited: false,
             id: id.to_string(),
             room_id: room.clone(),
             author: "smoke".to_string(),

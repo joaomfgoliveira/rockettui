@@ -331,6 +331,9 @@ def main():
     out("D3b: sub rooms-changed -> %s" % state)
     state, _ = sub(ws, "stream-notify-room", ["%s/deleteMessage" % rooms["public"], False], "s-del")
     out("D4a: sub stream-notify-room <rid>/deleteMessage (public) -> %s" % state)
+    for label in ("private", "dm"):
+        state, _ = sub(ws, "stream-notify-room", ["%s/deleteMessage" % rooms[label], False], "s-del-" + label)
+        out("D4a: sub stream-notify-room <rid>/deleteMessage (%s) -> %s" % (label, state))
     ws.drain(1)
 
     # Alice posts in the public channel, the private group and the DM: do they all arrive?
@@ -354,26 +357,42 @@ def main():
                     label, args[0] if isinstance(args[0], str) and args[0].isalpha() else "?",
                     "alert" in s, "unread" in s))
 
-    # D4: edit then delete one of alice's messages.
-    marker = "probe-edit-%s" % secrets.token_hex(4)
-    st, body = api("POST", "/api/v1/chat.postMessage", {"roomId": rooms["public"], "text": marker}, alice)
-    mid = ((body or {}).get("message") or {}).get("_id")
-    ws.drain(1.5)
-    api("POST", "/api/v1/chat.update", {"roomId": rooms["public"], "msgId": mid, "text": marker + "-edited"}, alice)
-    evs = events_of(ws.drain(2.0))
-    out("D4b: after edit events=%d [%s]" % (len(evs), " | ".join(sorted({describe_event(e) for e in evs}))))
-    for e in evs:
-        args = (e.get("fields") or {}).get("args") or []
-        if args and isinstance(args[0], dict) and args[0].get("_id") == mid:
-            out("D4c: edit event same _id=yes editedAt_present=%s keys=[%s]" % ("editedAt" in args[0], shape(args[0])))
-            break
-    api("POST", "/api/v1/chat.delete", {"roomId": rooms["public"], "msgId": mid}, alice)
-    evs = events_of(ws.drain(2.0))
-    out("D4d: after delete events=%d [%s]" % (len(evs), " | ".join(sorted({describe_event(e) for e in evs}))))
-    for e in evs:
-        args = (e.get("fields") or {}).get("args") or []
-        if e.get("collection") == "stream-notify-room" and args and isinstance(args[0], dict):
-            out("D4e: deleteMessage arg keys=[%s] has_same_id=%s" % (shape(args[0]), args[0].get("_id") == mid))
+    # D4: edit then delete one of alice's messages, in each room type (a public channel counts only
+    # mentions as unread, a private group and a DM carry alert/unread on every message).
+    for label in ("public", "private", "dm"):
+        marker = "probe-edit-%s" % secrets.token_hex(4)
+        st, body = api("POST", "/api/v1/chat.postMessage", {"roomId": rooms[label], "text": marker}, alice)
+        mid = ((body or {}).get("message") or {}).get("_id")
+        ws.drain(1.5)
+        api("POST", "/api/v1/chat.update", {"roomId": rooms[label], "msgId": mid, "text": marker + "-edited"}, alice)
+        evs = events_of(ws.drain(2.0))
+        out("D4b[%s]: after edit events=%d [%s]" % (label, len(evs), " | ".join(sorted({describe_event(e) for e in evs}))))
+        reach_edit = False
+        for e in evs:
+            args = (e.get("fields") or {}).get("args") or []
+            if args and isinstance(args[0], dict) and args[0].get("_id") == mid:
+                reach_edit = True
+                out("D4c[%s]: edit event same _id=yes editedAt_present=%s keys=[%s]" % (label, "editedAt" in args[0], shape(args[0])))
+                break
+        # D4f: does the subscriptions-changed update that follows an edit carry alert/unread (key presence only)?
+        subs_after_edit = [
+            e for e in evs if e.get("collection") == "stream-notify-user"
+            and len((e.get("fields") or {}).get("args") or []) >= 2
+            and isinstance(e["fields"]["args"][1], dict)
+        ]
+        out("D4f[%s]: edit reaches own account=%s subscriptions-changed updates=%d carrying alert=%s unread=%s" % (
+            label, "yes" if reach_edit else "no", len(subs_after_edit),
+            any("alert" in e["fields"]["args"][1] for e in subs_after_edit),
+            any("unread" in e["fields"]["args"][1] for e in subs_after_edit)))
+        api("POST", "/api/v1/chat.delete", {"roomId": rooms[label], "msgId": mid}, alice)
+        evs = events_of(ws.drain(2.0))
+        out("D4d[%s]: after delete events=%d [%s]" % (label, len(evs), " | ".join(sorted({describe_event(e) for e in evs}))))
+        out("D4g[%s]: delete reaches own account=%s" % (
+            label, "yes" if any(e.get("collection") == "stream-notify-room" for e in evs) else "no"))
+        for e in evs:
+            args = (e.get("fields") or {}).get("args") or []
+            if e.get("collection") == "stream-notify-room" and args and isinstance(args[0], dict):
+                out("D4e[%s]: deleteMessage arg keys=[%s] has_same_id=%s" % (label, shape(args[0]), args[0].get("_id") == mid))
 
     # D5: heartbeat. Client ping must be answered with pong; note server pings seen so far.
     ws.send_json({"msg": "ping", "id": "p1"})

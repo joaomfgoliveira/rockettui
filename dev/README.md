@@ -116,7 +116,7 @@ One line per probe, ending in `PROBE OK`:
 | D1a / D1b | `login {resume: <PAT>}`: does the PAT work as a DDP resume token, and is the id the own user id |
 | D2a / D2b / D2c | `sub stream-room-messages ["__my_messages__", false]`; alice posts in a channel, a private group and a DM: do all arrive, with which keys, each with the right `rid` |
 | D3a / D3b / D3c | `stream-notify-user` `<uid>/subscriptions-changed` and `<uid>/rooms-changed`: what fires per message and whether the subscription document carries `alert` / `unread` (D3c prints whether the keys are present: each message in a private group or DM is followed by a second update with neither key, which the client must not read as "read"; a public channel's updates carry neither, since channels count only mentions) |
-| D4a to D4e | `stream-notify-room` `<rid>/deleteMessage`; an edit (same `_id`, `editedAt`) and a delete (only `{_id}`, on the room stream), the inputs of `live-edits-deletes` |
+| D4a to D4g | `stream-notify-room` `<rid>/deleteMessage` for the public channel, the private group and the DM; per room type, an edit (same `_id`, `editedAt`) and a delete (only `{_id}`, on the room stream), whether each reaches the app's own account, and whether the `subscriptions-changed` update that follows an edit carries `alert` or `unread` (D4f: it carries neither, on 8.9.1 and 9.0.0, so an edit never changes the unread flag). The inputs of `live-edits-deletes` |
 | D5a / D5b / D5c | a client `ping` is answered by `pong`; WebSocket-level pings; a 90 s idle watch for the server's own `ping` and the gaps between them |
 
 Output rule: only DDP message names, collection and event names, top-level key names, yes/no
@@ -153,6 +153,40 @@ RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui
 |--------|--------|-------|
 | 8.9.1 | pass | `SMOKE OK` for both; the previous binary fails `docker_realtime` (control) |
 | 9.0.0 | pass | `SMOKE OK` for both, and `docker_read` / `docker_send` still pass; no difference from 8.9.1, no client change needed |
+
+Live edits and deletes (`live-edits-deletes`), checked on 2026-11-23 on both servers:
+
+```sh
+python3 -I scripts/smoke_pty.py target/debug/rockettui docker_edits                       # 8.9.1
+RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui docker_edits    # 9.0.0
+```
+
+- `docker_edits`: in `rt-private`, `alice` posts two messages; she edits the first (the new text and
+  the `(edited)` marker show in the same screen row and the old text is gone) and deletes the second
+  (its row becomes `alice  message deleted`, still in the same row, with no text). In the alice DM,
+  which the app has not opened, she posts and deletes a message; opening the DM shows no trace and no
+  deleted line, since deleted lines exist only for messages the app held.
+- `docker_reconnect` now also covers edits and deletes during an outage: with two held messages in
+  `rt-private`, `alice` edits one and deletes the other while the forwarder has cut the app off, then
+  posts the three catch-up messages (a second later, so both held messages are older than the
+  newest second of the refetched page, which is the only range the reconcile judges). After the
+  reconnect the open room shows the edit with its marker and the deleted line. The reconnect can
+  take up to 30 s after a longer outage (the backoff ceiling), so the scenario waits up to 60 s.
+- `docker_deleted_status`: the server setting `Message_ShowDeletedStatus` (off by default; the
+  scenario switches it on as `admin` and restores it in a `finally`) makes a delete leave a message of
+  type `rm` (empty text, `editedAt` set, the original author in `u`) instead of removing it. A live
+  delete in `rt-private` must become the deleted line in its row, and a deleted message in the alice DM
+  loaded from history must show as one too: never `system message`, never an edited marker, never the
+  text. Checked on 8.9.1 and 9.0.0; with the `rm` mapping disabled it fails (control).
+- Both end with `finish_clean`: no token or secret in the terminal output, and none of the texts
+  (including the deleted ones) after the app leaves the alternate screen.
+- Not covered by a scenario: a message deleted while offline in the refetched page's oldest or
+  newest second stays visible until a reload (see the change's design, Risks).
+
+| Server | Result | Notes |
+|--------|--------|-------|
+| 8.9.1 | pass | `docker_edits` and `docker_reconnect` give `SMOKE OK`; the whole harness (21 scenarios) passes |
+| 9.0.0 | pass | `docker_read`, `docker_send`, `docker_realtime`, `docker_reconnect` and `docker_edits` give `SMOKE OK`; no difference from 8.9.1, no client change needed |
 
 ## Second stack: Rocket.Chat 9.0.0
 

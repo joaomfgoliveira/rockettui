@@ -98,6 +98,7 @@ fn message_with_body() -> Message {
 /// A message holding the sentinel body, in the given send state.
 fn message_in_state(send: SendState) -> Message {
     Message {
+        edited: false,
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),
         author: "alice".to_string(),
@@ -185,6 +186,22 @@ fn sentinel_sweep() {
     };
     no_sentinel("HistoryPage", &format!("{page:?}"));
     no_sentinel("Message", &format!("{:?}", message_with_body()));
+    for (kind, edited) in [
+        (MessageKind::Normal, true),
+        (MessageKind::Deleted, false),
+        (MessageKind::Deleted, true),
+    ] {
+        let message = Message {
+            kind,
+            edited,
+            ..message_with_body()
+        };
+        no_sentinel("Message (edited or deleted)", &format!("{message:?}"));
+        no_sentinel(
+            "RtMessage (edited or deleted)",
+            &format!("{:?}", Action::RtMessage(message)),
+        );
+    }
     for state in ALL_SEND_STATES {
         no_sentinel(
             "Message (send state)",

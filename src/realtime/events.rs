@@ -17,6 +17,9 @@ pub const MESSAGES_EVENT: &str = "__my_messages__";
 /// The per-user notification stream; its `<uid>/subscriptions-changed` event carries unread.
 pub const USER_STREAM: &str = "stream-notify-user";
 const SUBSCRIPTIONS_SUFFIX: &str = "/subscriptions-changed";
+/// The per-room notification stream; its `<rid>/deleteMessage` event carries only `{_id}`.
+pub const ROOM_STREAM: &str = "stream-notify-room";
+pub const DELETE_SUFFIX: &str = "/deleteMessage";
 
 /// Whether a subscription document means "unread": the server's `alert` flag or a positive unread
 /// count. `None` when the document carries neither key: such an update is about something else
@@ -58,6 +61,17 @@ pub fn action_for(frame: ServerFrame) -> Option<Action> {
             Some(Action::RtSubscription {
                 unread: unread_of(&doc)?,
                 room: RoomId(doc.rid),
+            })
+        }
+        ROOM_STREAM => {
+            let rid = event
+                .strip_suffix(DELETE_SUFFIX)
+                .filter(|r| !r.is_empty())?;
+            let doc = args.into_iter().next()?;
+            let id = doc.get("_id")?.as_str().filter(|id| !id.is_empty())?;
+            Some(Action::RtDeleted {
+                room: RoomId(rid.to_string()),
+                id: id.to_string(),
             })
         }
         _ => None,
@@ -127,11 +141,29 @@ mod tests {
             ),
             changed(MESSAGES_STREAM, MESSAGES_EVENT, r#"["text"]"#),
             changed(MESSAGES_STREAM, MESSAGES_EVENT, "[]"),
-            changed("stream-notify-room", "r/deleteMessage", r#"[{"_id":"m1"}]"#),
+            // A delete without an id, with an empty id or room, or an unrelated room event.
+            changed("stream-notify-room", "r/deleteMessage", "[{}]"),
+            changed("stream-notify-room", "r/deleteMessage", r#"[{"_id":""}]"#),
+            changed("stream-notify-room", "r/deleteMessage", r#"["m1"]"#),
+            changed("stream-notify-room", "r/deleteMessage", "[]"),
+            changed("stream-notify-room", "/deleteMessage", r#"[{"_id":"m1"}]"#),
+            changed("stream-notify-room", "r/typing", r#"["alice",true]"#),
             ServerFrame::Pong,
         ] {
             assert!(action_for(frame).is_none());
         }
+    }
+
+    #[test]
+    fn delete_event_becomes_rt_deleted() {
+        let frame = changed(ROOM_STREAM, "r1/deleteMessage", r#"[{"_id":"m1"}]"#);
+        assert_eq!(
+            action_for(frame),
+            Some(Action::RtDeleted {
+                room: RoomId("r1".to_string()),
+                id: "m1".to_string()
+            })
+        );
     }
 
     #[test]

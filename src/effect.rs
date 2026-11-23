@@ -513,6 +513,7 @@ mod tests {
         use crate::test_util::app_80x24;
 
         let pending = Message {
+            edited: false,
             id: "rt-test-1".to_string(),
             room_id: general(),
             author: "me".to_string(),

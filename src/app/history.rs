@@ -251,11 +251,22 @@ fn on_refetched(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opti
         let id = app.messages[&room][view.cursor].id.clone();
         (id, starts[view.cursor] as isize - view.top_row as isize)
     });
+    // What the page says about messages the room already holds: their current text and edited
+    // state, and (by absence) which ones were deleted. Only the span strictly between the page's
+    // oldest and newest second is judged: a message in the oldest second may simply lie beyond the
+    // page, and one in the newest second may have arrived live after the request left.
+    let page_ids: HashSet<String> = page.iter().map(|m| m.id.clone()).collect();
+    let span = page.first().map(|m| m.ts).zip(page.last().map(|m| m.ts));
     let mut seen: HashSet<String> = HashSet::new();
     for message in page {
-        if !seen.insert(message.id.clone())
-            || messages::confirm_held(app, &room, &message).is_some()
-        {
+        if !seen.insert(message.id.clone()) {
+            continue;
+        }
+        if messages::is_edit(app, &room, &message) {
+            messages::apply_edit(app, &room, message);
+            continue;
+        }
+        if messages::confirm_held(app, &room, &message).is_some() {
             continue;
         }
         let held = app.messages.entry(room.clone()).or_default();
@@ -270,6 +281,22 @@ fn on_refetched(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opti
                 ..message
             },
         );
+    }
+    if let Some((oldest, newest)) = span {
+        let gone: Vec<String> = app.messages[&room]
+            .iter()
+            .filter(|m| {
+                m.send == crate::data::SendState::Sent
+                    && m.kind != crate::data::MessageKind::Deleted
+                    && m.ts > oldest
+                    && m.ts < newest
+                    && !page_ids.contains(&m.id)
+            })
+            .map(|m| m.id.clone())
+            .collect();
+        for id in gone {
+            messages::tombstone_in_place(app, &room, &id);
+        }
     }
     if let Some(HistoryState::Loaded {
         oldest_ts: stored, ..
@@ -633,6 +660,7 @@ mod tests {
     fn run(prefix: &str, from: usize, count: usize) -> Vec<Message> {
         (from..from + count)
             .map(|i| Message {
+                edited: false,
                 id: format!("{prefix}{i:03}"),
                 room_id: rid("r-general"),
                 author: "alice".to_string(),
@@ -863,6 +891,7 @@ mod tests {
     /// A message of `r-general` as the server would return it: author `alice`, time `ts`.
     fn server(id: &str, ts: i64, body: &str) -> Message {
         Message {
+            edited: false,
             id: id.to_string(),
             room_id: rid("r-general"),
             author: "alice".to_string(),

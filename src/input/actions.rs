@@ -145,6 +145,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::RtRejected
         | Action::RtMessage(_)
         | Action::RtSubscription { .. }
+        | Action::RtDeleted { .. }
         | Action::KeyTimeout
         | Action::Counted(..) => None,
     }
@@ -183,6 +184,10 @@ mod tests {
             Action::RtSubscription {
                 room: crate::data::RoomId("r".to_string()),
                 unread: true,
+            },
+            Action::RtDeleted {
+                room: crate::data::RoomId("r".to_string()),
+                id: "m".to_string(),
             },
             Action::Counted(2, Box::new(Action::MoveDown)),
         ] {

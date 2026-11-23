@@ -554,6 +554,7 @@ mod tests {
                 .get_mut(&rid(room))
                 .expect("room")
                 .push(Message {
+                    edited: false,
                     id: format!("u-{n}"),
                     room_id: rid(room),
                     author: "me".to_string(),

@@ -1482,6 +1482,26 @@ class Seeded:
         self.alice = (data["userId"], data["authToken"])
         self.secrets = [self.dev[1], self.alice[1], admin.get("ALICE_PASS", "")]
 
+    def admin_login(self, project):
+        """Log in as the local admin (password read in-process, kept in memory only)."""
+        admin = read_env_file(os.path.join(REPO, "dev", "state", project, ".env.admin.local"))
+        reply = rc_call(self.base, "POST", "/api/v1/login", {"user": "admin", "password": admin.get("ADMIN_PASS", "")})
+        data = (reply or {}).get("data") or {}
+        if "authToken" not in data:
+            raise SmokeFail("could not log in as admin")
+        self.secrets.extend([data["authToken"], admin.get("ADMIN_PASS", "")])
+        return (data["userId"], data["authToken"])
+
+    def setting(self, admin, name, value=None):
+        """Read a server setting (value None) or set it; returns the value the server holds."""
+        path = f"/api/v1/settings/{name}"
+        if value is None:
+            return (rc_call(self.base, "GET", path, None, admin) or {}).get("value")
+        reply = rc_call(self.base, "POST", path, {"value": value}, admin)
+        if not (reply or {}).get("success"):
+            raise SmokeFail(f"could not set {name}")
+        return value
+
     def room_id(self, name, kind):
         """The id of the seeded room: `kind` is channels, groups or dm."""
         if kind == "dm":
@@ -1496,9 +1516,23 @@ class Seeded:
         return rid
 
     def post_as_alice(self, rid, text):
+        """Post as alice; returns the new message's id (for `edit_as_alice` / `delete_as_alice`)."""
         reply = rc_call(self.base, "POST", "/api/v1/chat.postMessage", {"roomId": rid, "text": text}, self.alice)
         if not (reply or {}).get("success"):
             raise SmokeFail("alice's post was refused")
+        return ((reply or {}).get("message") or {}).get("_id")
+
+    def edit_as_alice(self, rid, msg_id, text):
+        reply = rc_call(
+            self.base, "POST", "/api/v1/chat.update", {"roomId": rid, "msgId": msg_id, "text": text}, self.alice
+        )
+        if not (reply or {}).get("success"):
+            raise SmokeFail("alice's edit was refused")
+
+    def delete_as_alice(self, rid, msg_id):
+        reply = rc_call(self.base, "POST", "/api/v1/chat.delete", {"roomId": rid, "msgId": msg_id}, self.alice)
+        if not (reply or {}).get("success"):
+            raise SmokeFail("alice's delete was refused")
 
     def mark_read(self, rid):
         rc_call(self.base, "POST", "/api/v1/subscriptions.read", {"rid": rid}, self.dev)
@@ -1579,6 +1613,20 @@ def rows_with(buf, text):
     return [row for row in screen_of(buf).rows() if text in row]
 
 
+def row_of(buf, text):
+    """The screen row index of the first row that shows `text`, or None."""
+    for index, row in enumerate(screen_of(buf).rows()):
+        if text in row:
+            return index
+    return None
+
+
+def tombstone_at(buf, index):
+    """Whether screen row `index` is a deleted line by alice: her name and `message deleted`."""
+    row = screen_of(buf).rows()[index]
+    return "alice" in row and "message deleted" in row
+
+
 def finish_clean(pid, fd, buf, secrets_in_output, texts, label):
     """Quit with `:q` and check the run: exit code 0, no secret anywhere in the output, and none of
     the message `texts` after the app left the alternate screen (they are on the TUI screen by
@@ -1653,6 +1701,136 @@ def scenario_docker_realtime(binary):
     finish_clean(pid, fd, buf, stack.secrets, [live_text, dm_text, own_text], "docker_realtime")
 
 
+def scenario_docker_edits(binary):
+    """Live edits and deletes against the real local Rocket.Chat. In rt-private, alice posts two
+    messages; she edits the first (the new text and the edited marker show, in the same row) and
+    deletes the second (a deleted line with her name and no text, in the same row). In the alice DM,
+    which the app has not opened, she posts and deletes a message; opening the DM shows no trace.
+    Posts go to rt-private and the alice DM only, never rt-public."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    private = stack.room_id("rt-private", "groups")
+    dm = stack.room_id("alice", "dm")
+    stack.mark_read(private)
+    tag = secrets.token_hex(3)
+    # Distinct names, none a substring of another, so "old text gone" is a real check.
+    first, first_new, second, unseen = (f"ed-{tag}-{n}" for n in ("old", "new", "gone", "unseen"))
+
+    pid, fd = spawn(binary, extra_env=stack.env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-private")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("rt-private history never settled")
+    time.sleep(2.0)  # login and subscriptions, including the per-room delete streams
+
+    first_id = stack.post_as_alice(private, first)
+    if not read_until(fd, buf, lambda b: rows_with(b, first), 10):
+        raise SmokeFail("alice's first message never appeared live")
+    second_id = stack.post_as_alice(private, second)
+    if not read_until(fd, buf, lambda b: rows_with(b, second), 10):
+        raise SmokeFail("alice's second message never appeared live")
+    read_until(fd, buf, lambda b: False, 0.5)
+    first_row, second_row = row_of(buf, first), row_of(buf, second)
+
+    stack.edit_as_alice(private, first_id, first_new)
+    if not read_until(fd, buf, lambda b: rows_with(b, first_new), 10):
+        raise SmokeFail("the edited text never appeared")
+    read_until(fd, buf, lambda b: False, 0.5)
+    if "(edited)" not in screen_of(buf).rows()[row_of(buf, first_new)]:
+        raise SmokeFail("the edited message has no edited marker")
+    if rows_with(buf, first):
+        raise SmokeFail("the old text is still shown after the edit")
+    if row_of(buf, first_new) != first_row or row_of(buf, second) != second_row:
+        raise SmokeFail("an edit moved a row")
+
+    stack.delete_as_alice(private, second_id)
+    if not read_until(fd, buf, lambda b: tombstone_at(b, second_row), 10):
+        raise SmokeFail("the deleted message did not become a deleted line in its row")
+    if rows_with(buf, second):
+        raise SmokeFail("the deleted text is still shown")
+    if row_of(buf, first_new) != first_row:
+        raise SmokeFail("a delete moved a row")
+
+    # A message created and deleted in a room the app has not opened: no trace after opening it.
+    unseen_id = stack.post_as_alice(dm, unseen)
+    stack.delete_as_alice(dm, unseen_id)
+    read_until(fd, buf, lambda b: False, 1.5)
+    open_room_named(fd, buf, "alice")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("the alice DM history never settled")
+    read_until(fd, buf, lambda b: False, 1.0)
+    if rows_with(buf, unseen) or rows_with(buf, "message deleted"):
+        raise SmokeFail("a message deleted before the room was opened left a trace")
+    finish_clean(pid, fd, buf, stack.secrets, [first, first_new, second, unseen], "docker_edits")
+
+
+def scenario_docker_deleted_status(binary):
+    """Deleted messages when the server keeps them (setting Message_ShowDeletedStatus): the server
+    then turns a delete into a message of type `rm` (empty text, `editedAt` set, original author)
+    instead of dropping it. A live delete in rt-private must become the deleted line, and a deleted
+    message in the alice DM, loaded from history, must show as one too: never `system message`,
+    never an edited marker, never text. The setting is restored afterwards, even on failure."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    admin = stack.admin_login(project)
+    private = stack.room_id("rt-private", "groups")
+    dm = stack.room_id("alice", "dm")
+    stack.mark_read(private)
+    tag = secrets.token_hex(3)
+    live, unseen = f"ds-{tag}-live", f"ds-{tag}-unseen"
+    before = stack.setting(admin, "Message_ShowDeletedStatus")
+    pid = None
+    try:
+        stack.setting(admin, "Message_ShowDeletedStatus", True)
+        pid, fd = spawn(binary, extra_env=stack.env)
+        buf = bytearray()
+        wait_ready(fd, buf, room=b"rt-public", timeout=20)
+        open_room_named(fd, buf, "rt-private")
+        if not read_until(fd, buf, history_settled, 10):
+            raise SmokeFail("rt-private history never settled")
+        time.sleep(2.0)
+
+        live_id = stack.post_as_alice(private, live)
+        if not read_until(fd, buf, lambda b: rows_with(b, live), 10):
+            raise SmokeFail("alice's message never appeared live")
+        read_until(fd, buf, lambda b: False, 0.5)
+        row = row_of(buf, live)
+        stack.delete_as_alice(private, live_id)
+        if not read_until(fd, buf, lambda b: tombstone_at(b, row), 10):
+            raise SmokeFail("a live delete (kept as type rm) did not become a deleted line")
+        screen = "\n".join(screen_of(buf).rows())
+        if live in screen or "system message" in screen:
+            raise SmokeFail("the deleted message still shows its text or as a system message")
+        if "(edited)" in screen_of(buf).rows()[row]:
+            raise SmokeFail("the deleted line carries an edited marker")
+
+        unseen_id = stack.post_as_alice(dm, unseen)
+        stack.delete_as_alice(dm, unseen_id)
+        read_until(fd, buf, lambda b: False, 1.0)
+        open_room_named(fd, buf, "alice")
+        if not read_until(fd, buf, history_settled, 10):
+            raise SmokeFail("the alice DM history never settled")
+        read_until(fd, buf, lambda b: False, 1.0)
+        screen = "\n".join(screen_of(buf).rows())
+        if unseen in screen or "system message" in screen:
+            raise SmokeFail("a deleted message loaded from history shows its text or as a system message")
+        if not rows_with(buf, "message deleted"):
+            raise SmokeFail("a deleted message loaded from history is not drawn as a deleted line")
+        if any("(edited)" in r for r in rows_with(buf, "message deleted")):
+            raise SmokeFail("a deleted line loaded from history carries an edited marker")
+        finish_clean(pid, fd, buf, stack.secrets, [live, unseen], "docker_deleted_status")
+        pid = None
+    finally:
+        stack.setting(admin, "Message_ShowDeletedStatus", bool(before))
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+
+
 def scenario_docker_reconnect(binary):
     """Reconnect and gap recovery against the real local Rocket.Chat. The app talks to the server
     through a `Proxy`. With rt-private open and the alice DM loaded, the proxy cuts every
@@ -1669,6 +1847,7 @@ def scenario_docker_reconnect(binary):
     env["ROCKETTUI_SERVER_URL"] = f"http://127.0.0.1:{proxy.port}"
     tag = secrets.token_hex(3)
     private_texts = [f"rg-{tag}-p{i}" for i in range(3)]
+    kept, kept_new, doomed = f"rg-{tag}-kept", f"rg-{tag}-edit", f"rg-{tag}-doomed"
     dm_count = 55  # more than the default history_size of 50
     dm_texts = [f"rg-{tag}-d{i:02d}" for i in range(dm_count)]
 
@@ -1684,9 +1863,20 @@ def scenario_docker_reconnect(binary):
             raise SmokeFail("rt-private history never settled")
         time.sleep(2.0)  # connection live
 
+        # Two messages the app holds, which alice edits and deletes while it is cut off. Each is
+        # older than the newest second of the refetched page, so the reconcile judges it.
+        kept_id = stack.post_as_alice(private, kept)
+        doomed_id = stack.post_as_alice(private, doomed)
+        if not read_until(fd, buf, lambda b: rows_with(b, kept) and rows_with(b, doomed), 10):
+            raise SmokeFail("the two held messages never appeared live")
+        time.sleep(1.2)
+
         proxy.sever()
         if not read_until(fd, buf, lambda b: "Reconnecting" in screen_of(b).rows()[22], 15):
             raise SmokeFail("the status line never showed that the app is reconnecting")
+        stack.edit_as_alice(private, kept_id, kept_new)
+        stack.delete_as_alice(private, doomed_id)
+        time.sleep(1.2)
         for text in private_texts:
             stack.post_as_alice(private, text)
         for text in dm_texts:
@@ -1702,6 +1892,14 @@ def scenario_docker_reconnect(binary):
         for text in private_texts:
             if len(rows_with(buf, text)) != 1:
                 raise SmokeFail("a caught-up message is shown more than once")
+        # The edit and the delete that happened during the outage show after the refetch.
+        # The reconnect can wait out a backoff of up to 30 s after a longer outage.
+        if not read_until(fd, buf, lambda b: rows_with(b, kept_new), 60):
+            raise SmokeFail("the edit made during the outage did not show after the reconnect")
+        if "(edited)" not in screen_of(buf).rows()[row_of(buf, kept_new)] or rows_with(buf, kept):
+            raise SmokeFail("the edited message shows no marker or still shows its old text")
+        if rows_with(buf, doomed) or not rows_with(buf, "message deleted"):
+            raise SmokeFail("the delete made during the outage did not become a deleted line")
 
         open_room_named(fd, buf, "alice")
         newest = dm_texts[-1]
@@ -1710,7 +1908,9 @@ def scenario_docker_reconnect(binary):
         read_until(fd, buf, lambda b: False, 1.0)
         if len(rows_with(buf, newest)) != 1:
             raise SmokeFail("the newest message of the stale DM is shown more than once")
-        finish_clean(pid, fd, buf, stack.secrets, private_texts + dm_texts, "docker_reconnect")
+        finish_clean(
+            pid, fd, buf, stack.secrets, private_texts + dm_texts + [kept, kept_new, doomed], "docker_reconnect"
+        )
     finally:
         proxy.sever()
         try:
@@ -1741,6 +1941,8 @@ SCENARIOS = {
     "docker_send": scenario_docker_send,
     "docker_realtime": scenario_docker_realtime,
     "docker_reconnect": scenario_docker_reconnect,
+    "docker_edits": scenario_docker_edits,
+    "docker_deleted_status": scenario_docker_deleted_status,
 }
 
 

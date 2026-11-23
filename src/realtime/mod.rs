@@ -18,8 +18,10 @@ use ddp::{LOGIN_ID, LoginFrame, ServerFrame};
 use futures::{SinkExt, StreamExt};
 use reqwest::Url;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -97,14 +99,39 @@ pub struct ExtraSub {
     pub params: Vec<serde_json::Value>,
 }
 
+/// The ids of the rooms whose delete notifications the app wants: every joined room that can show
+/// messages (an encrypted room never loads history, so it has nothing to delete from). Derived
+/// from `App.rooms`, so there is no Action or Effect for it.
+pub fn wanted_rooms(rooms: &[crate::data::Room]) -> BTreeSet<String> {
+    rooms
+        .iter()
+        .filter(|room| !room.encrypted)
+        .map(|room| room.id.0.clone())
+        .collect()
+}
+
 /// Owns the running task. Dropping the handle stops the task and closes its socket, so
 /// `:reconnect` replaces the handle and quitting drops it.
 pub struct RtHandle {
     task: JoinHandle<()>,
     extra: Sender<ExtraSub>,
+    rooms: watch::Sender<BTreeSet<String>>,
 }
 
 impl RtHandle {
+    /// Publish the wanted room set to the task, only when it differs from the last one published
+    /// (`true` then). The task subscribes to rooms that were added and unsubscribes from the ones
+    /// that were removed, and after every reconnect it subscribes to the whole current set.
+    pub fn set_rooms(&self, wanted: BTreeSet<String>) -> bool {
+        self.rooms.send_if_modified(|current| {
+            if *current == wanted {
+                return false;
+            }
+            *current = wanted;
+            true
+        })
+    }
+
     /// Ask the live connection to subscribe to one more stream. `false` when the task is gone.
     pub async fn subscribe(&self, sub: ExtraSub) -> bool {
         self.extra.send(sub).await.is_ok()
@@ -158,6 +185,14 @@ impl Supervisor {
             .map(|config| spawn(config, self.tx.clone(), self.timing));
     }
 
+    /// Tell the running task which rooms' deletes to follow; a no-op when the set did not change.
+    /// Called after every reducer batch, so the set follows `App.rooms` without an Action.
+    pub fn sync_rooms(&mut self, app: &crate::app::App) {
+        if let Some(handle) = &self.handle {
+            handle.set_rooms(wanted_rooms(&app.rooms));
+        }
+    }
+
     /// Whether a task is running (for tests).
     #[cfg(test)]
     fn is_running(&self) -> bool {
@@ -168,8 +203,9 @@ impl Supervisor {
 /// Start the realtime task. Events go to `tx` as `Action`s.
 pub fn spawn(config: RtConfig, tx: Sender<Action>, timing: Timing) -> RtHandle {
     let (extra, extra_rx) = mpsc::channel(8);
-    let task = tokio::spawn(run(config, tx, extra_rx, timing));
-    RtHandle { task, extra }
+    let (rooms, rooms_rx) = watch::channel(BTreeSet::new());
+    let task = tokio::spawn(run(config, tx, extra_rx, rooms_rx, timing));
+    RtHandle { task, extra, rooms }
 }
 
 /// How one session ended.
@@ -183,10 +219,16 @@ enum End {
     Closed,
 }
 
-async fn run(config: RtConfig, tx: Sender<Action>, mut extra: Receiver<ExtraSub>, timing: Timing) {
+async fn run(
+    config: RtConfig,
+    tx: Sender<Action>,
+    mut extra: Receiver<ExtraSub>,
+    rooms: watch::Receiver<BTreeSet<String>>,
+    timing: Timing,
+) {
     let mut attempt: u32 = 0;
     loop {
-        match session(&config, &tx, &mut extra, &timing).await {
+        match session(&config, &tx, &mut extra, &rooms, &timing).await {
             End::Closed => return,
             End::Rejected => {
                 // Retrying a rejected token would only hammer the server: wait for `:reconnect`.
@@ -224,6 +266,10 @@ struct Conn<'a> {
     ws: Socket,
     silence: Duration,
     extra: &'a mut Receiver<ExtraSub>,
+    /// The rooms whose delete notifications are wanted, and the subscription id held for each room
+    /// this connection has subscribed to. A new connection starts with none held.
+    rooms: watch::Receiver<BTreeSet<String>>,
+    room_subs: BTreeMap<String, String>,
     live: bool,
     sub_seq: u32,
     /// Frames that could not be parsed and were skipped. Only a count: nothing of a frame is kept.
@@ -233,6 +279,41 @@ struct Conn<'a> {
 impl Conn<'_> {
     async fn send(&mut self, text: &str) -> Result<(), ()> {
         self.ws.send(WsMessage::text(text)).await.map_err(|_| ())
+    }
+
+    /// Bring the per-room delete subscriptions in line with the wanted set: a `sub` for each room
+    /// not held yet, an `unsub` for each held room no longer wanted.
+    async fn sync_rooms(&mut self) -> Result<(), ()> {
+        let wanted = self.rooms.borrow_and_update().clone();
+        let removed: Vec<String> = self
+            .room_subs
+            .keys()
+            .filter(|rid| !wanted.contains(*rid))
+            .cloned()
+            .collect();
+        for rid in removed {
+            if let Some(id) = self.room_subs.remove(&rid) {
+                self.send(&ddp::unsub_frame(&id)).await?;
+            }
+        }
+        for rid in wanted {
+            if self.room_subs.contains_key(&rid) {
+                continue;
+            }
+            self.sub_seq += 1;
+            let id = format!("sub-del-{}", self.sub_seq);
+            let frame = ddp::sub_frame(
+                &id,
+                events::ROOM_STREAM,
+                &[
+                    json!(format!("{rid}{}", events::DELETE_SUFFIX)),
+                    json!(false),
+                ],
+            );
+            self.send(&frame).await?;
+            self.room_subs.insert(rid, id);
+        }
+        Ok(())
     }
 
     /// The next frame this client acts on. A DDP `ping` is answered here and never returned.
@@ -246,9 +327,20 @@ impl Conn<'_> {
                     std::future::pending().await
                 }
             };
+            let rooms_changed = async {
+                if self.live {
+                    self.rooms.changed().await
+                } else {
+                    std::future::pending().await
+                }
+            };
             let item = tokio::select! {
                 item = tokio::time::timeout(self.silence, self.ws.next()) => {
                     item.map_err(|_| ())?
+                }
+                Ok(()) = rooms_changed => {
+                    self.sync_rooms().await?;
+                    continue;
                 }
                 Some(sub) = wanted => {
                     self.sub_seq += 1;
@@ -295,11 +387,14 @@ async fn handshake<'a>(
     ws: Socket,
     silence: Duration,
     extra: &'a mut Receiver<ExtraSub>,
+    rooms: watch::Receiver<BTreeSet<String>>,
 ) -> Result<Result<Conn<'a>, ()>, ()> {
     let mut conn = Conn {
         ws,
         silence,
         extra,
+        rooms,
+        room_subs: BTreeMap::new(),
         live: false,
         sub_seq: 0,
         skipped: 0,
@@ -339,6 +434,8 @@ async fn handshake<'a>(
     for frame in &subs {
         conn.send(frame).await?;
     }
+    // The delete notifications of every wanted room, after every connect.
+    conn.sync_rooms().await?;
     Ok(Ok(conn))
 }
 
@@ -346,13 +443,14 @@ async fn session(
     config: &RtConfig,
     tx: &Sender<Action>,
     extra: &mut Receiver<ExtraSub>,
+    rooms: &watch::Receiver<BTreeSet<String>>,
     timing: &Timing,
 ) -> End {
     let established = tokio::time::timeout(timing.handshake, async {
         let (ws, _) = tokio_tungstenite::connect_async(config.url.as_str())
             .await
             .map_err(|_| ())?;
-        handshake(config, ws, timing.silence, &mut *extra).await
+        handshake(config, ws, timing.silence, &mut *extra, rooms.clone()).await
     })
     .await;
     let mut conn = match established {

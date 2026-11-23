@@ -53,6 +53,7 @@ pub fn submit(app: &mut App) {
     let body = app.input.take();
     app.local_seq += 1;
     let message = Message {
+        edited: false,
         id: format!("{}{}", app.id_prefix, app.local_seq),
         room_id: room.clone(),
         author: app
@@ -291,6 +292,7 @@ mod tests {
 
     fn msg(room: &RoomId, id: &str, author: &str, ts: i64, body: &str) -> Message {
         Message {
+            edited: false,
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),

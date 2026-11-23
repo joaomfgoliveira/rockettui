@@ -1355,6 +1355,7 @@ mod tests {
     fn history_page_debug_redacts() {
         let page = HistoryPage {
             messages: vec![Message {
+                edited: false,
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),
                 author: "a".to_string(),

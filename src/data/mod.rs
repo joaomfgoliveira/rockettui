@@ -53,6 +53,9 @@ pub enum MessageKind {
     Normal,
     /// A server system message (joined, left, topic changed, ...), drawn dim as a one-liner.
     System,
+    /// A message that was deleted while the app was running: a tombstone that keeps the id, author
+    /// and time, with an empty body. Session-only: history never returns deleted messages.
+    Deleted,
 }
 
 /// Where a message stands on its way to the server (MSG-02). Messages that came from the server
@@ -98,6 +101,8 @@ pub struct Message {
     pub kind: MessageKind,
     /// `Sent` for every server message; the other states mark a message this client sent.
     pub send: SendState,
+    /// True when the server reports the message as edited (`editedAt`), live or in history.
+    pub edited: bool,
 }
 
 /// Redacting `Debug` (T-01-03): only the id, the room id, the body length and the send state.
@@ -108,6 +113,7 @@ impl std::fmt::Debug for Message {
             .field("room_id", &self.room_id)
             .field("body_len", &self.body.len())
             .field("send", &self.send)
+            .field("edited", &self.edited)
             .finish()
     }
 }
@@ -130,6 +136,7 @@ mod tests {
     #[test]
     fn debug_redacts() {
         let message = Message {
+            edited: false,
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "SENTINEL-AUTHOR-2b9d".to_string(),

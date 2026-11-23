@@ -138,6 +138,8 @@ pub async fn run(
         }
         // After the rooms load, and again on `:reconnect`.
         realtime.sync(&mut app);
+        // The rooms whose deletes the realtime task follows; a no-op unless the room list changed.
+        realtime.sync_rooms(&app);
         if saw_key {
             key_deadline = app
                 .keys_pending()

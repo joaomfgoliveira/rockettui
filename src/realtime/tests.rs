@@ -363,3 +363,199 @@ async fn reconnect_restarts_the_task_and_leaves_one_connection() {
     drop(supervisor);
     assert!(rx.recv().await.is_none(), "quitting stops the task");
 }
+
+// ---- per-room delete subscriptions
+
+fn set(ids: &[&str]) -> BTreeSet<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+/// Read the next `n` client frames after the handshake and keep the ones that are per-room
+/// `sub` or `unsub` frames, as `(msg, id, params)`.
+async fn read_room_frames(ws: &mut Server, n: usize) -> Vec<(String, String, Value)> {
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let frame = read_json(ws).await;
+        out.push((
+            frame["msg"].as_str().unwrap_or_default().to_string(),
+            frame["id"].as_str().unwrap_or_default().to_string(),
+            frame["params"].clone(),
+        ));
+    }
+    out
+}
+
+fn delete_params(rid: &str) -> Value {
+    json!([format!("{rid}/deleteMessage"), false])
+}
+
+#[test]
+fn wanted_rooms_are_the_joined_rooms_that_can_show_messages() {
+    use crate::data::{Room, RoomKind};
+    let room = |id: &str, encrypted: bool| Room {
+        id: RoomId(id.to_string()),
+        name: id.to_string(),
+        kind: RoomKind::Channel,
+        encrypted,
+        private: false,
+        unread: false,
+        last_activity: 0,
+    };
+    let rooms = [room("b", false), room("secret", true), room("a", false)];
+    assert_eq!(wanted_rooms(&rooms), set(&["a", "b"]));
+    assert!(wanted_rooms(&[]).is_empty());
+}
+
+#[tokio::test]
+async fn the_wanted_set_is_published_only_when_it_changes() {
+    let (_listener, config) = listener().await;
+    let (tx, _rx) = mpsc::channel(16);
+    let handle = spawn(config, tx, fast());
+    assert!(!handle.set_rooms(set(&[])), "the empty set is the start");
+    assert!(handle.set_rooms(set(&["a", "b"])));
+    assert!(!handle.set_rooms(set(&["b", "a"])), "the same set again");
+    assert!(handle.set_rooms(set(&["a"])));
+    assert!(handle.set_rooms(set(&[])));
+}
+
+#[tokio::test]
+async fn every_wanted_room_is_subscribed_after_login() {
+    let (listener, config) = listener().await;
+    let (tx, mut rx) = mpsc::channel(16);
+    let handle = spawn(config, tx, fast());
+    assert!(handle.set_rooms(set(&["r2", "r1"])));
+    let mut ws = accept(&listener).await;
+    let (_, subs) = handshake(&mut ws, true).await.expect("accepted");
+    assert_eq!(subs.len(), 2, "the two fixed streams come first");
+    let frames = read_room_frames(&mut ws, 2).await;
+    let params: Vec<&Value> = frames.iter().map(|(_, _, p)| p).collect();
+    assert_eq!(params, [&delete_params("r1"), &delete_params("r2")]);
+    for (msg, id, _) in &frames {
+        assert_eq!(msg, "sub");
+        assert!(!id.is_empty());
+    }
+    assert_ne!(frames[0].1, frames[1].1, "each subscription has its own id");
+    for frame in [&subs[0], &subs[1]] {
+        assert_ne!(frames[0].1, frame["id"].as_str().unwrap());
+    }
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+}
+
+#[tokio::test]
+async fn a_room_added_later_is_subscribed_and_a_removed_one_unsubscribed() {
+    let (listener, config) = listener().await;
+    let (tx, mut rx) = mpsc::channel(16);
+    let handle = spawn(config, tx, fast());
+    assert!(handle.set_rooms(set(&["r1", "r2"])));
+    let mut ws = accept(&listener).await;
+    handshake(&mut ws, true).await.expect("accepted");
+    let initial = read_room_frames(&mut ws, 2).await;
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+
+    // A room joined while connected.
+    assert!(handle.set_rooms(set(&["r1", "r2", "r3"])));
+    let added = read_room_frames(&mut ws, 1).await;
+    assert_eq!(added[0].0, "sub");
+    assert_eq!(added[0].2, delete_params("r3"));
+
+    // A room left while connected: the unsub names the subscription started for it.
+    assert!(handle.set_rooms(set(&["r1", "r3"])));
+    let removed = read_room_frames(&mut ws, 1).await;
+    assert_eq!(removed[0].0, "unsub");
+    assert_eq!(removed[0].1, initial[1].1, "r2 was the second subscription");
+
+    // An unchanged set sends nothing: the next frame is the answer to a ping.
+    assert!(!handle.set_rooms(set(&["r3", "r1"])));
+    send_json(&mut ws, json!({"msg": "ping", "id": "p1"})).await;
+    assert_eq!(read_json(&mut ws).await, json!({"msg": "pong", "id": "p1"}));
+}
+
+#[tokio::test]
+async fn every_room_is_subscribed_again_after_a_reconnect() {
+    let (listener, config) = listener().await;
+    let (tx, mut rx) = mpsc::channel(16);
+    let handle = spawn(config, tx, fast());
+    assert!(handle.set_rooms(set(&["r1", "r2"])));
+    let mut first = accept(&listener).await;
+    handshake(&mut first, true).await.expect("accepted");
+    read_room_frames(&mut first, 2).await;
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+    // The set changes, then the connection drops.
+    assert!(handle.set_rooms(set(&["r2", "r3"])));
+    read_room_frames(&mut first, 2).await;
+    first.close(None).await.unwrap();
+    assert_eq!(rx.recv().await, Some(Action::RtDisconnected));
+
+    let mut second = accept(&listener).await;
+    handshake(&mut second, true).await.expect("accepted");
+    let frames = read_room_frames(&mut second, 2).await;
+    let params: Vec<&Value> = frames.iter().map(|(_, _, p)| p).collect();
+    assert_eq!(params, [&delete_params("r2"), &delete_params("r3")]);
+    assert!(frames.iter().all(|(msg, _, _)| msg == "sub"));
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+}
+
+#[tokio::test]
+async fn a_delete_frame_reaches_the_reducer_as_rt_deleted() {
+    let (listener, config) = listener().await;
+    let (tx, mut rx) = mpsc::channel(16);
+    let handle = spawn(config, tx, fast());
+    assert!(handle.set_rooms(set(&["r1"])));
+    let mut ws = accept(&listener).await;
+    handshake(&mut ws, true).await.expect("accepted");
+    read_room_frames(&mut ws, 1).await;
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+    send_json(
+        &mut ws,
+        json!({
+            "msg": "changed", "collection": "stream-notify-room", "id": "x",
+            "fields": {"eventName": "r1/deleteMessage", "args": [{"_id": "m9"}]}
+        }),
+    )
+    .await;
+    assert_eq!(
+        rx.recv().await,
+        Some(Action::RtDeleted {
+            room: RoomId("r1".to_string()),
+            id: "m9".to_string()
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_supervisor_publishes_the_room_list_of_the_app() {
+    use crate::app::{App, ConnState};
+    use crate::data::{Room, RoomKind};
+    let (listener, config) = listener().await;
+    let (tx, mut rx) = mpsc::channel(16);
+    let mut supervisor = Supervisor::new(Some(config), tx, fast());
+    let mut app = App::new(ratatui::layout::Size::new(80, 24));
+    let room = |id: &str, encrypted: bool| Room {
+        id: RoomId(id.to_string()),
+        name: id.to_string(),
+        kind: RoomKind::Channel,
+        encrypted,
+        private: false,
+        unread: false,
+        last_activity: 0,
+    };
+    app.rooms = vec![room("r1", false), room("secret", true)];
+    // Nothing runs yet, so nothing is published and nothing panics.
+    supervisor.sync_rooms(&app);
+    app.conn = ConnState::Ready;
+    supervisor.sync(&mut app);
+    supervisor.sync_rooms(&app);
+    let mut ws = accept(&listener).await;
+    handshake(&mut ws, true).await.expect("accepted");
+    let frames = read_room_frames(&mut ws, 1).await;
+    assert_eq!(
+        frames[0].2,
+        delete_params("r1"),
+        "the encrypted room is left out"
+    );
+    assert_eq!(rx.recv().await, Some(Action::RtConnected));
+    app.rooms.push(room("r2", false));
+    supervisor.sync_rooms(&app);
+    let added = read_room_frames(&mut ws, 1).await;
+    assert_eq!(added[0].2, delete_params("r2"));
+}

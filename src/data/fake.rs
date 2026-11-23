@@ -103,6 +103,7 @@ fn messages(room: &str, count: usize) -> Vec<Message> {
                 BODIES[(n + room.len()) % BODIES.len()].to_string()
             };
             Message {
+                edited: false,
                 id: format!("{room}-{n:03}"),
                 room_id: RoomId(room.to_string()),
                 author: AUTHORS[n % AUTHORS.len()].to_string(),
