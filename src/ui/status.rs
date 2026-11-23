@@ -1,6 +1,6 @@
 //! Status bar (mode badge, current room, connection state, persistent config warnings, pending keys and status message) and the command-line row with its cursor.
 
-use crate::app::{App, ConnState, Mode, StatusMsg};
+use crate::app::{App, ConnState, Mode, RtState, StatusMsg};
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -34,6 +34,18 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
             format!(" warning: {}", sanitize_line(warning)),
             app.theme.status_error,
         ));
+    }
+    // The realtime connection: shown only while it is down or refused, cleared when it is live.
+    // After the config warnings, which stay visible whatever the connection does.
+    match app.rt {
+        RtState::Reconnecting => {
+            spans.push(Span::styled(" Reconnecting…", app.theme.status_info));
+        }
+        RtState::Unavailable => spans.push(Span::styled(
+            " live updates unavailable",
+            app.theme.status_error,
+        )),
+        RtState::Off | RtState::Live => {}
     }
     let pending = app.pending_display();
     if !pending.is_empty() {

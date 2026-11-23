@@ -192,6 +192,21 @@ fn sentinel_sweep() {
         );
     }
 
+    // Realtime layer: the login frame holds the token and a stream frame holds message text.
+    let login = crate::realtime::ddp::LoginFrame::new(&Secret::new(TOKEN.to_string()));
+    no_sentinel("LoginFrame", &format!("{login:?}"));
+    let rt = crate::realtime::RtConfig::from_connection(&connection()).expect("realtime config");
+    no_sentinel("RtConfig", &format!("{rt:?}"));
+    no_sentinel(
+        "Action::RtMessage",
+        &format!("{:?}", Action::RtMessage(message_with_body())),
+    );
+    let frame = crate::realtime::ddp::parse(&format!(
+        "{{\"msg\":\"changed\",\"collection\":\"c\",\"fields\":{{\"eventName\":\"e\",\"args\":[{{\"msg\":\"{BODY}\"}}]}}}}"
+    ))
+    .expect("a frame");
+    no_sentinel("ServerFrame", &format!("{frame:?}"));
+
     // Effects and actions.
     let effect = Effect::LoadHistory {
         room: RoomId("r-general".to_string()),

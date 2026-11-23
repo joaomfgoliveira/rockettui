@@ -7,6 +7,7 @@ pub mod command;
 pub mod history;
 pub mod input_buf;
 pub mod messages;
+pub mod realtime;
 pub mod send;
 pub mod sidebar;
 pub mod update;
@@ -51,6 +52,19 @@ pub enum ConnState {
     Connecting,
     Ready,
     Failed(crate::api::ApiError),
+}
+
+/// The realtime connection, shown in the status line. `Off` until the first connection is made.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RtState {
+    /// No realtime connection yet (or none wanted): nothing is shown.
+    #[default]
+    Off,
+    Live,
+    /// The connection dropped and the task is retrying.
+    Reconnecting,
+    /// The server rejected the login: no retry until `:reconnect`.
+    Unavailable,
 }
 
 /// A one-line message for the status bar. No `Debug`: an error can echo the typed command line.
@@ -129,6 +143,13 @@ pub struct App {
     pub effects: Vec<crate::effect::Effect>,
     /// The state of the room load, for the status bar.
     pub conn: ConnState,
+    /// The realtime connection, for the status bar.
+    pub rt: RtState,
+    /// Set by `:reconnect`; only `run()` reads and clears it, and then restarts the realtime task.
+    pub restart_realtime: bool,
+    /// Loaded rooms that may have missed messages during an outage: reopening one refetches its
+    /// newest page and merges it by id (see `app::realtime`).
+    pub stale: std::collections::HashSet<RoomId>,
     /// Runtime warnings from the config (D-04), drawn on the status row on every frame. Unlike
     /// `status_msg` they are never cleared by a key press (Pattern 6). Empty for `App::new`.
     pub warnings: Vec<String>,
@@ -176,6 +197,9 @@ impl App {
             quit_warned: false,
             effects: Vec::new(),
             conn: ConnState::Idle,
+            rt: RtState::Off,
+            restart_realtime: false,
+            stale: std::collections::HashSet::new(),
             warnings: config.warnings,
         }
     }

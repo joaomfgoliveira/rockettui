@@ -289,7 +289,9 @@ def start_mock(mode="ok"):
     """Start a mock Rocket.Chat on 127.0.0.1 with an ephemeral port, in a daemon thread.
 
     Returns the server: `base_url` is `http://127.0.0.1:<port>` and `requests` is a list of
-    `(method, path, query_dict, authed_bool)`, one per request received (any method). GET and
+    `(method, path, query_dict, authed_bool)`, one per request received (any method) except the
+    WebSocket upgrade of the realtime task (`GET /websocket`), which is answered 404 and only
+    counted in `ws_attempts`. GET and
     POST chat.sendMessage are served; every other method gets 405 (and is recorded). A request
     without the right X-User-Id and X-Auth-Token gets 401, whatever the method. The server is shut
     down at exit.
@@ -327,6 +329,13 @@ def start_mock(mode="ok"):
                 self.headers.get("X-User-Id") == MOCK_USER_ID
                 and self.headers.get("X-Auth-Token") == MOCK_TOKEN
             )
+            if parsed.path == "/websocket":
+                # The realtime connection (realtime-ddp): its upgrade request carries no
+                # credential header by design (the token travels in the DDP login frame), and
+                # this mock has no WebSocket, so it is refused and kept out of `requests`.
+                self.server.ws_attempts += 1
+                self.reply(404, {"success": False})
+                return
             self.server.requests.append((self.command, parsed.path, query, authed))
             body = None
             if self.command == "POST":
@@ -364,6 +373,7 @@ def start_mock(mode="ok"):
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.requests = []
+    server.ws_attempts = 0
     server.bodies = []
     server.stored = {}
     server.fail_next = []
@@ -1420,6 +1430,296 @@ def scenario_docker_send(binary):
         raise SmokeFail("the token appears in the terminal output (second run)")
 
 
+# ---------------------------------------------------------------- realtime (realtime-ddp)
+
+import socket
+import urllib.error
+import urllib.request
+
+
+def rc_call(base, method, path, body=None, auth=None):
+    """One REST call to the local Rocket.Chat. Returns the decoded JSON body, or None on failure.
+    Only loopback servers are ever passed in (see `docker_env`)."""
+    headers = {"Content-Type": "application/json"}
+    if auth is not None:
+        headers["X-User-Id"], headers["X-Auth-Token"] = auth
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def read_env_file(path):
+    values = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle.read().splitlines():
+                key, sep, value = line.partition("=")
+                if sep:
+                    values[key.strip()] = value.strip().strip("\"'")
+    except OSError:
+        raise SmokeFail("docker stack not seeded: run dev/seed.py up and seed") from None
+    return values
+
+
+class Seeded:
+    """The seeded stack seen from the test harness: the dev PAT (the app's account) and a REST
+    login of `alice`, the other person who posts. Secrets are kept in memory and never printed."""
+
+    def __init__(self, project, base_override=None):
+        self.env = docker_env(project)
+        self.base = self.env["ROCKETTUI_SERVER_URL"].rstrip("/")
+        self.dev = (self.env["ROCKETTUI_USER_ID"], self.env["ROCKETTUI_TOKEN"])
+        admin = read_env_file(os.path.join(REPO, "dev", "state", project, ".env.admin.local"))
+        reply = rc_call(self.base, "POST", "/api/v1/login", {"user": "alice", "password": admin.get("ALICE_PASS", "")})
+        data = (reply or {}).get("data") or {}
+        if "authToken" not in data:
+            raise SmokeFail("could not log in as alice")
+        self.alice = (data["userId"], data["authToken"])
+        self.secrets = [self.dev[1], self.alice[1], admin.get("ALICE_PASS", "")]
+
+    def room_id(self, name, kind):
+        """The id of the seeded room: `kind` is channels, groups or dm."""
+        if kind == "dm":
+            reply = rc_call(self.base, "POST", "/api/v1/im.create", {"username": "alice"}, self.dev)
+            rid = ((reply or {}).get("room") or {}).get("_id")
+        else:
+            key = "channel" if kind == "channels" else "group"
+            reply = rc_call(self.base, "GET", f"/api/v1/{kind}.info?roomName={name}", None, self.dev)
+            rid = ((reply or {}).get(key) or {}).get("_id")
+        if not rid:
+            raise SmokeFail(f"could not resolve the seeded room {name!r}")
+        return rid
+
+    def post_as_alice(self, rid, text):
+        reply = rc_call(self.base, "POST", "/api/v1/chat.postMessage", {"roomId": rid, "text": text}, self.alice)
+        if not (reply or {}).get("success"):
+            raise SmokeFail("alice's post was refused")
+
+    def mark_read(self, rid):
+        rc_call(self.base, "POST", "/api/v1/subscriptions.read", {"rid": rid}, self.dev)
+
+
+class Proxy:
+    """A loopback TCP forwarder in front of the server, so a scenario can cut the app's connection
+    (the WebSocket and every REST call) while the harness keeps posting straight to the server.
+    `sever` closes every open pipe and the listening socket; `restore` listens again on the same port."""
+
+    def __init__(self, target_port):
+        self.target = ("127.0.0.1", target_port)
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        self.port = probe.getsockname()[1]
+        probe.close()
+        self.pipes = []
+        self.lock = threading.Lock()
+        self.listener = None
+        self.restore()
+
+    def restore(self):
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", self.port))
+        listener.listen(16)
+        self.listener = listener
+        threading.Thread(target=self._accept, args=(listener,), daemon=True).start()
+
+    def _accept(self, listener):
+        while True:
+            try:
+                client, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                upstream = socket.create_connection(self.target, timeout=10)
+            except OSError:
+                client.close()
+                continue
+            with self.lock:
+                self.pipes.extend([client, upstream])
+            for src, dst in ((client, upstream), (upstream, client)):
+                threading.Thread(target=self._pump, args=(src, dst), daemon=True).start()
+
+    @staticmethod
+    def _pump(src, dst):
+        try:
+            while True:
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except OSError:
+            pass
+        for sock in (src, dst):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+    def sever(self):
+        if self.listener is not None:
+            self.listener.close()
+            self.listener = None
+        with self.lock:
+            pipes, self.pipes = self.pipes, []
+        for sock in pipes:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+
+def rows_with(buf, text):
+    return [row for row in screen_of(buf).rows() if text in row]
+
+
+def finish_clean(pid, fd, buf, secrets_in_output, texts, label):
+    """Quit with `:q` and check the run: exit code 0, no secret anywhere in the output, and none of
+    the message `texts` after the app left the alternate screen (they are on the TUI screen by
+    design, but must never reach the normal screen, a log or stderr)."""
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b":q")
+    type_keys(fd, buf, b"\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"{label}: exit code {code}, expected 0")
+    raw = bytes(buf)
+    for secret in secrets_in_output:
+        if secret and secret.encode() in raw:
+            raise SmokeFail(f"{label}: a secret appears in the terminal output")
+    tail = raw[raw.rfind(ALT_OFF) :] if ALT_OFF in raw else b""
+    for text in texts:
+        if text.encode() in tail:
+            raise SmokeFail(f"{label}: message text appears outside the alternate screen")
+
+
+def scenario_docker_realtime(binary):
+    """Live messages and unread flags against the real local Rocket.Chat: a message alice posts in
+    the open room appears without a command, a post in the DM raises its unread flag, and the echo
+    of the app's own send shows once. Posts go to rt-private and the alice DM only; the DM and
+    rt-private are marked read through the REST API first so the flags start clean."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    private = stack.room_id("rt-private", "groups")
+    dm = stack.room_id("alice", "dm")
+    stack.mark_read(private)
+    stack.mark_read(dm)
+    tag = secrets.token_hex(3)
+    live_text, dm_text, own_text = f"rl-{tag}-a", f"rl-{tag}-b", f"rl-{tag}-c"
+
+    pid, fd = spawn(binary, extra_env=stack.env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-private")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("rt-private history never settled")
+    # The connection is made after the rooms load; give the login and subscriptions a moment.
+    time.sleep(2.0)
+
+    stack.post_as_alice(private, live_text)
+    if not read_until(fd, buf, lambda b: rows_with(b, live_text), 10):
+        raise SmokeFail("alice's message never appeared live in the open room")
+
+    stack.post_as_alice(dm, dm_text)
+
+    def dm_flagged(b):
+        rows = sidebar_rows(screen_of(b))
+        return any(room_name_of(r) == "alice" and r.strip().startswith("*") for r in rows)
+
+    if not read_until(fd, buf, dm_flagged, 10):
+        raise SmokeFail("the DM did not get its unread flag live")
+    # The server follows a message with a second subscription update that has no unread keys; the
+    # flag must survive it.
+    read_until(fd, buf, lambda b: False, 1.5)
+    if not dm_flagged(buf):
+        raise SmokeFail("the DM's unread flag was cleared again by a later update")
+
+    type_keys(fd, buf, b"i")
+    type_keys(fd, buf, own_text.encode())
+    type_keys(fd, buf, b"\r")
+    wait_confirmed(fd, buf, own_text, timeout=15)
+    read_until(fd, buf, lambda b: False, 1.5)  # let the echo arrive
+    if len(rows_with(buf, own_text)) != 1:
+        raise SmokeFail("the echo of the app's own send was shown more than once")
+    if len(rows_with(buf, live_text)) != 1:
+        raise SmokeFail("the live message is shown more than once")
+    finish_clean(pid, fd, buf, stack.secrets, [live_text, dm_text, own_text], "docker_realtime")
+
+
+def scenario_docker_reconnect(binary):
+    """Reconnect and gap recovery against the real local Rocket.Chat. The app talks to the server
+    through a `Proxy`. With rt-private open and the alice DM loaded, the proxy cuts every
+    connection and refuses new ones; alice posts straight to the server (3 messages in rt-private,
+    more than a page in the DM); the proxy comes back. The open room must catch up without
+    duplicates, and the DM, stale, must refetch when opened and show its newest message once."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    private = stack.room_id("rt-private", "groups")
+    dm = stack.room_id("alice", "dm")
+    port = urllib.parse.urlsplit(stack.base).port
+    proxy = Proxy(port)
+    env = dict(stack.env)
+    env["ROCKETTUI_SERVER_URL"] = f"http://127.0.0.1:{proxy.port}"
+    tag = secrets.token_hex(3)
+    private_texts = [f"rg-{tag}-p{i}" for i in range(3)]
+    dm_count = 55  # more than the default history_size of 50
+    dm_texts = [f"rg-{tag}-d{i:02d}" for i in range(dm_count)]
+
+    pid, fd = spawn(binary, extra_env=env)
+    buf = bytearray()
+    try:
+        wait_ready(fd, buf, room=b"rt-public", timeout=20)
+        open_room_named(fd, buf, "alice")
+        if not read_until(fd, buf, history_settled, 10):
+            raise SmokeFail("the alice DM history never settled")
+        open_room_named(fd, buf, "rt-private")
+        if not read_until(fd, buf, history_settled, 10):
+            raise SmokeFail("rt-private history never settled")
+        time.sleep(2.0)  # connection live
+
+        proxy.sever()
+        if not read_until(fd, buf, lambda b: "Reconnecting" in screen_of(b).rows()[22], 15):
+            raise SmokeFail("the status line never showed that the app is reconnecting")
+        for text in private_texts:
+            stack.post_as_alice(private, text)
+        for text in dm_texts:
+            stack.post_as_alice(dm, text)
+        proxy.restore()
+
+        gone = lambda b: "Reconnecting" not in screen_of(b).rows()[22]
+        if not read_until(fd, buf, gone, 60):
+            raise SmokeFail("the reconnecting status never cleared")
+        if not read_until(fd, buf, lambda b: all(rows_with(b, t) for t in private_texts), 15):
+            raise SmokeFail("the open room did not catch up after the reconnect")
+        read_until(fd, buf, lambda b: False, 1.0)
+        for text in private_texts:
+            if len(rows_with(buf, text)) != 1:
+                raise SmokeFail("a caught-up message is shown more than once")
+
+        open_room_named(fd, buf, "alice")
+        newest = dm_texts[-1]
+        if not read_until(fd, buf, lambda b: rows_with(b, newest), 15):
+            raise SmokeFail("the stale DM did not show its newest message after opening")
+        read_until(fd, buf, lambda b: False, 1.0)
+        if len(rows_with(buf, newest)) != 1:
+            raise SmokeFail("the newest message of the stale DM is shown more than once")
+        finish_clean(pid, fd, buf, stack.secrets, private_texts + dm_texts, "docker_reconnect")
+    finally:
+        proxy.sever()
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -1439,6 +1739,8 @@ SCENARIOS = {
     "unauthorized": scenario_unauthorized,
     "docker_read": scenario_docker_read,
     "docker_send": scenario_docker_send,
+    "docker_realtime": scenario_docker_realtime,
+    "docker_reconnect": scenario_docker_reconnect,
 }
 
 

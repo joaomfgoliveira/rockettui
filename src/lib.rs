@@ -9,6 +9,7 @@ pub mod data;
 pub mod effect;
 pub mod event;
 pub mod input;
+pub mod realtime;
 pub mod tui;
 pub mod ui;
 
@@ -98,6 +99,15 @@ pub async fn run(
         Some(connection) => api::Client::new(connection),
         None => Err(api::ApiError::Client),
     };
+    // The realtime task gets its own copy of the credentials; `App` never holds them.
+    let mut realtime = realtime::Supervisor::new(
+        config
+            .connection
+            .as_ref()
+            .and_then(realtime::RtConfig::from_connection),
+        tx.clone(),
+        realtime::Timing::default(),
+    );
     let mut app = App::with_config(terminal.size()?, config);
     // The binary shows local time (RESEARCH A2, confirmed by the author on 2026-11-16). `App::new`
     // and the tests stay on UTC, and the reducer still never reads a clock or a zone.
@@ -126,6 +136,8 @@ pub async fn run(
         for effect in app.effects.drain(..) {
             effect::spawn(client.clone(), tx.clone(), effect);
         }
+        // After the rooms load, and again on `:reconnect`.
+        realtime.sync(&mut app);
         if saw_key {
             key_deadline = app
                 .keys_pending()

@@ -5,7 +5,8 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, history, send, sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, history, realtime, send,
+    sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -72,6 +73,11 @@ pub fn update(app: &mut App, action: Action) {
         }
         Action::MessageSent { room, id, message } => send::on_sent(app, room, id, message),
         Action::SendFailed { room, id, error } => send::on_failed(app, room, id, error),
+        Action::RtConnected => realtime::on_connected(app),
+        Action::RtDisconnected => realtime::on_disconnected(app),
+        Action::RtRejected => realtime::on_rejected(app),
+        Action::RtMessage(message) => realtime::on_message(app, message),
+        Action::RtSubscription { room, unread } => realtime::on_subscription(app, &room, unread),
         Action::Resize(w, h) => {
             app.size = Size::new(w, h);
         }

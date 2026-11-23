@@ -100,6 +100,21 @@ pub enum Action {
         id: String,
         error: crate::api::ApiError,
     },
+    /// The realtime connection is live (logged in and subscribed). Produced only by the realtime
+    /// task. The reducer decides from `App.rt_seen_live` whether it is a reconnect.
+    RtConnected,
+    /// The realtime connection dropped and the task is about to retry.
+    RtDisconnected,
+    /// The server rejected the realtime login; the task stops retrying until `:reconnect`.
+    RtRejected,
+    /// A new message arrived on the realtime stream, already mapped (sanitizing and the
+    /// encrypted-message rule included). Its `Debug` never prints the body.
+    RtMessage(Message),
+    /// The server reported a change to the user's subscription to `room`: whether it is unread.
+    RtSubscription {
+        room: RoomId,
+        unread: bool,
+    },
     /// The pending key sequence timed out; produced by the run loop's deadline, never by a key.
     KeyTimeout,
     /// An action with a typed count prefix (`5j`), produced by the reducer from the matcher.
@@ -200,6 +215,13 @@ impl std::fmt::Debug for Action {
             Action::MessageSent { room, id, .. } => write!(f, "MessageSent({room:?}, {id})"),
             Action::SendFailed { room, id, error } => {
                 write!(f, "SendFailed({room:?}, {id}, {error:?})")
+            }
+            Action::RtConnected => write!(f, "RtConnected"),
+            Action::RtDisconnected => write!(f, "RtDisconnected"),
+            Action::RtRejected => write!(f, "RtRejected"),
+            Action::RtMessage(message) => write!(f, "RtMessage({message:?})"),
+            Action::RtSubscription { room, unread } => {
+                write!(f, "RtSubscription({room:?}, unread={unread})")
             }
             Action::KeyTimeout => write!(f, "KeyTimeout"),
             Action::Counted(n, inner) => write!(f, "Counted({n}, {inner:?})"),

@@ -48,11 +48,17 @@ pub fn on_open(app: &mut App, id: &RoomId) {
     if room.encrypted {
         return;
     }
-    if matches!(
-        app.history.get(id),
-        Some(HistoryState::Loading | HistoryState::Loaded { .. })
-    ) {
-        return;
+    match app.history.get(id) {
+        // A loaded room that missed messages during a realtime outage refetches its newest page
+        // once; the page is merged by id and the room stays Loaded (see `on_refetched`).
+        Some(HistoryState::Loaded { .. }) => {
+            if app.stale.remove(id) {
+                refetch_newest(app, id);
+            }
+            return;
+        }
+        Some(HistoryState::Loading) => return,
+        Some(HistoryState::Failed) | None => {}
     }
     let effect = Effect::LoadHistory {
         room: room.id.clone(),
@@ -62,6 +68,26 @@ pub fn on_open(app: &mut App, id: &RoomId) {
         before: None,
     };
     app.history.insert(id.clone(), HistoryState::Loading);
+    app.effects.push(effect);
+}
+
+/// Record one request for the newest page of the loaded room `id`, without changing its state: the
+/// answer arrives as a first-page `HistoryLoaded` for a room that is already Loaded, which
+/// `on_loaded` merges by id. An unknown or encrypted room does nothing.
+pub fn refetch_newest(app: &mut App, id: &RoomId) {
+    let Some(room) = app.rooms.iter().find(|r| &r.id == id) else {
+        return;
+    };
+    if room.encrypted {
+        return;
+    }
+    let effect = Effect::LoadHistory {
+        room: room.id.clone(),
+        kind: room.kind,
+        private: room.private,
+        count: app.settings.history_size,
+        before: None,
+    };
     app.effects.push(effect);
 }
 
@@ -151,6 +177,12 @@ pub fn on_loaded(
         on_older_page(app, room, page, oldest_ts);
         return;
     }
+    // A first page for a room that is already Loaded is the answer to a refetch after a realtime
+    // outage: merge it by id instead of treating it as the room's first page.
+    if matches!(app.history.get(&room), Some(HistoryState::Loaded { .. })) {
+        on_refetched(app, room, page, oldest_ts);
+        return;
+    }
 
     let exhausted = page.is_empty();
     let mut merged: Vec<Message> = page
@@ -174,6 +206,85 @@ pub fn on_loaded(
             loading_older: false,
         },
     );
+}
+
+/// The newest page of an already Loaded room (`page` oldest first), after a realtime outage.
+///
+/// When the page shares a message id with what the room holds (or the room holds no server message
+/// at all), each message it brings that the room lacks is inserted by time, held ids follow D-21
+/// through `messages::confirm_held`, and a stored view keeps the same message at the same screen
+/// row. When it shares none, the gap is larger than one page and merging cannot repair it: the
+/// room is reloaded from this page instead (messages newer than the page and unsent messages are
+/// kept) and shows its newest message again, so no hole is left.
+fn on_refetched(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Option<String>) {
+    let Some(newest) = page.last().map(|m| m.ts) else {
+        return;
+    };
+    let overlaps = app.messages.get(&room).is_none_or(|held| {
+        !held.iter().any(|m| !m.send.is_unsent())
+            || page.iter().any(|p| held.iter().any(|m| m.id == p.id))
+    });
+    if !overlaps {
+        let held = app.messages.remove(&room).unwrap_or_default();
+        let mut reloaded = page;
+        reloaded.extend(
+            held.into_iter()
+                .filter(|m| m.send.is_unsent() || m.ts > newest),
+        );
+        app.messages.insert(room.clone(), reloaded);
+        app.msg_views.remove(&room);
+        app.history.insert(
+            room,
+            HistoryState::Loaded {
+                oldest_ts,
+                exhausted: false,
+                loading_older: false,
+            },
+        );
+        return;
+    }
+
+    // The cursor message and its row inside the window, read before anything moves.
+    let anchor = app.msg_views.contains_key(&room).then(|| {
+        let view = messages::view(app, &room);
+        let starts = messages::row_starts(app, &room);
+        let id = app.messages[&room][view.cursor].id.clone();
+        (id, starts[view.cursor] as isize - view.top_row as isize)
+    });
+    let mut seen: HashSet<String> = HashSet::new();
+    for message in page {
+        if !seen.insert(message.id.clone())
+            || messages::confirm_held(app, &room, &message).is_some()
+        {
+            continue;
+        }
+        let held = app.messages.entry(room.clone()).or_default();
+        let at = held
+            .iter()
+            .position(|m| m.ts > message.ts)
+            .unwrap_or(held.len());
+        held.insert(
+            at,
+            Message {
+                send: crate::data::SendState::Sent,
+                ..message
+            },
+        );
+    }
+    if let Some(HistoryState::Loaded {
+        oldest_ts: stored, ..
+    }) = app.history.get_mut(&room)
+        && stored.is_none()
+    {
+        *stored = oldest_ts;
+    }
+    if let Some((id, offset)) = anchor
+        && let Some(cursor) = app.messages[&room].iter().position(|m| m.id == id)
+    {
+        let starts = messages::row_starts(app, &room);
+        let top_row = (starts[cursor] as isize - offset).max(0) as usize;
+        app.msg_views.insert(room, MsgView { cursor, top_row });
+    }
 }
 
 /// The older-page branch of `on_loaded`: prepend what is not held yet (held ids follow D-21 through
@@ -237,6 +348,9 @@ pub fn on_failed(app: &mut App, room: RoomId, older: bool, error: ApiError) {
         if let Some(HistoryState::Loaded { loading_older, .. }) = app.history.get_mut(&room) {
             *loading_older = false;
         }
+    } else if matches!(app.history.get(&room), Some(HistoryState::Loaded { .. })) {
+        // A failed refetch of a Loaded room leaves it Loaded, with what it holds, and stale again.
+        app.stale.insert(room);
     } else {
         app.history.insert(room, HistoryState::Failed);
     }

@@ -1,6 +1,6 @@
 //! Table-driven `:` commands (D-16). Later phases add rows to `COMMANDS`.
 
-use crate::app::{App, ConnState, StatusMsg, history};
+use crate::app::{App, ConnState, RtState, StatusMsg, history};
 use crate::effect::Effect;
 
 pub struct CommandDef {
@@ -48,13 +48,18 @@ pub fn cmd_force_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
 /// `:reconnect` / `:retry` (D-06, D-16): load the rooms again, re-learn the own username (D-17) and
 /// retry every history page that failed. This and reopening a room are the only retries; the
 /// reducer never retries by itself, so a broken token cannot hammer the server. It never touches a
-/// pending, failed or unconfirmed send and sends nothing (D-08, as clarified by D-20). Realtime
-/// reconnect is Phase 5.
+/// pending, failed or unconfirmed send and sends nothing (D-08, as clarified by D-20). It also
+/// restarts the realtime connection (`App.restart_realtime`).
 pub fn cmd_reconnect(app: &mut App, _args: &[&str]) -> Result<(), String> {
     app.conn = ConnState::Connecting;
     app.effects.push(Effect::LoadRooms);
     app.effects.push(Effect::LoadMe);
     history::retry_failed(app);
+    // The realtime connection restarts too (`realtime-ddp`): its reconnect refetches the open room.
+    app.restart_realtime = true;
+    if app.rt == RtState::Unavailable {
+        app.rt = RtState::Reconnecting;
+    }
     Ok(())
 }
 

@@ -140,6 +140,11 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::HistoryFailed { .. }
         | Action::MessageSent { .. }
         | Action::SendFailed { .. }
+        | Action::RtConnected
+        | Action::RtDisconnected
+        | Action::RtRejected
+        | Action::RtMessage(_)
+        | Action::RtSubscription { .. }
         | Action::KeyTimeout
         | Action::Counted(..) => None,
     }
@@ -172,6 +177,13 @@ mod tests {
             Action::Paste("p".to_string()),
             Action::RunCommand("quit".to_string()),
             Action::KeyTimeout,
+            Action::RtConnected,
+            Action::RtDisconnected,
+            Action::RtRejected,
+            Action::RtSubscription {
+                room: crate::data::RoomId("r".to_string()),
+                unread: true,
+            },
             Action::Counted(2, Box::new(Action::MoveDown)),
         ] {
             assert_eq!(name_of(&action), None, "{action:?}");

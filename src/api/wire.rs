@@ -146,6 +146,8 @@ pub struct WireMsg {
     pub id: String,
     #[serde(default)]
     pub msg: String,
+    /// The room id: present on stream messages (history knows its room from the request).
+    pub rid: Option<String>,
     pub ts: ApiDate,
     pub u: WireUser,
     pub t: Option<String>,
@@ -167,6 +169,17 @@ pub struct WireFile {
 #[derive(Deserialize)]
 pub struct WireAttach {
     pub title: Option<String>,
+}
+
+/// The part of a subscription document of a `subscriptions-changed` stream event that the live
+/// unread flag needs. Everything else (names, settings) is not declared, so serde skips it.
+#[derive(Deserialize)]
+pub struct WireSubDoc {
+    pub rid: String,
+    /// Absent from updates that do not touch the unread state (measured on 8.9.1 and 9.0.0: a
+    /// message is followed by a second update that carries neither key).
+    pub alert: Option<bool>,
+    pub unread: Option<u32>,
 }
 
 #[derive(Deserialize)]
