@@ -1,0 +1,40 @@
+schema: spec-driven
+
+context: |
+  rockettui is a personal Rust learning project: a Rocket.Chat terminal client
+  (ratatui, Neovim-style modal keys) used daily against the author's company
+  self-hosted server. Prefer clarity and learning value over cleverness.
+  Constraints not visible in the code:
+  - Act only as a normal client with the user's own account. Auth is a
+    revocable Personal Access Token, never committed or logged.
+  - Never log or format message contents or the token (Debug/Display/errors).
+  - Confirm company policy allows third-party clients and PATs before pointing
+    at the company server.
+  - Develop against the local Docker Rocket.Chat (8.9.1 and 9.0.0) first.
+  - Architecture is Elm/TEA: one App state, one Action enum, one channel, one
+    reducer. Keymap action names and theme element names are user-facing
+    vocabulary; renaming them is a breaking change.
+  - Out of scope: E2EE rooms, file uploads, calls, admin features, mouse-first UX.
+  - Legacy GSD planning history is frozen in .planning/; do not extend it.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
