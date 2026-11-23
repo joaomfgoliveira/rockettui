@@ -583,6 +583,7 @@ mod tests {
             .expect("general")
             .push(crate::data::Message {
                 edited: false,
+                plain_text: true,
                 id: "long-author".to_string(),
                 room_id: general(),
                 author: "firstname.lastname.contractor.external".to_string(),
@@ -675,6 +676,7 @@ mod tests {
     fn server_copy(room: &RoomId, id: &str, body: &str) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: room.clone(),
             author: "smoke".to_string(),

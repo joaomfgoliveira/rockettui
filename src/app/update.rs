@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, history, realtime, send,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, history, realtime, send,
     sidebar,
 };
 use crate::input::key::normalize;
@@ -18,6 +18,11 @@ pub fn update(app: &mut App, action: Action) {
         Action::Key(ev) => {
             app.status_msg = None;
             let chord = normalize(ev);
+            // An open confirmation takes exactly this key, before any keymap lookup.
+            if let Some(confirm) = app.confirm.take() {
+                edit::on_confirm_key(app, confirm, chord);
+                return;
+            }
             let outcome = app.matcher.feed(app.keymap.trie(app.mode), app.mode, chord);
             dispatch(app, outcome);
         }
@@ -73,6 +78,10 @@ pub fn update(app: &mut App, action: Action) {
         }
         Action::MessageSent { room, id, message } => send::on_sent(app, room, id, message),
         Action::SendFailed { room, id, error } => send::on_failed(app, room, id, error),
+        Action::EditDone { room, id, message } => edit::on_edit_done(app, room, id, message),
+        Action::EditFailed { room, id, error } => edit::on_edit_failed(app, &room, &id, error),
+        Action::DeleteDone { room, id } => edit::on_delete_done(app, &room, &id),
+        Action::DeleteFailed { error, .. } => edit::on_delete_failed(app, error),
         Action::RtConnected => realtime::on_connected(app),
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),
@@ -128,6 +137,8 @@ pub fn update(app: &mut App, action: Action) {
             }
             // Esc and Ctrl-c leave Insert mode and never quit; the draft is kept (D-17).
             Mode::Insert => {
+                // Cancelling an edit puts the room's earlier draft back.
+                edit::cancel(app);
                 app.mode = Mode::Normal;
                 app.focus = app.prev_focus;
             }
@@ -168,9 +179,17 @@ pub fn update(app: &mut App, action: Action) {
         Action::CursorDown => edit_input(app, InputBuffer::down),
         Action::CursorHome => edit_input(app, InputBuffer::home),
         Action::CursorEnd => edit_input(app, InputBuffer::end),
-        Action::SubmitInput => send::submit(app),
+        Action::SubmitInput => {
+            if app.editing.is_some() {
+                edit::save(app);
+            } else {
+                send::submit(app);
+            }
+        }
         Action::RetrySend => send::retry(app),
         Action::DiscardSend => send::discard(app),
+        Action::EditMessage => edit::start(app),
+        Action::DeleteMessage => edit::delete(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -836,6 +855,7 @@ mod tests {
     fn row(room: &str, id: &str, author: &str, send: SendState) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: RoomId(room.to_string()),
             author: author.to_string(),

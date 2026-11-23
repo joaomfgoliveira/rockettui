@@ -7,8 +7,8 @@ use crate::api::{ApiError, Client};
 use crate::data::{RoomId, RoomKind};
 use tokio::sync::mpsc::Sender;
 
-/// The text of a message being sent, exactly as typed. Its `Debug` prints only the byte length, so
-/// the derived `Debug` of `Effect` can never print message text (D-14, T-04-01).
+/// The text of a message being sent or saved as an edit, exactly as typed. Its `Debug` prints only
+/// the byte length, so the derived `Debug` of `Effect` can never print message text (D-14, T-04-01).
 #[derive(Clone, PartialEq)]
 pub struct SendText(String);
 
@@ -57,6 +57,17 @@ pub enum Effect {
         text: SendText,
         reconcile: bool,
     },
+    /// Replace the text of message `id` of `room` with `POST chat.update`. Not a send: it uses no
+    /// queue and no `SendState`. Answers `Action::EditDone` or `Action::EditFailed`, addressed by
+    /// `room` and `id`.
+    EditMessage {
+        room: RoomId,
+        id: String,
+        text: SendText,
+    },
+    /// Delete message `id` of `room` with `POST chat.delete`. Answers `Action::DeleteDone` or
+    /// `Action::DeleteFailed`, addressed by `room` and `id`.
+    DeleteMessage { room: RoomId, id: String },
 }
 
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
@@ -75,6 +86,8 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     error,
                 },
                 Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
+                Effect::EditMessage { room, id, .. } => Action::EditFailed { room, id, error },
+                Effect::DeleteMessage { room, id } => Action::DeleteFailed { room, id, error },
             }];
         }
     };
@@ -135,6 +148,16 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 }
             }
         }
+        Effect::EditMessage { room, id, text } => {
+            match client.edit_message(&room, &id, text.as_str()).await {
+                Ok(message) => vec![Action::EditDone { room, id, message }],
+                Err(error) => vec![Action::EditFailed { room, id, error }],
+            }
+        }
+        Effect::DeleteMessage { room, id } => match client.delete_message(&room, &id).await {
+            Ok(()) => vec![Action::DeleteDone { room, id }],
+            Err(error) => vec![Action::DeleteFailed { room, id, error }],
+        },
     }
 }
 
@@ -494,6 +517,117 @@ mod tests {
         assert_eq!(seen(&server).await, [post_call()]);
     }
 
+    fn edit_effect() -> Effect {
+        Effect::EditMessage {
+            room: general(),
+            id: "m1".to_string(),
+            text: SendText::new(SENTINEL.to_string()),
+        }
+    }
+
+    fn delete_effect() -> Effect {
+        Effect::DeleteMessage {
+            room: general(),
+            id: "m1".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_message_actions() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.update"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(answer("m1", SENTINEL), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let actions = run(Ok(client_for(&server)), edit_effect()).await;
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        match &actions[0] {
+            Action::EditDone { room, id, message } => {
+                assert_eq!(*room, general());
+                assert_eq!(id, "m1");
+                assert_eq!(message.body, SENTINEL);
+            }
+            other => panic!("expected EditDone, got {other:?}"),
+        }
+
+        let server = MockServer::start().await;
+        mount_send_status(&server, 400).await;
+        assert_eq!(
+            run(Ok(client_for(&server)), edit_effect()).await,
+            [Action::EditFailed {
+                room: general(),
+                id: "m1".to_string(),
+                error: ApiError::Rejected,
+            }]
+        );
+        assert_eq!(
+            run(Err(ApiError::Client), edit_effect()).await,
+            [Action::EditFailed {
+                room: general(),
+                id: "m1".to_string(),
+                error: ApiError::Client,
+            }]
+        );
+        // Not a send: an edit never asks `chat.getMessage` and never posts a message.
+        let requests = server.received_requests().await.expect("recorded");
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.url.path() == "/api/v1/chat.update"),
+            "{requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_message_actions() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.delete"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw("{\"_id\":\"m1\",\"success\":true}", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            run(Ok(client_for(&server)), delete_effect()).await,
+            [Action::DeleteDone {
+                room: general(),
+                id: "m1".to_string(),
+            }]
+        );
+        let server = MockServer::start().await;
+        mount_send_status(&server, 400).await;
+        assert_eq!(
+            run(Ok(client_for(&server)), delete_effect()).await,
+            [Action::DeleteFailed {
+                room: general(),
+                id: "m1".to_string(),
+                error: ApiError::Rejected,
+            }]
+        );
+        assert_eq!(
+            run(Err(ApiError::Client), delete_effect()).await,
+            [Action::DeleteFailed {
+                room: general(),
+                id: "m1".to_string(),
+                error: ApiError::Client,
+            }]
+        );
+    }
+
+    #[test]
+    fn edit_effect_debug_redacts() {
+        let shown = format!("{:?}", edit_effect());
+        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert!(shown.contains("m1"), "{shown}");
+    }
+
     #[test]
     fn send_text_debug_redacts() {
         let text = SendText::new(SENTINEL.to_string());
@@ -514,6 +648,7 @@ mod tests {
 
         let pending = Message {
             edited: false,
+            plain_text: true,
             id: "rt-test-1".to_string(),
             room_id: general(),
             author: "me".to_string(),

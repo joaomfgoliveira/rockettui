@@ -6,7 +6,10 @@
 //! vocabulary: renaming one breaks a user's `keymap.toml`.
 //!
 //! `retry_send` and `discard_send` are user-facing vocabulary too (D-06): they act on a failed or
-//! unconfirmed message under the messages-pane cursor, bound by default to `r` and `dd`.
+//! unconfirmed message under the messages-pane cursor, bound by default to `r` (retry). `edit_message`
+//! and `delete_message` act on the user's own server messages: `e` and `dd` by default.
+//! `delete_message` also discards a failed or unconfirmed local row, so `dd` keeps that meaning;
+//! `discard_send` remains a name that only discards.
 
 use crate::action::Action;
 
@@ -43,6 +46,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "submit_input",
     "retry_send",
     "discard_send",
+    "edit_message",
+    "delete_message",
     "execute_command",
     "quit",
 ];
@@ -81,6 +86,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "submit_input" => Action::SubmitInput,
         "retry_send" => Action::RetrySend,
         "discard_send" => Action::DiscardSend,
+        "edit_message" => Action::EditMessage,
+        "delete_message" => Action::DeleteMessage,
         "execute_command" => Action::ExecuteCommand,
         "quit" => Action::Quit,
         _ => return None,
@@ -122,6 +129,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::SubmitInput => Some("submit_input"),
         Action::RetrySend => Some("retry_send"),
         Action::DiscardSend => Some("discard_send"),
+        Action::EditMessage => Some("edit_message"),
+        Action::DeleteMessage => Some("delete_message"),
         Action::ExecuteCommand => Some("execute_command"),
         Action::Quit => Some("quit"),
         // `cmd:<command>` is a form of the value, not a name of its own.
@@ -140,6 +149,10 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::HistoryFailed { .. }
         | Action::MessageSent { .. }
         | Action::SendFailed { .. }
+        | Action::EditDone { .. }
+        | Action::EditFailed { .. }
+        | Action::DeleteDone { .. }
+        | Action::DeleteFailed { .. }
         | Action::RtConnected
         | Action::RtDisconnected
         | Action::RtRejected
@@ -178,6 +191,25 @@ mod tests {
             Action::Paste("p".to_string()),
             Action::RunCommand("quit".to_string()),
             Action::KeyTimeout,
+            Action::EditDone {
+                room: crate::data::RoomId("r".to_string()),
+                id: "m".to_string(),
+                message: crate::test_util::sample_message("m"),
+            },
+            Action::EditFailed {
+                room: crate::data::RoomId("r".to_string()),
+                id: "m".to_string(),
+                error: crate::api::ApiError::Rejected,
+            },
+            Action::DeleteDone {
+                room: crate::data::RoomId("r".to_string()),
+                id: "m".to_string(),
+            },
+            Action::DeleteFailed {
+                room: crate::data::RoomId("r".to_string()),
+                id: "m".to_string(),
+                error: crate::api::ApiError::Rejected,
+            },
             Action::RtConnected,
             Action::RtDisconnected,
             Action::RtRejected,

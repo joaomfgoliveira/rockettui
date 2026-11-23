@@ -188,6 +188,64 @@ RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui
 | 8.9.1 | pass | `docker_edits` and `docker_reconnect` give `SMOKE OK`; the whole harness (21 scenarios) passes |
 | 9.0.0 | pass | `docker_read`, `docker_send`, `docker_realtime`, `docker_reconnect` and `docker_edits` give `SMOKE OK`; no difference from 8.9.1, no client change needed |
 
+## Probe the edit and delete contract
+
+`dev/probe_edit.py` is the Wave 0 probe of `edit-delete-own-messages`. It asks the local server how
+`chat.update` and `chat.delete` behave for the app user, so the client's error mapping is built on
+measured answers. It reads the PAT and the admin password from the state directory in-process and
+refuses a server that is not on loopback. It takes about 90 s: the time-limit probe waits until its
+message is older than a minute.
+
+```sh
+python3 -I dev/probe_edit.py                                # 8.9.1
+RT_PROJECT=rockettui-dev9 python3 -I dev/probe_edit.py      # 9.0.0
+```
+
+| Probe | What it asks |
+|-------|--------------|
+| E1 / E1s | an own edit: status, answer keys, `editedAt` present; and whether the edit comes back on the `stream-room-messages` stream |
+| E2 / E2s | an own delete: status, answer keys; and whether it comes back on the `stream-notify-room` delete stream |
+| E3a / E3b | an edit and a delete of an unknown message id |
+| E4a to E4c | an edit and a delete of another user's message (the room owner's), and whether it is untouched |
+| E5a to E5c | `Message_AllowEditing` off, then `Message_AllowDeleting` off, on a fresh own message |
+| E6a / E6b | `Message_AllowEditing_BlockEditInMinutes` and `Message_AllowDeleting_BlockDeleteInMinutes` set to 1 on a message older than a minute |
+
+Output rule as for the other probes: only statuses, key names, yes/no flags, the server's
+`errorType` code and closed error classes. The four settings are read first and restored in a
+`finally` (`settings restored=4/4`); the one room it creates is deleted (`cleanup deleted=1/1`).
+The last line is `PROBE OK` only when the own edit and delete answered 200, the settings are back
+and the room is gone. The measured answers are recorded in the change's `design.md` (Decision 7).
+
+Editing and deleting your own messages (`edit-delete-own-messages`), checked on 2026-11-23 on both
+servers:
+
+```sh
+python3 -I scripts/smoke_pty.py target/debug/rockettui docker_edit_own                       # 8.9.1
+python3 -I scripts/smoke_pty.py target/debug/rockettui docker_delete_own                     # 8.9.1
+RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui docker_edit_own      # 9.0.0
+RT_PROJECT=rockettui-dev9 python3 -I scripts/smoke_pty.py target/debug/rockettui docker_delete_own    # 9.0.0
+```
+
+- `docker_edit_own`: `dev` posts a message in `rt-private`. `e` puts its text in the input bar in
+  Insert mode and the input title says that Enter saves and Esc cancels; `Esc` restores a half-typed
+  draft; a changed text saves, and the row shows the new text and `(edited)` in the same screen row,
+  once, with the server holding the new text and the draft back in the input. In a second room where
+  `dev` is a plain member, `Message_AllowEditing` is switched off as `admin` (restored in a
+  `finally`) and a save shows `edit not saved: ...`, keeps the typed text in the input and leaves the
+  server text alone.
+- `docker_delete_own`: `dd` on an own message opens the prompt in the status bar; `j` closes it and
+  deletes nothing; `dd` then `y` turns the row into `dev  message deleted` in the same row and the
+  server no longer holds the message. `e` and `dd` on a message written by `alice` change nothing
+  (the mode, the screen and the server text are the same afterwards). In the plain-member room,
+  `Message_AllowDeleting` is switched off, and a confirmed delete shows `message not deleted: ...`
+  and the message stays.
+- Version difference: none between 8.9.1 and 9.0.0. The refusals need a room where the app user is
+  not an owner: `dev` owns `rt-private` and `rt-public`, and an owner's delete is accepted with
+  `Message_AllowDeleting` off, so both scenarios create a throwaway public channel as `admin` with
+  `dev` as a plain member (named `rt-eo-*` and `rt-do-*`) and delete it in a `finally`.
+- Both end with `finish_clean`: no token or secret in the terminal output, and none of the texts
+  after the app leaves the alternate screen.
+
 ## Second stack: Rocket.Chat 9.0.0
 
 A fully independent stack (own project, state directory and volume) for the compatibility pass:

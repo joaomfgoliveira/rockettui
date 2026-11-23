@@ -28,7 +28,12 @@ pub fn cursor_position(app: &App, area: Rect) -> Option<Position> {
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = pane_block(" Input ", app.focus == Focus::Input, &app.theme);
+    let title = if app.editing.is_some() {
+        " Editing: Enter saves, Esc cancels "
+    } else {
+        " Input "
+    };
+    let block = pane_block(title, app.focus == Focus::Input, &app.theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

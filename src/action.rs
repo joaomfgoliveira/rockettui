@@ -53,6 +53,15 @@ pub enum Action {
     /// room: remove it from the room (D-06). Anything else is a silent no-op. Not a motion, so a
     /// count repeats it, each repetition re-reading the cursor message.
     DiscardSend,
+    /// Normal mode, messages pane focused, cursor on one of the user's own plain-text server
+    /// messages (see `app::edit::editable`): load its text into the input and start editing it.
+    /// Anything else is a silent no-op.
+    EditMessage,
+    /// Normal mode, messages pane focused: on a `Failed` or `Unconfirmed` local row discard it
+    /// (like `DiscardSend`); on one of the user's own server messages open the confirmation
+    /// prompt of a delete. Anything else is a silent no-op. Not a motion, so a count repeats it,
+    /// but an open prompt is never opened twice.
+    DeleteMessage,
     ExecuteCommand,
     Quit,
     /// A `:` command line bound in keymap.toml as `cmd:<command>`; produced only by the keymap.
@@ -96,6 +105,30 @@ pub enum Action {
     /// A send failed; the error is a fixed kind with no payload text. Applied by `room` and `id`
     /// like `MessageSent`.
     SendFailed {
+        room: RoomId,
+        id: String,
+        error: crate::api::ApiError,
+    },
+    /// The server accepted an edit of message `id` of `room` and answered with the stored copy.
+    /// Applied by `room` and `id`, never by the current room.
+    EditDone {
+        room: RoomId,
+        id: String,
+        message: Message,
+    },
+    /// An edit failed; the error is a fixed kind with no payload text.
+    EditFailed {
+        room: RoomId,
+        id: String,
+        error: crate::api::ApiError,
+    },
+    /// The server accepted the delete of message `id` of `room`.
+    DeleteDone {
+        room: RoomId,
+        id: String,
+    },
+    /// A delete failed; the error is a fixed kind with no payload text.
+    DeleteFailed {
         room: RoomId,
         id: String,
         error: crate::api::ApiError,
@@ -183,6 +216,8 @@ impl std::fmt::Debug for Action {
             Action::SubmitInput => write!(f, "SubmitInput"),
             Action::RetrySend => write!(f, "RetrySend"),
             Action::DiscardSend => write!(f, "DiscardSend"),
+            Action::EditMessage => write!(f, "EditMessage"),
+            Action::DeleteMessage => write!(f, "DeleteMessage"),
             Action::ExecuteCommand => write!(f, "ExecuteCommand"),
             Action::Quit => write!(f, "Quit"),
             Action::RunCommand(_) => write!(f, "RunCommand(..)"),
@@ -222,6 +257,14 @@ impl std::fmt::Debug for Action {
             Action::SendFailed { room, id, error } => {
                 write!(f, "SendFailed({room:?}, {id}, {error:?})")
             }
+            Action::EditDone { room, id, .. } => write!(f, "EditDone({room:?}, {id})"),
+            Action::EditFailed { room, id, error } => {
+                write!(f, "EditFailed({room:?}, {id}, {error:?})")
+            }
+            Action::DeleteDone { room, id } => write!(f, "DeleteDone({room:?}, {id})"),
+            Action::DeleteFailed { room, id, error } => {
+                write!(f, "DeleteFailed({room:?}, {id}, {error:?})")
+            }
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),
@@ -257,6 +300,7 @@ mod tests {
 
         let message = Message {
             edited: false,
+            plain_text: true,
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "alice".to_string(),
@@ -293,6 +337,7 @@ mod tests {
             room: RoomId("r-general".to_string()),
             messages: vec![Message {
                 edited: false,
+                plain_text: true,
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "alice".to_string(),
@@ -329,6 +374,7 @@ mod tests {
             id: "rt-test-1".to_string(),
             message: Message {
                 edited: false,
+                plain_text: true,
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "smoke".to_string(),

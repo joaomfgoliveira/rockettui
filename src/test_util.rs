@@ -94,3 +94,30 @@ pub(crate) fn app_with_config(config: Config, w: u16, h: u16) -> App {
     }
     app
 }
+
+/// A plain `Sent` message of room `r-general` by `alice`, for tests that need some message.
+pub(crate) fn sample_message(id: &str) -> crate::data::Message {
+    crate::data::Message {
+        id: id.to_string(),
+        room_id: crate::data::RoomId("r-general".to_string()),
+        author: "alice".to_string(),
+        ts: 0,
+        body: "sample".to_string(),
+        kind: crate::data::MessageKind::Normal,
+        send: crate::data::SendState::Sent,
+        edited: false,
+        plain_text: true,
+    }
+}
+
+/// The `Config` parsed from the text of a keymap.toml; panics with the problem count if invalid.
+pub(crate) fn config_from_keymap(toml: &str) -> Config {
+    let sources = crate::config::Sources {
+        keymap: Some(toml.to_string()),
+        ..Default::default()
+    };
+    match crate::config::load_from_sources(&sources) {
+        Ok(config) => config,
+        Err(report) => panic!("test keymap is invalid: {} problem(s)", report.errors.len()),
+    }
+}

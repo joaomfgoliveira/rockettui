@@ -661,6 +661,7 @@ mod tests {
         (from..from + count)
             .map(|i| Message {
                 edited: false,
+                plain_text: true,
                 id: format!("{prefix}{i:03}"),
                 room_id: rid("r-general"),
                 author: "alice".to_string(),
@@ -892,6 +893,7 @@ mod tests {
     fn server(id: &str, ts: i64, body: &str) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: rid("r-general"),
             author: "alice".to_string(),

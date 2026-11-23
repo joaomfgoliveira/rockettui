@@ -198,6 +198,26 @@ struct SendMsg<'a> {
     msg: &'a str,
 }
 
+/// The body of `chat.update`: the room id, the message id and the new text. Built from `Serialize`
+/// structs so the text is always escaped as JSON. No `Debug`: it holds text.
+#[derive(serde::Serialize)]
+struct UpdateBody<'a> {
+    #[serde(rename = "roomId")]
+    room_id: &'a str,
+    #[serde(rename = "msgId")]
+    msg_id: &'a str,
+    text: &'a str,
+}
+
+/// The body of `chat.delete`: the room id and the message id.
+#[derive(serde::Serialize)]
+struct DeleteBody<'a> {
+    #[serde(rename = "roomId")]
+    room_id: &'a str,
+    #[serde(rename = "msgId")]
+    msg_id: &'a str,
+}
+
 /// The joined rooms and the sidebar folders built from one load.
 pub struct RoomList {
     pub rooms: Vec<Room>,
@@ -386,6 +406,38 @@ impl Client {
             .json(&body);
         let resp: wire::MessageResp = read_json(request, ApiError::Rejected).await?;
         Ok(map::message(room, resp.message))
+    }
+
+    /// Replace the text of message `id` of `room` with `POST chat.update` and return the stored
+    /// copy. Measured on 8.9.1 and 9.0.0: every refusal (an unknown id, someone else's message, the
+    /// settings off, the edit time limit) is an HTTP 400, which is `ApiError::Rejected`. No server
+    /// text reaches the error.
+    pub async fn edit_message(
+        &self,
+        room: &RoomId,
+        id: &str,
+        text: &str,
+    ) -> Result<Message, ApiError> {
+        let body = UpdateBody {
+            room_id: &room.0,
+            msg_id: id,
+            text,
+        };
+        let request = self.http.post(self.endpoint("chat.update")).json(&body);
+        let resp: wire::MessageResp = read_json(request, ApiError::Rejected).await?;
+        Ok(map::message(room, resp.message))
+    }
+
+    /// Delete message `id` of `room` with `POST chat.delete`. The answer body is not read beyond
+    /// being valid JSON; a refusal is `ApiError::Rejected` like for `edit_message`.
+    pub async fn delete_message(&self, room: &RoomId, id: &str) -> Result<(), ApiError> {
+        let body = DeleteBody {
+            room_id: &room.0,
+            msg_id: id,
+        };
+        let request = self.http.post(self.endpoint("chat.delete")).json(&body);
+        let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
+        Ok(())
     }
 }
 
@@ -852,6 +904,167 @@ mod tests {
             .expect_err("the request times out");
         assert_eq!(error, ApiError::Timeout);
         assert!(error.outcome_unknown());
+    }
+
+    const EDIT_TEXT: &str = "SENTINEL-EDIT-4d1e";
+
+    fn room_general() -> RoomId {
+        RoomId("r-general".to_string())
+    }
+
+    #[tokio::test]
+    async fn edit_message_contract() {
+        let server = MockServer::start().await;
+        let expected = serde_json::json!({
+            "roomId": "r-general", "msgId": "m1", "text": EDIT_TEXT
+        });
+        let mut answer: serde_json::Value =
+            serde_json::from_str(&send_answer("m1", EDIT_TEXT)).expect("json");
+        answer["message"]["editedAt"] = serde_json::json!("2026-11-17T10:05:00.000Z");
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.update"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::body_json(expected))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(answer.to_string(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let message = client_for(&server)
+            .edit_message(&room_general(), "m1", EDIT_TEXT)
+            .await
+            .expect("edit works");
+        assert_eq!(message.id, "m1");
+        assert_eq!(message.body, EDIT_TEXT);
+        assert!(message.edited);
+        assert_eq!(message.send, SendState::Sent);
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.path(), "/api/v1/chat.update");
+    }
+
+    #[tokio::test]
+    async fn delete_message_contract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.delete"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"roomId": "r-general", "msgId": "m1"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "{\"_id\":\"m1\",\"ts\":1,\"message\":{\"_id\":\"m1\"},\"success\":true}",
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .delete_message(&room_general(), "m1")
+            .await
+            .expect("delete works");
+    }
+
+    /// The error of `chat.update` and of `chat.delete` for a POST answered with `status`.
+    async fn edit_delete_status_errors(status: u16) -> (ApiError, ApiError) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .set_body_string("{\"success\":false,\"error\":\"SENTINEL-SERVER-TEXT\"}"),
+            )
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let edit = client
+            .edit_message(&room_general(), "m1", EDIT_TEXT)
+            .await
+            .expect_err("a non-2xx status fails");
+        let delete = client
+            .delete_message(&room_general(), "m1")
+            .await
+            .expect_err("a non-2xx status fails");
+        (edit, delete)
+    }
+
+    #[tokio::test]
+    async fn edit_delete_error_kinds() {
+        // Measured: every refusal is a 400 and is Rejected; 401, 403 and 404 keep their kinds.
+        assert_eq!(
+            edit_delete_status_errors(400).await,
+            (ApiError::Rejected, ApiError::Rejected)
+        );
+        assert_eq!(
+            edit_delete_status_errors(403).await,
+            (ApiError::Forbidden, ApiError::Forbidden)
+        );
+        assert_eq!(
+            edit_delete_status_errors(404).await,
+            (ApiError::NotFound, ApiError::NotFound)
+        );
+        assert_eq!(
+            edit_delete_status_errors(401).await,
+            (ApiError::Unauthorized, ApiError::Unauthorized)
+        );
+        assert_eq!(
+            edit_delete_status_errors(503).await,
+            (ApiError::Server(503), ApiError::Server(503))
+        );
+        for (edit, delete) in [edit_delete_status_errors(400).await] {
+            // An error is a payload-free enum: neither the server text nor the typed text is in it.
+            for error in [edit, delete] {
+                let shown = format!("{error:?} {error}");
+                assert!(!shown.contains("SENTINEL"), "{shown}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_delete_timeout_and_lost_connection() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("{}")
+                    .set_delay(Duration::from_millis(1500)),
+            )
+            .mount(&server)
+            .await;
+        let client = quick_client(&server.uri());
+        assert_eq!(
+            client
+                .edit_message(&room_general(), "m1", EDIT_TEXT)
+                .await
+                .expect_err("times out"),
+            ApiError::Timeout
+        );
+        assert_eq!(
+            client
+                .delete_message(&room_general(), "m1")
+                .await
+                .expect_err("times out"),
+            ApiError::Timeout
+        );
+
+        let (url, handle) = dropping_server();
+        let error = Client::new(&connection(&url, USER, TOKEN))
+            .expect("client")
+            .edit_message(&room_general(), "m1", EDIT_TEXT)
+            .await
+            .expect_err("the connection is dropped");
+        handle.join().expect("server thread");
+        assert_eq!(error, ApiError::ConnectionLost);
+        let (url, handle) = dropping_server();
+        let error = Client::new(&connection(&url, USER, TOKEN))
+            .expect("client")
+            .delete_message(&room_general(), "m1")
+            .await
+            .expect_err("the connection is dropped");
+        handle.join().expect("server thread");
+        assert_eq!(error, ApiError::ConnectionLost);
     }
 
     #[test]
@@ -1356,6 +1569,7 @@ mod tests {
         let page = HistoryPage {
             messages: vec![Message {
                 edited: false,
+                plain_text: true,
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),
                 author: "a".to_string(),

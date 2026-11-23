@@ -98,10 +98,13 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "a", Action::EnterInsert),
         (Mode::Normal, "o", Action::EnterInsert),
         // Recovery of a failed or unconfirmed send (D-06): `r` retries the message under the
-        // messages-pane cursor, `dd` discards it. `d` is unbound alone, so `dd` is a pure prefix
-        // like `gg`. Both are silent no-ops on any other message or pane.
+        // messages-pane cursor. `dd` (`delete_message`) discards a failed or unconfirmed one
+        // locally, and on one of the user's own server messages asks to delete it. `d` is unbound
+        // alone, so `dd` is a pure prefix like `gg`. `e` (`edit_message`) edits one of the user's
+        // own server messages. All are silent no-ops on any other message or pane.
         (Mode::Normal, "r", Action::RetrySend),
-        (Mode::Normal, "dd", Action::DiscardSend),
+        (Mode::Normal, "e", Action::EditMessage),
+        (Mode::Normal, "dd", Action::DeleteMessage),
         // Insert rows stay single-key so typing never waits for the sequence timeout. Shift-Enter
         // is indistinguishable from Enter in legacy terminals, so a newline is Alt-Enter or Ctrl-j.
         (Mode::Insert, "<Esc>", Action::Cancel),
@@ -196,11 +199,16 @@ mod tests {
         assert!(matches!(keymap.lookup(Mode::Normal, &d), Lookup::Prefix));
         assert!(matches!(
             keymap.lookup(Mode::Normal, &dd),
-            Lookup::Exact(Action::DiscardSend)
+            Lookup::Exact(Action::DeleteMessage)
         ));
         assert!(matches!(
             keymap.lookup(Mode::Normal, &r),
             Lookup::Exact(Action::RetrySend)
+        ));
+        let e = parse_keys("e").unwrap();
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &e),
+            Lookup::Exact(Action::EditMessage)
         ));
         // The newline keys of the Insert mode stay as documented (D-09).
         for notation in ["<A-CR>", "<C-j>"] {

@@ -496,6 +496,7 @@ mod tests {
             .expect("general")
             .push(Message {
                 edited: false,
+                plain_text: true,
                 id: "long-author".to_string(),
                 room_id: general(),
                 author: "firstname.lastname.contractor.external".to_string(),
@@ -525,6 +526,7 @@ mod tests {
         let msgs = app.messages.get_mut(&general()).expect("general");
         msgs.push(Message {
             edited: false,
+            plain_text: true,
             id: "hostile".to_string(),
             room_id: general(),
             author: "\u{202e}mal\u{1b}]52;c;ZXZpbA==\u{7}lory\u{9b}".to_string(),
@@ -563,6 +565,7 @@ mod tests {
         let room = RoomId("quiet".to_string());
         let msg = |id: &str, author: &str, ts: i64, body: &str, kind: MessageKind| Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),
@@ -680,6 +683,7 @@ mod tests {
         let room = RoomId("quiet".to_string());
         let msg = |id: &str, author: &str, ts: i64, body: &str, send: SendState| Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),

@@ -125,6 +125,7 @@ mod tests {
     fn msg(room: &str, id: &str, ts: i64) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: rid(room),
             author: "alice".to_string(),
@@ -295,6 +296,7 @@ mod tests {
         Message {
             body: body.to_string(),
             edited: true,
+            plain_text: true,
             ..msg(room, id, ts)
         }
     }

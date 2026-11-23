@@ -4,6 +4,7 @@
 //! `Action`s from a data source (the D-13 seam).
 
 pub mod command;
+pub mod edit;
 pub mod history;
 pub mod input_buf;
 pub mod messages;
@@ -131,6 +132,12 @@ pub struct App {
     /// only. While it is `None` a pending row falls back to `LOCAL_AUTHOR`.
     pub own_username: Option<String>,
     pub status_msg: Option<StatusMsg>,
+    /// The message being edited through the input bar, if any (`app::edit`). While it is set the
+    /// input holds the edit text and the room's draft is stashed inside it.
+    pub editing: Option<edit::Editing>,
+    /// A question waiting for one key (the delete prompt). Checked at the top of `Action::Key`,
+    /// drawn in the status bar, and never cleared by the status line clearing.
+    pub confirm: Option<edit::Confirm>,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
     pub theme: crate::config::Theme,
@@ -190,6 +197,8 @@ impl App {
             id_prefix: "local-".to_string(),
             own_username: None,
             status_msg: None,
+            editing: None,
+            confirm: None,
             keymap: config.keymap,
             theme: config.theme,
             matcher: Matcher::default(),
@@ -287,6 +296,10 @@ impl App {
     /// anything and never touches disk.
     pub fn open_room(&mut self, id: RoomId) {
         if self.current_room.as_ref() != Some(&id) {
+            // An edit in progress ends first, so the draft that moves with the room is the one the
+            // user had before the edit, never the edit text.
+            edit::cancel(self);
+            self.confirm = None;
             match self.current_room.clone() {
                 Some(old) => {
                     let live = std::mem::take(&mut self.input);
@@ -555,6 +568,7 @@ mod tests {
                 .expect("room")
                 .push(Message {
                     edited: false,
+                    plain_text: true,
                     id: format!("u-{n}"),
                     room_id: rid(room),
                     author: "me".to_string(),

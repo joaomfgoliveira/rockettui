@@ -104,6 +104,7 @@ fn messages(room: &str, count: usize) -> Vec<Message> {
             };
             Message {
                 edited: false,
+                plain_text: true,
                 id: format!("{room}-{n:03}"),
                 room_id: RoomId(room.to_string()),
                 author: AUTHORS[n % AUTHORS.len()].to_string(),

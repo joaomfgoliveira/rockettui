@@ -103,6 +103,11 @@ pub struct Message {
     pub send: SendState,
     /// True when the server reports the message as edited (`editedAt`), live or in history.
     pub edited: bool,
+    /// True when `body` is exactly the text the server stores for the message: false for a message
+    /// with a file or attachment (its body then has ` [attachment: ..]` text appended), for the
+    /// encrypted placeholder and for a system message. Only a plain-text message can be edited or
+    /// deleted by this client, so edit text is never written back from display text.
+    pub plain_text: bool,
 }
 
 /// Redacting `Debug` (T-01-03): only the id, the room id, the body length and the send state.
@@ -114,6 +119,7 @@ impl std::fmt::Debug for Message {
             .field("body_len", &self.body.len())
             .field("send", &self.send)
             .field("edited", &self.edited)
+            .field("plain_text", &self.plain_text)
             .finish()
     }
 }
@@ -137,6 +143,7 @@ mod tests {
     fn debug_redacts() {
         let message = Message {
             edited: false,
+            plain_text: true,
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "SENTINEL-AUTHOR-2b9d".to_string(),

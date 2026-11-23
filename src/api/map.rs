@@ -205,6 +205,7 @@ fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
 pub fn message(room: &RoomId, msg: WireMsg) -> Message {
     let (kind, body) = kind_and_body(&msg);
     let edited = msg.edited_at.is_some() && kind != MessageKind::Deleted;
+    let plain_text = is_plain_text(&msg, kind);
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -214,7 +215,21 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         kind,
         send: SendState::Sent,
         edited,
+        plain_text,
     }
+}
+
+/// True when the displayed body of `msg` is exactly the text the server stores (the
+/// `Message.plain_text` property): an ordinary message with no file, no `files` entry and no
+/// attachment, and not an end-to-end leftover. A system message, a tombstone, an encrypted message
+/// and any message that gets ` [attachment: ..]` text appended are not plain.
+fn is_plain_text(msg: &WireMsg, kind: MessageKind) -> bool {
+    kind == MessageKind::Normal
+        && msg.t.is_none()
+        && msg.content.is_none()
+        && msg.file.is_none()
+        && msg.files.is_empty()
+        && msg.attachments.is_empty()
 }
 
 /// One page of history (the server sends it newest first) as oldest-first messages.
@@ -564,6 +579,37 @@ mod tests {
         );
         assert_eq!(m.kind, MessageKind::Normal);
         assert_eq!(m.body, "[encrypted message]");
+    }
+
+    #[test]
+    fn plain_text_property() {
+        let wire = |extra: &str| {
+            one(&format!(
+                "{{\"_id\":\"p\",\"msg\":\"hello\"{extra},\"ts\":\"2026-11-16T10:00:00.000Z\",\"u\":{{\"username\":\"bob\"}}}}"
+            ))
+        };
+        assert!(wire("").plain_text, "a plain message");
+        assert!(wire(",\"editedAt\":\"2026-11-16T10:05:00.000Z\"").plain_text);
+        assert!(!wire(",\"file\":{\"name\":\"a.png\"}").plain_text, "a file");
+        assert!(
+            !wire(",\"files\":[{\"name\":\"a.png\"}]").plain_text,
+            "a files entry"
+        );
+        assert!(
+            !wire(",\"attachments\":[{\"title\":\"t.pdf\"}]").plain_text,
+            "an attachment title"
+        );
+        assert!(
+            !wire(",\"attachments\":[{}]").plain_text,
+            "an attachment without a title"
+        );
+        assert!(
+            !wire(",\"content\":{\"ciphertext\":\"x\"}").plain_text,
+            "an encrypted message"
+        );
+        assert!(!wire(",\"t\":\"e2e\"").plain_text, "an e2e type");
+        assert!(!wire(",\"t\":\"uj\"").plain_text, "a system message");
+        assert!(!wire(",\"t\":\"rm\"").plain_text, "a tombstone");
     }
 
     #[test]

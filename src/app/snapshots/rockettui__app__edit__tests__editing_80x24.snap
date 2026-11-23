@@ -1,0 +1,27 @@
+---
+source: src/app/edit.rs
+expression: "render_to_string(&app, 80, 24)"
+---
+┌ Rooms ───────────────────┐┌ general ─────────────────────────────────────────┐
+│  Unread                  ││00:01 alice  older                                │
+│> * #general              ││00:01 dev    my text                              │
+│  * &dev-team             ││00:01 alice  newer                                │
+│  * @alice                ││                                                  │
+│  Folders                 ││                                                  │
+│  ▾ Work (1)              ││                                                  │
+│      ~design-review      ││                                                  │
+│      +platform           ││                                                  │
+│  ▾ People (1)            ││                                                  │
+│  Recent                  ││                                                  │
+│    #random               ││                                                  │
+│    &secrets [e2e]        ││                                                  │
+│    #quiet                ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          │└──────────────────────────────────────────────────┘
+│                          │┏ Editing: Enter saves, Esc cancels ━━━━━━━━━━━━━━━┓
+│                          │┃my text                                           ┃
+└──────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ INSERT  general

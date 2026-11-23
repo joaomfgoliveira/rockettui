@@ -86,6 +86,7 @@ mod tests {
             0,
             Message {
                 edited: false,
+                plain_text: true,
                 id: "hostile-0".to_string(),
                 room_id: RoomId(id.0.clone()),
                 author: "\u{202e}mallory".to_string(),

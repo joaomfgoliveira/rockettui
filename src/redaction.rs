@@ -99,6 +99,7 @@ fn message_with_body() -> Message {
 fn message_in_state(send: SendState) -> Message {
     Message {
         edited: false,
+        plain_text: true,
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),
         author: "alice".to_string(),
@@ -247,6 +248,44 @@ fn sentinel_sweep() {
         reconcile: true,
     };
     no_sentinel("Effect::SendMessage", &format!("{send:?}"));
+    // Edit and delete: the new text, their effects and every result Action.
+    let edit = Effect::EditMessage {
+        room: RoomId("r-general".to_string()),
+        id: "m1".to_string(),
+        text: SendText::new(BODY.to_string()),
+    };
+    no_sentinel("Effect::EditMessage", &format!("{edit:?}"));
+    let delete = Effect::DeleteMessage {
+        room: RoomId("r-general".to_string()),
+        id: "m1".to_string(),
+    };
+    no_sentinel("Effect::DeleteMessage", &format!("{delete:?}"));
+    no_sentinel("Action::EditMessage", &format!("{:?}", Action::EditMessage));
+    no_sentinel(
+        "Action::DeleteMessage",
+        &format!("{:?}", Action::DeleteMessage),
+    );
+    no_sentinel(
+        "Action::EditDone",
+        &format!(
+            "{:?}",
+            Action::EditDone {
+                room: RoomId("r-general".to_string()),
+                id: "m1".to_string(),
+                message: message_with_body(),
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::DeleteDone",
+        &format!(
+            "{:?}",
+            Action::DeleteDone {
+                room: RoomId("r-general".to_string()),
+                id: "m1".to_string(),
+            }
+        ),
+    );
     let actions = [
         Action::LoadFailed(ApiError::Unauthorized),
         Action::HistoryLoaded {
@@ -292,6 +331,18 @@ fn sentinel_sweep() {
             error,
         };
         no_sentinel("Action::SendFailed", &format!("{failed:?}"));
+        let edit_failed = Action::EditFailed {
+            room: RoomId("r-general".to_string()),
+            id: "m1".to_string(),
+            error,
+        };
+        no_sentinel("Action::EditFailed", &format!("{edit_failed:?}"));
+        let delete_failed = Action::DeleteFailed {
+            room: RoomId("r-general".to_string()),
+            id: "m1".to_string(),
+            error,
+        };
+        no_sentinel("Action::DeleteFailed", &format!("{delete_failed:?}"));
     }
 }
 

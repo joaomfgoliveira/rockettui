@@ -306,6 +306,7 @@ mod tests {
     fn msg(author: &str, body: &str) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
             author: author.to_string(),
@@ -958,6 +959,7 @@ mod tests {
     fn edited(author: &str, body: &str) -> Message {
         Message {
             edited: true,
+            plain_text: true,
             ..msg(author, body)
         }
     }
@@ -1037,6 +1039,7 @@ mod tests {
         let sneaky = Message {
             body: "SECRET-TEXT".to_string(),
             edited: true,
+            plain_text: true,
             ..deleted("alice")
         };
         for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {

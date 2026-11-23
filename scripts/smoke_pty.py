@@ -1522,6 +1522,34 @@ class Seeded:
             raise SmokeFail("alice's post was refused")
         return ((reply or {}).get("message") or {}).get("_id")
 
+    def create_member_room(self, admin, name):
+        """A public channel made by admin with `dev` as a plain member (not an owner). `dev` owns the
+        seeded rooms, and an owner may edit and delete whatever the settings say, so a refusal can
+        only be seen in a room like this. Returns the room id."""
+        reply = rc_call(
+            self.base, "POST", "/api/v1/channels.create", {"name": name, "members": ["dev"]}, admin
+        )
+        rid = ((reply or {}).get("channel") or {}).get("_id")
+        if not rid:
+            raise SmokeFail("could not create the member-only room")
+        return rid
+
+    def delete_room(self, admin, rid):
+        rc_call(self.base, "POST", "/api/v1/channels.delete", {"roomId": rid}, admin)
+
+    def post_as_dev(self, rid, text):
+        """Post as the app's own account (`dev`); returns the new message's id."""
+        reply = rc_call(self.base, "POST", "/api/v1/chat.postMessage", {"roomId": rid, "text": text}, self.dev)
+        if not (reply or {}).get("success"):
+            raise SmokeFail("dev's post was refused")
+        return ((reply or {}).get("message") or {}).get("_id")
+
+    def message_text(self, msg_id):
+        """The text the server holds for `msg_id` (read as dev), or None when it holds no such message."""
+        reply = rc_call(self.base, "GET", f"/api/v1/chat.getMessage?msgId={msg_id}", None, self.dev)
+        message = (reply or {}).get("message")
+        return message.get("msg") if isinstance(message, dict) else None
+
     def edit_as_alice(self, rid, msg_id, text):
         reply = rc_call(
             self.base, "POST", "/api/v1/chat.update", {"roomId": rid, "msgId": msg_id, "text": text}, self.alice
@@ -1920,6 +1948,208 @@ def scenario_docker_reconnect(binary):
             pass
 
 
+def esc(fd):
+    """A lone ESC followed by a pause, so crossterm does not read ESC plus the next byte as Alt+key."""
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+
+
+def status_row(buf):
+    return screen_of(buf).rows()[22]
+
+
+def open_private_with_own_ready(binary, stack):
+    """Start the app on the seeded stack, open rt-private and give the own username time to load
+    (`e` and `dd` do nothing until it is known)."""
+    pid, fd = spawn(binary, extra_env=stack.env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-private")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("rt-private history never settled")
+    time.sleep(2.0)  # the own username (GET /me) and the realtime login
+    return pid, fd, buf
+
+
+def scenario_docker_edit_own(binary):
+    """Editing the user's own message against the real local Rocket.Chat. `dev` posts a message in
+    rt-private; in the app `e` shows its text in the input (Insert mode, the title says Enter saves
+    and Esc cancels), Esc restores a half-typed draft, and a changed text saves: the row shows the
+    new text and the edited marker in the same row. With Message_AllowEditing off (set through
+    admin, restored in `finally`) a save shows the fixed line and keeps the typed text. Posts go to
+    rt-private only."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    admin = stack.admin_login(project)
+    private = stack.room_id("rt-private", "groups")
+    tag = secrets.token_hex(3)
+    old, new, refused, draft = (f"eo-{tag}-{n}" for n in ("old", "new", "nope", "draft"))
+    original = stack.setting(admin, "Message_AllowEditing")
+    msg_id = stack.post_as_dev(private, old)
+    # `dev` owns rt-private, and an owner may edit whatever the setting says: the refusal is
+    # checked in a room where `dev` is a plain member.
+    member_name = f"rt-eo-{tag}"
+    member_room = stack.create_member_room(admin, member_name)
+    member_msg = stack.post_as_dev(member_room, refused)
+    try:
+        pid, fd, buf = open_private_with_own_ready(binary, stack)
+        if not read_until(fd, buf, lambda b: rows_with(b, old), 10):
+            raise SmokeFail("the own message is not shown in rt-private")
+        row = row_of(buf, old)
+
+        # A half-typed draft, then `e`: the message text is in the input and the title says so.
+        type_keys(fd, buf, b"i")
+        type_keys(fd, buf, draft.encode())
+        esc(fd)
+        type_keys(fd, buf, b"e")
+        if not read_until(fd, buf, lambda b: screen_of(b).contains("Editing: Enter saves, Esc cancels"), 5):
+            raise SmokeFail("`e` on the own message did not start editing")
+        if len(rows_with(buf, old)) != 2:
+            raise SmokeFail("the message text is not in the input bar")
+        if not read_until(fd, buf, lambda b: "INSERT" in status_row(b), 5):
+            raise SmokeFail("editing is not in Insert mode")
+        # Esc cancels and the draft is back.
+        esc(fd)
+        if not read_until(fd, buf, lambda b: not screen_of(b).contains("Editing: Enter"), 5):
+            raise SmokeFail("Esc did not leave the editing state")
+        if not rows_with(buf, draft) or len(rows_with(buf, old)) != 1:
+            raise SmokeFail("the earlier draft was not restored after cancelling")
+
+        # Edit and save: the new text and the marker, in the same row; the draft is back after.
+        type_keys(fd, buf, b"e")
+        read_until(fd, buf, lambda b: screen_of(b).contains("Editing: Enter saves"), 5)
+        type_keys(fd, buf, b"\x15")  # Ctrl-u: clear the line
+        type_keys(fd, buf, new.encode())
+        type_keys(fd, buf, b"\r")
+        saved = lambda b: any(new in r and "(edited)" in r for r in screen_of(b).rows()[1:19])
+        if not read_until(fd, buf, saved, 10):
+            raise SmokeFail("the edited text and its marker never appeared in the message list")
+        read_until(fd, buf, lambda b: False, 0.8)
+        if row_of(buf, new) != row:
+            raise SmokeFail("the edit moved the row")
+        if len([r for r in rows_with(buf, new) if "(edited)" in r]) != 1:
+            raise SmokeFail("the edited message is shown more than once")
+        if rows_with(buf, old):
+            raise SmokeFail("the old text is still shown after the edit")
+        if stack.message_text(msg_id) != new:
+            raise SmokeFail("the server does not hold the edited text")
+        if screen_of(buf).contains("Editing: Enter") or not rows_with(buf, draft):
+            raise SmokeFail("saving did not restore the earlier draft")
+
+        # A refused edit, in the member-only room: the fixed line, the typed text kept, the message
+        # unchanged.
+        open_room_named(fd, buf, member_name)
+        if not read_until(fd, buf, lambda b: history_settled(b) and rows_with(b, refused), 10):
+            raise SmokeFail("the member-only room's message is not shown")
+        time.sleep(0.5)
+        stack.setting(admin, "Message_AllowEditing", False)
+        typed = refused + "-x"
+        type_keys(fd, buf, b"e")
+        read_until(fd, buf, lambda b: screen_of(b).contains("Editing: Enter saves"), 5)
+        type_keys(fd, buf, b"\x15")
+        type_keys(fd, buf, typed.encode())
+        type_keys(fd, buf, b"\r")
+        if not read_until(fd, buf, lambda b: "edit not saved" in status_row(b), 10):
+            raise SmokeFail("a refused edit did not show the fixed status line")
+        if not screen_of(buf).contains("Editing: Enter") or len(rows_with(buf, typed)) != 1:
+            raise SmokeFail("a refused edit did not keep the typed text in the input")
+        if len(rows_with(buf, refused)) != 2 or stack.message_text(member_msg) != refused:
+            raise SmokeFail("the message changed after a refused edit")
+        esc(fd)
+        finish_clean(pid, fd, buf, stack.secrets, [old, new, refused, typed, draft], "docker_edit_own")
+    finally:
+        stack.setting(admin, "Message_AllowEditing", original)
+        stack.delete_room(admin, member_room)
+
+
+def scenario_docker_delete_own(binary):
+    """Deleting the user's own message against the real local Rocket.Chat. In rt-private the app
+    user has two messages around one by alice. `dd` then another key deletes nothing; `dd` then `y`
+    turns the newest own message into the deleted line in the same row; `e` and `dd` on alice's
+    message change nothing and send nothing (the server still holds her text); with
+    Message_AllowDeleting off (set through admin, restored in `finally`) a confirmed delete shows the
+    fixed line and the message stays. Posts go to rt-private only."""
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    stack = Seeded(project)
+    admin = stack.admin_login(project)
+    private = stack.room_id("rt-private", "groups")
+    tag = secrets.token_hex(3)
+    kept, theirs, doomed = (f"do-{tag}-{n}" for n in ("kept", "alice", "gone"))
+    original = stack.setting(admin, "Message_AllowDeleting")
+    theirs_id = stack.post_as_alice(private, theirs)
+    doomed_id = stack.post_as_dev(private, doomed)
+    # `dev` owns rt-private, and an owner may delete whatever the setting says: the refusal is
+    # checked in a room where `dev` is a plain member.
+    member_name = f"rt-do-{tag}"
+    member_room = stack.create_member_room(admin, member_name)
+    kept_id = stack.post_as_dev(member_room, kept)
+    try:
+        pid, fd, buf = open_private_with_own_ready(binary, stack)
+        if not read_until(fd, buf, lambda b: rows_with(b, doomed) and rows_with(b, theirs), 10):
+            raise SmokeFail("the seeded messages are not shown in rt-private")
+        doomed_row, theirs_row = row_of(buf, doomed), row_of(buf, theirs)
+
+        # `dd` asks first; any other key cancels, the cursor does not move, nothing is deleted.
+        type_keys(fd, buf, b"dd")
+        if not read_until(fd, buf, lambda b: "Delete this message?" in status_row(b), 5):
+            raise SmokeFail("`dd` on the own message did not open the prompt")
+        type_keys(fd, buf, b"j")
+        read_until(fd, buf, lambda b: "Delete this message?" not in status_row(b), 5)
+        if "Delete this message?" in status_row(buf):
+            raise SmokeFail("another key did not close the prompt")
+        read_until(fd, buf, lambda b: False, 0.5)
+        if stack.message_text(doomed_id) != doomed or row_of(buf, doomed) != doomed_row:
+            raise SmokeFail("cancelling the prompt changed the message")
+
+        # `dd` then `y`: the deleted line, in the same row, and the server no longer holds it.
+        type_keys(fd, buf, b"dd")
+        read_until(fd, buf, lambda b: "Delete this message?" in status_row(b), 5)
+        type_keys(fd, buf, b"y")
+        gone = lambda b: "dev" in screen_of(b).rows()[doomed_row] and "message deleted" in screen_of(b).rows()[doomed_row]
+        if not read_until(fd, buf, gone, 10):
+            raise SmokeFail("the deleted message did not become a deleted line in its row")
+        if rows_with(buf, doomed):
+            raise SmokeFail("the deleted text is still shown")
+        if stack.message_text(doomed_id) is not None:
+            raise SmokeFail("the server still holds the deleted message")
+
+        # Alice's message: nothing happens, nothing is sent.
+        type_keys(fd, buf, b"k")
+        read_until(fd, buf, lambda b: False, 0.4)
+        before = screen_of(buf).rows()
+        type_keys(fd, buf, b"e")
+        type_keys(fd, buf, b"dd")
+        read_until(fd, buf, lambda b: False, 0.8)
+        if screen_of(buf).contains("Editing: Enter") or "Delete this message?" in status_row(buf):
+            raise SmokeFail("`e` or `dd` acted on someone else's message")
+        if "NORMAL" not in status_row(buf):
+            raise SmokeFail("`e` on someone else's message changed the mode")
+        if screen_of(buf).rows()[1:19] != before[1:19]:
+            raise SmokeFail("`e` or `dd` on someone else's message changed the screen")
+        type_keys(fd, buf, b"y")  # not a prompt answer here: `y` is unbound and does nothing
+        if stack.message_text(theirs_id) != theirs or row_of(buf, theirs) != theirs_row:
+            raise SmokeFail("alice's message changed")
+
+        # A refused delete, in the member-only room: the fixed line, the message stays.
+        open_room_named(fd, buf, member_name)
+        if not read_until(fd, buf, lambda b: history_settled(b) and rows_with(b, kept), 10):
+            raise SmokeFail("the member-only room's message is not shown")
+        time.sleep(0.5)
+        kept_row = row_of(buf, kept)
+        stack.setting(admin, "Message_AllowDeleting", False)
+        type_keys(fd, buf, b"dd")
+        read_until(fd, buf, lambda b: "Delete this message?" in status_row(b), 5)
+        type_keys(fd, buf, b"y")
+        if not read_until(fd, buf, lambda b: "message not deleted" in status_row(b), 10):
+            raise SmokeFail("a refused delete did not show the fixed status line")
+        if row_of(buf, kept) != kept_row or stack.message_text(kept_id) != kept:
+            raise SmokeFail("a refused delete changed the message")
+        finish_clean(pid, fd, buf, stack.secrets, [kept, theirs, doomed], "docker_delete_own")
+    finally:
+        stack.setting(admin, "Message_AllowDeleting", original)
+        stack.delete_room(admin, member_room)
+
+
 SCENARIOS = {
     "quit": scenario_quit,
     "panic": scenario_panic,
@@ -1943,6 +2173,8 @@ SCENARIOS = {
     "docker_reconnect": scenario_docker_reconnect,
     "docker_edits": scenario_docker_edits,
     "docker_deleted_status": scenario_docker_deleted_status,
+    "docker_edit_own": scenario_docker_edit_own,
+    "docker_delete_own": scenario_docker_delete_own,
 }
 
 

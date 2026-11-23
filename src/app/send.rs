@@ -54,6 +54,7 @@ pub fn submit(app: &mut App) {
     app.local_seq += 1;
     let message = Message {
         edited: false,
+        plain_text: true,
         id: format!("{}{}", app.id_prefix, app.local_seq),
         room_id: room.clone(),
         author: app
@@ -115,7 +116,7 @@ pub fn pump(app: &mut App, room: &RoomId) {
 /// other pane and when no room is open or it holds nothing, so both keys are silent no-ops there.
 /// The cursor is read from `messages::view` on every call, so a counted repeat acts on whichever
 /// message sits under the cursor then.
-fn unsent_under_cursor(app: &App) -> Option<(RoomId, usize)> {
+pub(crate) fn unsent_under_cursor(app: &App) -> Option<(RoomId, usize)> {
     if app.focus != Focus::Messages {
         return None;
     }
@@ -249,9 +250,24 @@ pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
 /// whose hints point at `:reconnect` (D-08), and it never holds server text or the message body.
 pub fn send_error_text(error: ApiError, unconfirmed: bool) -> String {
     let reason = match error {
+        ApiError::Rejected => "rejected (read-only, muted or too long)".to_string(),
+        ApiError::NotFound => "send endpoint not found, check server_url".to_string(),
+        other => error_reason(other),
+    };
+    if unconfirmed {
+        format!("message may not have been sent: {reason}")
+    } else {
+        format!("message not sent: {reason}")
+    }
+}
+
+/// The fixed reason for an error kind that does not depend on what the request was. Shared by the
+/// send, edit and delete status lines; never server text, never a message body.
+pub(crate) fn error_reason(error: ApiError) -> String {
+    match error {
         ApiError::Unauthorized => "unauthorized, check the user id and token".to_string(),
         ApiError::Forbidden => "not allowed in this room".to_string(),
-        ApiError::NotFound => "send endpoint not found, check server_url".to_string(),
+        ApiError::NotFound => "endpoint not found, check server_url".to_string(),
         ApiError::RateLimited => "rate limited by the server".to_string(),
         ApiError::Redirected => "server redirected, check server_url".to_string(),
         ApiError::Server(code) => format!("server error (HTTP {code})"),
@@ -260,13 +276,8 @@ pub fn send_error_text(error: ApiError, unconfirmed: bool) -> String {
         ApiError::BadResponse => "unexpected response".to_string(),
         ApiError::TooLarge => "response too large".to_string(),
         ApiError::Client => "cannot build the HTTP client".to_string(),
-        ApiError::Rejected => "rejected (read-only, muted or too long)".to_string(),
+        ApiError::Rejected => "rejected by the server".to_string(),
         ApiError::ConnectionLost => "connection lost".to_string(),
-    };
-    if unconfirmed {
-        format!("message may not have been sent: {reason}")
-    } else {
-        format!("message not sent: {reason}")
     }
 }
 
@@ -293,6 +304,7 @@ mod tests {
     fn msg(room: &RoomId, id: &str, author: &str, ts: i64, body: &str) -> Message {
         Message {
             edited: false,
+            plain_text: true,
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),

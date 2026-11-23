@@ -1,6 +1,6 @@
 //! Status bar (mode badge, current room, connection state, persistent config warnings, pending keys and status message) and the command-line row with its cursor.
 
-use crate::app::{App, ConnState, Mode, RtState, StatusMsg};
+use crate::app::{App, ConnState, Mode, RtState, StatusMsg, edit};
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -10,6 +10,13 @@ use unicode_width::UnicodeWidthStr;
 
 pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
     let badge = Span::styled(format!(" {} ", app.mode.label()), app.theme.status_mode);
+    // A confirmation prompt takes the whole row, so it is readable at any width. It is drawn from
+    // `app.confirm`, not from `status_msg`, so the status line clearing of a key cannot erase it.
+    if app.confirm.is_some() {
+        let prompt = Span::styled(format!(" {}", edit::DELETE_PROMPT), app.theme.status_info);
+        frame.render_widget(Paragraph::new(Line::from(vec![badge, prompt])), area);
+        return;
+    }
     let room = match app.current_room_name() {
         Some(name) => sanitize_line(name).into_owned(),
         None => "-".to_string(),
