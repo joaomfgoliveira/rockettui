@@ -5,21 +5,31 @@ use crate::effect::Effect;
 
 pub struct CommandDef {
     pub names: &'static [&'static str],
+    /// One short line for the help overlay.
+    pub desc: &'static str,
     pub run: fn(&mut App, &[&str]) -> Result<(), String>,
 }
 
 pub const COMMANDS: &[CommandDef] = &[
     CommandDef {
         names: &["q", "quit"],
+        desc: "quit (warns once if messages are undelivered)",
         run: cmd_quit,
     },
     CommandDef {
         names: &["q!", "quit!"],
+        desc: "quit at once",
         run: cmd_force_quit,
     },
     CommandDef {
         names: &["reconnect", "retry"],
+        desc: "reload rooms and restart the live connection",
         run: cmd_reconnect,
+    },
+    CommandDef {
+        names: &["help"],
+        desc: "show this help",
+        run: cmd_help,
     },
 ];
 
@@ -60,6 +70,12 @@ pub fn cmd_reconnect(app: &mut App, _args: &[&str]) -> Result<(), String> {
     if app.rt == RtState::Unavailable {
         app.rt = RtState::Reconnecting;
     }
+    Ok(())
+}
+
+/// `:help`: open the help overlay (the app is already back in Normal mode).
+pub fn cmd_help(app: &mut App, _args: &[&str]) -> Result<(), String> {
+    app.help = Some(0);
     Ok(())
 }
 

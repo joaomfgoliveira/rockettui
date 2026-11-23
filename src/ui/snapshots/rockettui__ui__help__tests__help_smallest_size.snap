@@ -1,0 +1,11 @@
+---
+source: src/ui/help.rs
+expression: "render_to_string(&app, 40, 8)"
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q t┐
+┃  Unread                  ┃│Normal mod│
+┃> * #general              ┃└──────────┘
+┃  * &dev-team             ┃┌ Input ───┐
+┃  * @alice                ┃│press i to│
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────┘
+ NORMAL  -

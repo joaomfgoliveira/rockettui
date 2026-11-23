@@ -5,6 +5,7 @@
 
 pub mod command;
 pub mod edit;
+pub mod help;
 pub mod history;
 pub mod input_buf;
 pub mod messages;
@@ -138,6 +139,9 @@ pub struct App {
     /// A question waiting for one key (the delete prompt). Checked at the top of `Action::Key`,
     /// drawn in the status bar, and never cleared by the status line clearing.
     pub confirm: Option<edit::Confirm>,
+    /// The help overlay, when open: its scroll offset in lines. Not a mode (the badge keeps
+    /// showing the real one); the reducer checks it before the keymap, like `confirm`.
+    pub help: Option<usize>,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
     pub theme: crate::config::Theme,
@@ -199,6 +203,7 @@ impl App {
             status_msg: None,
             editing: None,
             confirm: None,
+            help: None,
             keymap: config.keymap,
             theme: config.theme,
             matcher: Matcher::default(),

@@ -62,6 +62,8 @@ pub enum Action {
     /// prompt of a delete. Anything else is a silent no-op. Not a motion, so a count repeats it,
     /// but an open prompt is never opened twice.
     DeleteMessage,
+    /// Open the help overlay (`?`); while it is open, close it.
+    ShowHelp,
     ExecuteCommand,
     Quit,
     /// A `:` command line bound in keymap.toml as `cmd:<command>`; produced only by the keymap.
@@ -218,6 +220,7 @@ impl std::fmt::Debug for Action {
             Action::DiscardSend => write!(f, "DiscardSend"),
             Action::EditMessage => write!(f, "EditMessage"),
             Action::DeleteMessage => write!(f, "DeleteMessage"),
+            Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ExecuteCommand => write!(f, "ExecuteCommand"),
             Action::Quit => write!(f, "Quit"),
             Action::RunCommand(_) => write!(f, "RunCommand(..)"),

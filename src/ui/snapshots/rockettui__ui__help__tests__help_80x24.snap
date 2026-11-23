@@ -1,0 +1,27 @@
+---
+source: src/ui/help.rs
+expression: "render_to_string(&app, 80, 24)"
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q to close) ───────────────────────────────┐
+┃  Unread                  ┃│Normal mode                                       │
+┃> * #general              ┃│<C-c>              cancel, or leave the mode      │
+┃  * &dev-team             ┃│<Esc>              cancel, or leave the mode      │
+┃  * @alice                ┃│dd                 delete your message under the c│
+┃  Folders                 ┃│e                  edit your message under the cur│
+┃  ▾ Work (1)              ┃│<C-w>j             focus the input bar            │
+┃      ~design-review      ┃│<C-w>l             focus the messages pane        │
+┃      +platform           ┃│<C-w>h             focus the sidebar              │
+┃  ▾ People (1)            ┃│za                 fold or unfold the folder      │
+┃  Recent                  ┃│<C-d>              half a page down               │
+┃    #random               ┃│<C-u>              half a page up                 │
+┃    &secrets [e2e]        ┃│G                  jump to the bottom             │
+┃    #quiet                ┃│gg                 jump to the top                │
+┃                          ┃│j                  move down                      │
+┃                          ┃│h                  move left                      │
+┃                          ┃│l                  move right                     │
+┃                          ┃│k                  move up                        │
+┃                          ┃└──────────────────────────────────────────────────┘
+┃                          ┃┌ Input ───────────────────────────────────────────┐
+┃                          ┃│press i to write                                  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────────────────┘
+ NORMAL  -

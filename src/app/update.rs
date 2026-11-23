@@ -5,8 +5,8 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, history, realtime, send,
-    sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, realtime,
+    send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -18,6 +18,11 @@ pub fn update(app: &mut App, action: Action) {
         Action::Key(ev) => {
             app.status_msg = None;
             let chord = normalize(ev);
+            // An open help overlay takes the keys next (see `app::help`).
+            if app.help.is_some() {
+                help_key(app, chord);
+                return;
+            }
             // An open confirmation takes exactly this key, before any keymap lookup.
             if let Some(confirm) = app.confirm.take() {
                 edit::on_confirm_key(app, confirm, chord);
@@ -27,6 +32,11 @@ pub fn update(app: &mut App, action: Action) {
             dispatch(app, outcome);
         }
         Action::KeyTimeout => {
+            if app.help.is_some() {
+                let outcome = app.matcher.timeout(app.keymap.trie(Mode::Normal));
+                help_dispatch(app, outcome);
+                return;
+            }
             let outcome = app.matcher.timeout(app.keymap.trie(app.mode));
             dispatch(app, outcome);
         }
@@ -190,6 +200,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::DiscardSend => send::discard(app),
         Action::EditMessage => edit::start(app),
         Action::DeleteMessage => edit::delete(app),
+        Action::ShowHelp => app.help = Some(0),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -240,6 +251,54 @@ fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
     edit(&mut app.input);
     let (width, height) = app.input_viewport();
     app.input.settle(width, height);
+}
+
+/// A key while the help overlay is open. `q`, Esc and Ctrl-c always close it, so a user who
+/// rebinds everything is never locked in. Every other key goes through the Normal keymap, and only
+/// scrolling and closing actions get through (`help_dispatch`).
+fn help_key(app: &mut App, chord: crate::input::key::Chord) {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let plain = |c: char| chord.code == KeyCode::Char(c) && chord.mods.is_empty();
+    if plain('q')
+        || (chord.code == KeyCode::Esc && chord.mods.is_empty())
+        || (chord.code == KeyCode::Char('c') && chord.mods == KeyModifiers::CONTROL)
+    {
+        app.matcher.reset();
+        app.help = None;
+        return;
+    }
+    let outcome = app
+        .matcher
+        .feed(app.keymap.trie(Mode::Normal), Mode::Normal, chord);
+    help_dispatch(app, outcome);
+}
+
+/// Apply what the matcher produced while help is open: scroll, close, or nothing.
+fn help_dispatch(app: &mut App, outcome: Outcome) {
+    let Outcome::Fire { action, count } = outcome else {
+        return;
+    };
+    let Some(offset) = app.help else {
+        return;
+    };
+    let height = help::viewport_height(app);
+    let max = help::max_scroll(help::build(&app.keymap).len(), height);
+    let n = count.map_or(1, |c| c as usize);
+    let half = (height / 2).max(1);
+    let next = match action {
+        Action::Cancel | Action::ShowHelp => {
+            app.help = None;
+            return;
+        }
+        Action::MoveDown => offset.saturating_add(n),
+        Action::MoveUp => offset.saturating_sub(n),
+        Action::HalfPageDown => offset.saturating_add(half.saturating_mul(n)),
+        Action::HalfPageUp => offset.saturating_sub(half.saturating_mul(n)),
+        Action::GotoTop => 0,
+        Action::GotoBottom => max,
+        _ => return,
+    };
+    app.help = Some(next.min(max));
 }
 
 /// Turn what the matcher produced into reducer work.

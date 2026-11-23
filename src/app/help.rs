@@ -1,0 +1,326 @@
+//! The help overlay's content, derived from the live keymap and the command table.
+//!
+//! Pure: no I/O and no `Frame`. `ui::help` draws the lines and the reducer scrolls them. Nothing
+//! here is a hand-written key list, so the help cannot go stale (a later which-key hint can reuse
+//! [`build`]).
+
+use crate::action::Action;
+use crate::app::Mode;
+use crate::app::command::COMMANDS;
+use crate::input::actions::name_of;
+use crate::input::key::format_keys;
+use crate::input::keymap::Keymap;
+
+/// One line of the overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HelpLine {
+    Heading(String),
+    /// A key column and a description.
+    Row {
+        keys: String,
+        desc: String,
+    },
+    Blank,
+}
+
+/// The short description of each bindable action name. A test keeps it complete.
+pub const DESCRIPTIONS: &[(&str, &str)] = &[
+    ("move_down", "move down"),
+    ("move_up", "move up"),
+    ("move_left", "move left"),
+    ("move_right", "move right"),
+    ("goto_top", "jump to the top"),
+    ("goto_bottom", "jump to the bottom"),
+    ("half_page_down", "half a page down"),
+    ("half_page_up", "half a page up"),
+    ("select", "open the room or toggle the folder"),
+    ("toggle_fold", "fold or unfold the folder"),
+    ("focus_left", "focus the sidebar"),
+    ("focus_down", "focus the input bar"),
+    ("focus_right", "focus the messages pane"),
+    ("focus_next", "focus the next pane"),
+    ("focus_prev", "focus the previous pane"),
+    ("enter_command", "start a : command"),
+    ("enter_insert", "type a message (Insert mode)"),
+    ("cancel", "cancel, or leave the mode"),
+    ("delete_back", "delete the character before the cursor"),
+    ("insert_newline", "insert a newline"),
+    ("delete_word_back", "delete the word before the cursor"),
+    ("delete_to_line_start", "delete to the start of the line"),
+    ("cursor_left", "cursor left"),
+    ("cursor_right", "cursor right"),
+    ("cursor_up", "cursor up"),
+    ("cursor_down", "cursor down"),
+    ("cursor_home", "cursor to the start of the line"),
+    ("cursor_end", "cursor to the end of the line"),
+    ("submit_input", "send the message (or save the edit)"),
+    ("retry_send", "retry a failed message"),
+    ("discard_send", "discard a failed message"),
+    ("edit_message", "edit your message under the cursor"),
+    ("delete_message", "delete your message under the cursor"),
+    ("show_help", "show or close this help"),
+    ("execute_command", "run the command line"),
+    ("quit", "quit"),
+];
+
+fn describe(name: &str) -> &'static str {
+    DESCRIPTIONS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or("", |(_, d)| d)
+}
+
+/// What a bound action is called in the overlay: its description, or the command it runs.
+fn describe_action(action: &Action) -> String {
+    match action {
+        Action::RunCommand(line) => format!(":{line}"),
+        other => name_of(other).map(describe).unwrap_or_default().to_string(),
+    }
+}
+
+/// Every binding of `keymap` by mode, then the commands. Rows keep a stable order: by action name,
+/// then by keys.
+pub fn build(keymap: &Keymap) -> Vec<HelpLine> {
+    let mut lines = Vec::new();
+    for (mode, title) in [
+        (Mode::Normal, "Normal mode"),
+        (Mode::Insert, "Insert mode"),
+        (Mode::Command, "Command mode"),
+    ] {
+        let mut rows: Vec<(String, String)> = keymap
+            .bindings(mode)
+            .into_iter()
+            .map(|(chords, action)| (describe_action(action), format_keys(&chords)))
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        rows.sort();
+        lines.push(HelpLine::Heading(title.to_string()));
+        lines.extend(
+            rows.into_iter()
+                .map(|(desc, keys)| HelpLine::Row { keys, desc }),
+        );
+        lines.push(HelpLine::Blank);
+    }
+    lines.push(HelpLine::Heading("Commands".to_string()));
+    for def in COMMANDS {
+        let keys = def
+            .names
+            .iter()
+            .map(|n| format!(":{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(HelpLine::Row {
+            keys,
+            desc: def.desc.to_string(),
+        });
+    }
+    lines
+}
+
+/// Rows of text the overlay shows: the messages pane minus its border.
+pub fn viewport_height(app: &crate::app::App) -> usize {
+    usize::from(app.areas().messages.height.saturating_sub(2))
+}
+
+/// Largest valid scroll offset for `total` lines in a viewport of `height` rows.
+pub fn max_scroll(total: usize, height: usize) -> usize {
+    total.saturating_sub(height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::actions::ACTION_NAMES;
+    use crate::input::keymap::default_keymap;
+    use crate::test_util::{config_from_keymap, config_from_toml};
+
+    fn rows(lines: &[HelpLine]) -> Vec<(String, String)> {
+        lines
+            .iter()
+            .filter_map(|l| match l {
+                HelpLine::Row { keys, desc } => Some((keys.clone(), desc.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn has(lines: &[HelpLine], keys: &str, desc: &str) -> bool {
+        rows(lines).iter().any(|(k, d)| k == keys && d == desc)
+    }
+
+    #[test]
+    fn every_action_name_has_a_description() {
+        for name in ACTION_NAMES {
+            assert!(!describe(name).is_empty(), "{name} has no description");
+        }
+        for (name, _) in DESCRIPTIONS {
+            assert!(ACTION_NAMES.contains(name), "{name} is not an action");
+        }
+    }
+
+    #[test]
+    fn default_keymap_listed() {
+        let lines = build(&default_keymap());
+        assert!(has(&lines, "?", "show or close this help"));
+        assert!(has(&lines, "dd", "delete your message under the cursor"));
+        assert!(has(&lines, "<C-d>", "half a page down"));
+    }
+
+    #[test]
+    fn rebound_key_listed() {
+        let config = config_from_keymap("[normal]\n\"J\" = \"move_down\"\n");
+        let lines = build(&config.keymap);
+        assert!(has(&lines, "J", "move down"));
+    }
+
+    #[test]
+    fn removed_key_absent() {
+        let config = config_from_keymap("[normal]\n\"<C-d>\" = \"none\"\n");
+        let lines = build(&config.keymap);
+        assert!(!rows(&lines).iter().any(|(k, _)| k == "<C-d>"));
+        assert!(has(&lines, "<C-u>", "half a page up"));
+    }
+
+    #[test]
+    fn vim_extras_keys_listed() {
+        let config = config_from_toml("keymap_preset = \"vim-extras\"\n");
+        let lines = build(&config.keymap);
+        assert!(has(&lines, "<Tab>", "focus the next pane"));
+        assert!(has(&lines, "<S-Tab>", "focus the previous pane"));
+    }
+
+    #[test]
+    fn cmd_binding_shown_as_command() {
+        let config = config_from_keymap("[normal]\n\"<C-q>\" = \"cmd:quit\"\n");
+        let lines = build(&config.keymap);
+        assert!(has(&lines, "<C-q>", ":quit"));
+    }
+
+    #[test]
+    fn commands_listed_with_aliases() {
+        let lines = build(&default_keymap());
+        let all = rows(&lines);
+        assert!(all.iter().any(|(k, _)| k == ":q :quit"));
+        assert!(all.iter().any(|(k, _)| k == ":reconnect :retry"));
+        assert!(all.iter().any(|(k, _)| k == ":help"));
+    }
+
+    #[test]
+    fn max_scroll_saturates() {
+        assert_eq!(max_scroll(10, 4), 6);
+        assert_eq!(max_scroll(3, 4), 0);
+    }
+
+    use crate::action::Action;
+    use crate::app::update::update;
+    use crate::app::{Focus, Mode};
+    use crate::test_util::{app_80x24, app_with_config, press};
+
+    #[test]
+    fn question_mark_opens_without_changing_mode() {
+        let mut app = app_80x24();
+        press(&mut app, "?");
+        assert_eq!(app.help, Some(0));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn help_command_opens_and_returns_to_normal() {
+        let mut app = app_80x24();
+        press(&mut app, ":help<CR>");
+        assert_eq!(app.help, Some(0));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn every_close_key_closes() {
+        for key in ["q", "<Esc>", "<C-c>", "?"] {
+            let mut app = app_80x24();
+            let room = app.current_room.clone();
+            press(&mut app, "?");
+            press(&mut app, key);
+            assert_eq!(app.help, None, "{key}");
+            assert_eq!(app.current_room, room, "{key}");
+            assert!(!app.should_quit, "{key}");
+        }
+    }
+
+    #[test]
+    fn rebound_open_key_works() {
+        let config = config_from_keymap("[normal]\n\"H\" = \"show_help\"\n");
+        let mut app = app_with_config(config, 80, 24);
+        press(&mut app, "H");
+        assert_eq!(app.help, Some(0));
+    }
+
+    #[test]
+    fn motions_scroll_and_clamp() {
+        let mut app = app_80x24();
+        let sel = crate::app::sidebar::selected_room(&app);
+        press(&mut app, "?j");
+        assert_eq!(app.help, Some(1));
+        press(&mut app, "5j");
+        assert_eq!(app.help, Some(6));
+        press(&mut app, "k");
+        assert_eq!(app.help, Some(5));
+        press(&mut app, "G");
+        let max = max_scroll(build(&app.keymap).len(), viewport_height(&app));
+        assert!(max > 0);
+        assert_eq!(app.help, Some(max));
+        press(&mut app, "j<C-d>");
+        assert_eq!(app.help, Some(max));
+        press(&mut app, "gg");
+        assert_eq!(app.help, Some(0));
+        press(&mut app, "k<C-u>");
+        assert_eq!(app.help, Some(0));
+        press(&mut app, "<C-d>");
+        assert_eq!(app.help, Some(viewport_height(&app) / 2));
+        assert_eq!(crate::app::sidebar::selected_room(&app), sel);
+    }
+
+    #[test]
+    fn other_keys_are_ignored() {
+        let mut app = app_80x24();
+        app.focus = Focus::Messages;
+        let before = app.messages.clone();
+        press(&mut app, "?dd");
+        press(&mut app, "i");
+        press(&mut app, "a:");
+        press(&mut app, "<C-w>j");
+        assert_eq!(app.help, Some(0));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.focus, Focus::Messages);
+        assert!(app.confirm.is_none());
+        assert!(app.messages == before);
+        assert!(app.cmdline.is_empty());
+    }
+
+    #[test]
+    fn q_closes_even_when_normal_keys_are_unbound() {
+        let config = config_from_keymap(
+            "[normal]\n\"<Esc>\" = \"none\"\n\"<C-c>\" = \"none\"\n\"j\" = \"none\"\n",
+        );
+        let mut app = app_with_config(config, 80, 24);
+        press(&mut app, "?");
+        press(&mut app, "j");
+        assert_eq!(app.help, Some(0));
+        press(&mut app, "q");
+        assert_eq!(app.help, None);
+    }
+
+    #[test]
+    fn live_messages_still_applied_underneath() {
+        let mut app = app_80x24();
+        let room = app.rooms[0].id.clone();
+        let before = app.messages.get(&room).map_or(0, Vec::len);
+        press(&mut app, "?");
+        let mut live = crate::test_util::sample_message("live-1");
+        live.room_id = room.clone();
+        live.ts = i64::MAX / 4;
+        update(&mut app, Action::RtMessage(live));
+        assert_eq!(app.messages.get(&room).map_or(0, Vec::len), before + 1);
+        assert_eq!(app.help, Some(0));
+    }
+}

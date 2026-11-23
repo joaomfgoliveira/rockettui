@@ -105,6 +105,8 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "r", Action::RetrySend),
         (Mode::Normal, "e", Action::EditMessage),
         (Mode::Normal, "dd", Action::DeleteMessage),
+        // `?` opens the help overlay, generated from this very keymap.
+        (Mode::Normal, "?", Action::ShowHelp),
         // Insert rows stay single-key so typing never waits for the sequence timeout. Shift-Enter
         // is indistinguishable from Enter in legacy terminals, so a newline is Alt-Enter or Ctrl-j.
         (Mode::Insert, "<Esc>", Action::Cancel),
@@ -218,6 +220,17 @@ mod tests {
                 Lookup::Exact(Action::InsertNewline)
             ));
         }
+    }
+
+    #[test]
+    fn question_mark_is_show_help() {
+        let keymap = default_keymap();
+        let chords = parse_keys("?").unwrap();
+        assert!(matches!(
+            keymap.lookup(Mode::Normal, &chords),
+            Lookup::Exact(Action::ShowHelp)
+        ));
+        assert!(keymap.clashes(Mode::Normal).is_empty());
     }
 
     #[test]

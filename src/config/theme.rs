@@ -45,6 +45,11 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.failed",
     "messages.edited",
     "messages.deleted",
+    "help.border",
+    "help.title",
+    "help.heading",
+    "help.key",
+    "help.desc",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -214,6 +219,13 @@ pub struct Theme {
     pub messages_edited: Style,
     /// The whole line of a deleted message: author, time and `message deleted`.
     pub messages_deleted: Style,
+    /// The help overlay: its border, its title, the section headings, the key column and the
+    /// description column.
+    pub help_border: Style,
+    pub help_title: Style,
+    pub help_heading: Style,
+    pub help_key: Style,
+    pub help_desc: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -253,6 +265,11 @@ impl Default for Theme {
             messages_failed: plain.fg(Color::Red),
             messages_edited: plain.add_modifier(Modifier::DIM),
             messages_deleted: plain.add_modifier(Modifier::DIM),
+            help_border: plain,
+            help_title: plain.add_modifier(Modifier::BOLD),
+            help_heading: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            help_key: plain.add_modifier(Modifier::BOLD),
+            help_desc: plain,
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -291,6 +308,11 @@ impl Theme {
             ("messages", "failed") => Some(&mut self.messages_failed),
             ("messages", "edited") => Some(&mut self.messages_edited),
             ("messages", "deleted") => Some(&mut self.messages_deleted),
+            ("help", "border") => Some(&mut self.help_border),
+            ("help", "title") => Some(&mut self.help_title),
+            ("help", "heading") => Some(&mut self.help_heading),
+            ("help", "key") => Some(&mut self.help_key),
+            ("help", "desc") => Some(&mut self.help_desc),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -788,8 +810,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            26,
-            "16 chrome and border paths plus the ten messages elements"
+            31,
+            "16 chrome and border paths, the ten messages elements and the five help elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
