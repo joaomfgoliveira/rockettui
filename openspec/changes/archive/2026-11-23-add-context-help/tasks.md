@@ -28,4 +28,4 @@
 ## 5. Wrap-up
 
 - [x] 5.1 Run `cargo test`, `cargo clippy` and `cargo fmt --check`
-- [ ] 5.2 Try it against the local server on each kind of object, then `openspec validate add-context-help --strict`
+- [x] 5.2 Try it against the local server on each kind of object, then `openspec validate add-context-help --strict`
