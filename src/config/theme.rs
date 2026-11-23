@@ -50,6 +50,10 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "help.heading",
     "help.key",
     "help.desc",
+    "context.border",
+    "context.title",
+    "context.key",
+    "context.desc",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -226,6 +230,12 @@ pub struct Theme {
     pub help_heading: Style,
     pub help_key: Style,
     pub help_desc: Style,
+    /// The context popup: its border, the object name (and title), the key column and the
+    /// description column.
+    pub context_border: Style,
+    pub context_title: Style,
+    pub context_key: Style,
+    pub context_desc: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -270,6 +280,10 @@ impl Default for Theme {
             help_heading: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             help_key: plain.add_modifier(Modifier::BOLD),
             help_desc: plain,
+            context_border: plain,
+            context_title: plain.add_modifier(Modifier::BOLD),
+            context_key: plain.add_modifier(Modifier::BOLD),
+            context_desc: plain,
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -313,6 +327,10 @@ impl Theme {
             ("help", "heading") => Some(&mut self.help_heading),
             ("help", "key") => Some(&mut self.help_key),
             ("help", "desc") => Some(&mut self.help_desc),
+            ("context", "border") => Some(&mut self.context_border),
+            ("context", "title") => Some(&mut self.context_title),
+            ("context", "key") => Some(&mut self.context_key),
+            ("context", "desc") => Some(&mut self.context_desc),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -810,8 +828,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            31,
-            "16 chrome and border paths, the ten messages elements and the five help elements"
+            35,
+            "16 chrome and border paths, the ten messages elements, the five help elements and the four context elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {

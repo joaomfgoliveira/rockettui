@@ -59,6 +59,7 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
     ("edit_message", "edit your message under the cursor"),
     ("delete_message", "delete your message under the cursor"),
     ("show_help", "show or close this help"),
+    ("show_context", "show what the selected object can do"),
     ("execute_command", "run the command line"),
     ("quit", "quit"),
 ];
@@ -163,7 +164,7 @@ mod tests {
     #[test]
     fn default_keymap_listed() {
         let lines = build(&default_keymap());
-        assert!(has(&lines, "?", "show or close this help"));
+        assert!(has(&lines, "?", "show what the selected object can do"));
         assert!(has(&lines, "dd", "delete your message under the cursor"));
         assert!(has(&lines, "<C-d>", "half a page down"));
     }
@@ -219,9 +220,9 @@ mod tests {
     use crate::test_util::{app_80x24, app_with_config, press};
 
     #[test]
-    fn question_mark_opens_without_changing_mode() {
+    fn second_question_mark_opens_without_changing_mode() {
         let mut app = app_80x24();
-        press(&mut app, "?");
+        press(&mut app, "??");
         assert_eq!(app.help, Some(0));
         assert_eq!(app.mode, Mode::Normal);
     }
@@ -239,12 +240,21 @@ mod tests {
         for key in ["q", "<Esc>", "<C-c>", "?"] {
             let mut app = app_80x24();
             let room = app.current_room.clone();
-            press(&mut app, "?");
+            press(&mut app, "??");
             press(&mut app, key);
             assert_eq!(app.help, None, "{key}");
             assert_eq!(app.current_room, room, "{key}");
             assert!(!app.should_quit, "{key}");
         }
+    }
+
+    #[test]
+    fn restored_question_mark_opens_directly() {
+        let config = config_from_keymap("[normal]\n\"?\" = \"show_help\"\n");
+        let mut app = app_with_config(config, 80, 24);
+        press(&mut app, "?");
+        assert_eq!(app.help, Some(0));
+        assert!(!app.context);
     }
 
     #[test]
@@ -259,7 +269,7 @@ mod tests {
     fn motions_scroll_and_clamp() {
         let mut app = app_80x24();
         let sel = crate::app::sidebar::selected_room(&app);
-        press(&mut app, "?j");
+        press(&mut app, "??j");
         assert_eq!(app.help, Some(1));
         press(&mut app, "5j");
         assert_eq!(app.help, Some(6));
@@ -285,7 +295,7 @@ mod tests {
         let mut app = app_80x24();
         app.focus = Focus::Messages;
         let before = app.messages.clone();
-        press(&mut app, "?dd");
+        press(&mut app, "??dd");
         press(&mut app, "i");
         press(&mut app, "a:");
         press(&mut app, "<C-w>j");
@@ -303,7 +313,7 @@ mod tests {
             "[normal]\n\"<Esc>\" = \"none\"\n\"<C-c>\" = \"none\"\n\"j\" = \"none\"\n",
         );
         let mut app = app_with_config(config, 80, 24);
-        press(&mut app, "?");
+        press(&mut app, "??");
         press(&mut app, "j");
         assert_eq!(app.help, Some(0));
         press(&mut app, "q");
@@ -315,7 +325,7 @@ mod tests {
         let mut app = app_80x24();
         let room = app.rooms[0].id.clone();
         let before = app.messages.get(&room).map_or(0, Vec::len);
-        press(&mut app, "?");
+        press(&mut app, "??");
         let mut live = crate::test_util::sample_message("live-1");
         live.room_id = room.clone();
         live.ts = i64::MAX / 4;

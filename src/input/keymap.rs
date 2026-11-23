@@ -105,8 +105,9 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "r", Action::RetrySend),
         (Mode::Normal, "e", Action::EditMessage),
         (Mode::Normal, "dd", Action::DeleteMessage),
-        // `?` opens the help overlay, generated from this very keymap.
-        (Mode::Normal, "?", Action::ShowHelp),
+        // `?` opens the context popup; `?` again opens the help overlay, generated from this very
+        // keymap. `show_help` has no default key.
+        (Mode::Normal, "?", Action::ShowContext),
         // Insert rows stay single-key so typing never waits for the sequence timeout. Shift-Enter
         // is indistinguishable from Enter in legacy terminals, so a newline is Alt-Enter or Ctrl-j.
         (Mode::Insert, "<Esc>", Action::Cancel),
@@ -223,14 +224,31 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_is_show_help() {
+    fn question_mark_is_show_context() {
         let keymap = default_keymap();
         let chords = parse_keys("?").unwrap();
         assert!(matches!(
             keymap.lookup(Mode::Normal, &chords),
-            Lookup::Exact(Action::ShowHelp)
+            Lookup::Exact(Action::ShowContext)
         ));
         assert!(keymap.clashes(Mode::Normal).is_empty());
+        assert!(
+            !keymap
+                .bindings(Mode::Normal)
+                .iter()
+                .any(|(_, a)| matches!(a, Action::ShowHelp)),
+            "show_help has no default key"
+        );
+    }
+
+    #[test]
+    fn question_mark_can_be_rebound_to_show_help() {
+        let config = crate::test_util::config_from_keymap("[normal]\n\"?\" = \"show_help\"\n");
+        let chords = parse_keys("?").unwrap();
+        assert!(matches!(
+            config.keymap.lookup(Mode::Normal, &chords),
+            Lookup::Exact(Action::ShowHelp)
+        ));
     }
 
     #[test]

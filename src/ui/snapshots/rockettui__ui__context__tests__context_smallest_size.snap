@@ -1,0 +1,11 @@
+---
+source: src/ui/context.rs
+expression: out
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Messages ┐
+┃  Unread                  ┃┌ ? ───────┐
+┃> * #general              ┃│Room      │
+┃  * &dev-team             ┃│<CR>  open│
+┃  * @alice                ┃│?     all │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────┘
+ NORMAL  -

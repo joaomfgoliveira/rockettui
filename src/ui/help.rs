@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn help_80x24() {
         let mut app = app_80x24();
-        press(&mut app, "?");
+        press(&mut app, "??");
         insta::assert_snapshot!(render_to_string(&app, 80, 24));
     }
 
@@ -78,14 +78,14 @@ mod tests {
     fn help_smallest_size() {
         let mut app = app_80x24();
         app.size = ratatui::layout::Size::new(40, 8);
-        press(&mut app, "?");
+        press(&mut app, "??");
         insta::assert_snapshot!(render_to_string(&app, 40, 8));
     }
 
     #[test]
     fn help_scrolled_to_end() {
         let mut app = app_80x24();
-        press(&mut app, "?G");
+        press(&mut app, "??G");
         let out = render_to_string(&app, 80, 24);
         assert!(out.contains(":help"), "{out}");
         insta::assert_snapshot!(out);
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn heading_is_themed() {
         let mut app = app_with_config(config_from_theme("[help.heading]\nfg = 5\n"), 80, 24);
-        press(&mut app, "?");
+        press(&mut app, "??");
         let buffer = render_buffer(&app, 80, 24);
         let out = render_to_string(&app, 80, 24);
         let row = out

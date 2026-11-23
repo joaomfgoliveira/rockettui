@@ -23,6 +23,11 @@ pub fn update(app: &mut App, action: Action) {
                 help_key(app, chord);
                 return;
             }
+            // An open context popup closes on any key and consumes it (see `app::context`).
+            if app.context {
+                context_key(app, chord);
+                return;
+            }
             // An open confirmation takes exactly this key, before any keymap lookup.
             if let Some(confirm) = app.confirm.take() {
                 edit::on_confirm_key(app, confirm, chord);
@@ -32,6 +37,9 @@ pub fn update(app: &mut App, action: Action) {
             dispatch(app, outcome);
         }
         Action::KeyTimeout => {
+            if app.context {
+                return;
+            }
             if app.help.is_some() {
                 let outcome = app.matcher.timeout(app.keymap.trie(Mode::Normal));
                 help_dispatch(app, outcome);
@@ -201,6 +209,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::EditMessage => edit::start(app),
         Action::DeleteMessage => edit::delete(app),
         Action::ShowHelp => app.help = Some(0),
+        Action::ShowContext => app.context = true,
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -253,6 +262,20 @@ fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
     app.input.settle(width, height);
 }
 
+/// A key while the context popup is open: it closes and does nothing else. The one exception is
+/// a single key that the Normal keymap binds to `show_context` or `show_help`, which opens the
+/// full help overlay in its place.
+fn context_key(app: &mut App, chord: crate::input::key::Chord) {
+    app.matcher.reset();
+    app.context = false;
+    if matches!(
+        app.keymap.lookup(Mode::Normal, &[chord]),
+        crate::input::trie::Lookup::Exact(Action::ShowContext | Action::ShowHelp)
+    ) {
+        app.help = Some(0);
+    }
+}
+
 /// A key while the help overlay is open. `q`, Esc and Ctrl-c always close it, so a user who
 /// rebinds everything is never locked in. Every other key goes through the Normal keymap, and only
 /// scrolling and closing actions get through (`help_dispatch`).
@@ -286,7 +309,7 @@ fn help_dispatch(app: &mut App, outcome: Outcome) {
     let n = count.map_or(1, |c| c as usize);
     let half = (height / 2).max(1);
     let next = match action {
-        Action::Cancel | Action::ShowHelp => {
+        Action::Cancel | Action::ShowHelp | Action::ShowContext => {
             app.help = None;
             return;
         }

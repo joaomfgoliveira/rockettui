@@ -1,5 +1,6 @@
 //! The view: a pure function of `&App` onto a ratatui `Frame`. It never mutates `App`.
 
+pub mod context;
 pub mod error_screen;
 pub mod help;
 pub mod input;
@@ -36,6 +37,7 @@ pub fn view(frame: &mut Frame, app: &App) {
     messages::render(frame, areas.messages, app);
     input::render(frame, areas.input, app);
     help::render(frame, areas.messages, app);
+    context::render(frame, &areas, app);
     status::render_status(frame, areas.status, app);
     status::render_cmdline(frame, areas.cmdline, app);
 }

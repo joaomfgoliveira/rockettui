@@ -1,0 +1,27 @@
+---
+source: src/ui/context.rs
+expression: "render_to_string(&app, 80, 24)"
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Messages ────────────────────────────────────────┐
+┃  Unread                  ┃│No room open                                      │
+┃> * #general              ┃│                                                  │
+┃  * &dev-team             ┃│                                                  │
+┃  * @alice                ┃│                                                  │
+┃  Folders                 ┃│                                                  │
+┃  ▾ Work (1)              ┃│                                                  │
+┃      ~design-review      ┃│                                                  │
+┃      +platform           ┃│                                                  │
+┃  ▾ People (1)            ┃│                                                  │
+┃  Recent                  ┃│                                                  │
+┃    #random               ┃│                                                  │
+┃    &secrets [e2e]        ┃│                                                  │
+┃    #quiet                ┃│                                                  │
+┃                          ┃│                                                  │
+┃                          ┃│                                                  │
+┃                          ┃│                                                  │
+┃                          ┃┌ ? ───────────────────────────────────────────────┐
+┃                          ┃│Room                                              │
+┃                          ┃│<CR>  open the room                               │
+┃                          ┃│?     all keys (full help)                        │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────────────────┘
+ NORMAL  -

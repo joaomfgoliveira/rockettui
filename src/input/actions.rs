@@ -49,6 +49,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "edit_message",
     "delete_message",
     "show_help",
+    "show_context",
     "execute_command",
     "quit",
 ];
@@ -90,6 +91,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "edit_message" => Action::EditMessage,
         "delete_message" => Action::DeleteMessage,
         "show_help" => Action::ShowHelp,
+        "show_context" => Action::ShowContext,
         "execute_command" => Action::ExecuteCommand,
         "quit" => Action::Quit,
         _ => return None,
@@ -134,6 +136,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::EditMessage => Some("edit_message"),
         Action::DeleteMessage => Some("delete_message"),
         Action::ShowHelp => Some("show_help"),
+        Action::ShowContext => Some("show_context"),
         Action::ExecuteCommand => Some("execute_command"),
         Action::Quit => Some("quit"),
         // `cmd:<command>` is a form of the value, not a name of its own.

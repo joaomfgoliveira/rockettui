@@ -64,7 +64,7 @@ pub fn is_own_plain(app: &App, room: &RoomId, message: &Message) -> bool {
 
 /// The id of the message under the messages-pane cursor when `is_own_plain` allows it. `None` for
 /// any other pane or mode, with no room open, an empty room, or any message the rule excludes.
-fn own_under_cursor(app: &App) -> Option<(RoomId, String)> {
+pub(crate) fn own_under_cursor(app: &App) -> Option<(RoomId, String)> {
     if app.mode != Mode::Normal || app.focus != Focus::Messages {
         return None;
     }

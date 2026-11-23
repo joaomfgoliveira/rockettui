@@ -4,6 +4,7 @@
 //! `Action`s from a data source (the D-13 seam).
 
 pub mod command;
+pub mod context;
 pub mod edit;
 pub mod help;
 pub mod history;
@@ -142,6 +143,9 @@ pub struct App {
     /// The help overlay, when open: its scroll offset in lines. Not a mode (the badge keeps
     /// showing the real one); the reducer checks it before the keymap, like `confirm`.
     pub help: Option<usize>,
+    /// The context popup (`app::context`), when open. Like `help` it is a state, not a mode; its
+    /// content is recomputed from the app on every draw.
+    pub context: bool,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
     pub theme: crate::config::Theme,
@@ -204,6 +208,7 @@ impl App {
             editing: None,
             confirm: None,
             help: None,
+            context: false,
             keymap: config.keymap,
             theme: config.theme,
             matcher: Matcher::default(),
