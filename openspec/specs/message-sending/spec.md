@@ -35,11 +35,15 @@ A rejected send (4xx, unreachable, TLS) SHALL mark the row "failed". A timeout, 
 - **THEN** the row is marked unconfirmed
 
 ### Requirement: Retry and discard
-In Normal mode with the messages pane focused, `r` on the failed or unconfirmed row under the cursor SHALL retry it and `dd` SHALL discard it (both rebindable). A retry SHALL first check whether the server already has the message and SHALL NOT resend if it does, and if the resend errors SHALL check once more before marking it failed or unconfirmed.
+In Normal mode with the messages pane focused, `r` on the failed or unconfirmed row under the cursor SHALL retry it, and `dd` (the `delete_message` action, see `message-editing`) SHALL discard it; `discard_send` remains a bindable action that only discards. Both are rebindable. A retry SHALL first check whether the server already has the message and SHALL NOT resend if it does, and if the resend errors SHALL check once more before marking it failed or unconfirmed.
 
 #### Scenario: Already delivered
 - **WHEN** the user retries an unconfirmed message the server already stored
 - **THEN** it is marked sent and not posted again
+
+#### Scenario: Discard a failed row
+- **WHEN** the user presses `dd` on a failed message
+- **THEN** it is removed locally with no prompt and no request to the server
 
 ### Requirement: Reconciliation with incoming messages
 A message arriving with an id already known SHALL be ignored when that message is sent, and SHALL replace and confirm the row when it is still pending.
@@ -75,3 +79,10 @@ The logged-in username SHALL be fetched once per connection and on `:reconnect`,
 #### Scenario: Reconnect
 - **WHEN** the user runs `:reconnect`
 - **THEN** the username is fetched again
+
+### Requirement: Edits and deletes are not sends
+An edit or a delete of an existing message SHALL NOT enter the per-room send queue, SHALL NOT change the send state of any message, and SHALL NOT wait for or hold back queued sends.
+
+#### Scenario: Edit while a send is in flight
+- **WHEN** the user saves an edit while a message of the same room is being sent
+- **THEN** the edit request goes out without waiting and the send queue is unaffected
