@@ -54,7 +54,7 @@ Multi-key bindings SHALL be matched with a timeout. Pending keys SHALL be shown 
 - **THEN** `g` is shown as pending, and after the timeout the pending sequence is cleared
 
 ### Requirement: Command mode
-Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL quit (with undelivered messages the first one warns, see `message-sending`; `:q!` and `:quit!` always quit), `:reconnect` and `:retry` SHALL reload rooms, and an unknown command SHALL show an error in the status bar without quitting.
+Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL quit (with undelivered messages the first one warns, see `message-sending`; `:q!` and `:quit!` always quit), `:reconnect` and `:retry` SHALL reload rooms, `:help` SHALL open the help overlay (see `help`), and an unknown command SHALL show an error in the status bar without quitting.
 
 #### Scenario: Quit
 - **WHEN** the user runs `:q` with nothing undelivered
@@ -63,6 +63,10 @@ Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL qui
 #### Scenario: Unknown command
 - **WHEN** the user runs `:nope`
 - **THEN** the status bar shows an error and the app keeps running
+
+#### Scenario: Help command
+- **WHEN** the user runs `:help`
+- **THEN** the help overlay opens and the app returns to Normal mode
 
 ### Requirement: Multiline input
 The input bar SHALL grow with its content up to a maximum height, support the usual editing keys, and treat pasted text safely.

@@ -32,7 +32,7 @@ Keys SHALL be written in Vim notation such as `<C-d>`, `<Esc>`, `<CR>` and `gg`.
 - **THEN** `Ctrl-d` does nothing
 
 ### Requirement: Action vocabulary
-Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message` and `delete_message`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message` and `dd` to `delete_message` in Normal mode.
+Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message` and `show_help`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message` and `?` to `show_help` in Normal mode.
 
 #### Scenario: Command binding
 - **WHEN** the user binds `"<C-q>" = "cmd:quit"`
@@ -41,6 +41,10 @@ Bindable actions SHALL be a fixed set of snake_case names (including `retry_send
 #### Scenario: Rebind edit
 - **WHEN** the user binds `"E" = "edit_message"` in `[normal]`
 - **THEN** `E` starts editing the user's own message under the cursor
+
+#### Scenario: Rebind help
+- **WHEN** the user binds `"H" = "show_help"` in `[normal]`
+- **THEN** `H` opens the help overlay
 
 ### Requirement: Safe overrides
 The app SHALL reject overrides that bind the same keys twice in one mode table of `keymap.toml`, make one binding a prefix of another, remove all ways to leave a mode or quit (lockout), or bind a multi-key sequence starting with a plain character (no Ctrl or Alt) in Insert or Command mode. A user binding replaces a preset binding of the same keys.
