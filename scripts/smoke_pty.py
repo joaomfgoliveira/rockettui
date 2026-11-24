@@ -1457,6 +1457,20 @@ def scenario_docker_search(binary):
     if not read_until(fd, buf, lambda b: screen_of(b).contains("seed message 129"), 5):
         raise SmokeFail("the newest message is not shown after reading on")
 
+    # `N` toward newer in a detached room fetches newer pages until the match is found: search
+    # for the newest message from near the oldest result (nothing older matches), then N.
+    open_list_at_oldest()
+    jump_from_oldest()
+    type_keys(fd, buf, b"/seed message 129\r")
+    if not read_until(fd, buf, lambda b: "Not found" in screen_of(b).rows()[22] or "No older" in screen_of(b).rows()[22], 15):
+        raise SmokeFail("the search toward older did not settle: " + screen_of(buf).rows()[22].strip())
+    for _ in range(4):
+        type_keys(fd, buf, b"N")
+        if read_until(fd, buf, lambda b: screen_of(b).contains("seed message 129"), 4):
+            break
+    else:
+        raise SmokeFail("N never found the newest message from a detached room: " + screen_of(buf).rows()[22].strip())
+
     type_keys(fd, buf, b":search zzzqqqxxxnomatch\r")
     if not read_until(fd, buf, lambda b: "No results" in screen_of(b).rows()[22], 10):
         raise SmokeFail("a search with no hit did not say so")

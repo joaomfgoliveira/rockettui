@@ -646,6 +646,7 @@ mod tests {
         app.search = Some(crate::app::search::Search {
             query: "body".to_string(),
             seeking: false,
+            seeking_newer: false,
         });
         press(&mut app, ":reload<CR>");
         assert!(!app.detached.contains_key(&rid("r-a")));

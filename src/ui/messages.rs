@@ -894,6 +894,7 @@ mod tests {
         app.search = Some(crate::app::search::Search {
             query: query.to_string(),
             seeking: false,
+            seeking_newer: false,
         });
     }
 

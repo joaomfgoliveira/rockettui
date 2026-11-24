@@ -17,8 +17,11 @@ use std::ops::Range;
 /// An active search in the open room.
 pub struct Search {
     pub query: String,
-    /// True while the search waits for an older history page it asked for.
+    /// True while the search waits for a history page it asked for.
     pub seeking: bool,
+    /// The direction of that wait: newer pages (`N` in a detached room) instead of older ones.
+    /// Only meaningful while `seeking` is true.
+    pub seeking_newer: bool,
 }
 
 /// The needle for `query` and whether the comparison ignores case: smart case, so a query with an
@@ -181,6 +184,7 @@ fn run(app: &mut App, query: String) {
     app.search = Some(Search {
         query: query.clone(),
         seeking: false,
+        seeking_newer: false,
     });
     let cursor = messages::view(app, &room).cursor;
     let found = app
@@ -210,8 +214,23 @@ fn seek_older(app: &mut App, room: &RoomId, none: &str) {
     }
     if let Some(search) = app.search.as_mut() {
         search.seeking = true;
+        search.seeking_newer = false;
     }
     history::request_older(app, room);
+}
+
+/// Nothing newer is loaded: in a detached room ask for the next newer page and wait for it
+/// (`on_newer_page`); in any other room the loaded messages already end at the newest.
+fn seek_newer(app: &mut App, room: &RoomId) {
+    if !crate::app::jump::is_detached(app, room) {
+        info(app, NO_NEWER);
+        return;
+    }
+    if let Some(search) = app.search.as_mut() {
+        search.seeking = true;
+        search.seeking_newer = true;
+    }
+    crate::app::jump::request_newer(app, room);
 }
 
 fn stop_seeking(app: &mut App) {
@@ -265,7 +284,7 @@ pub fn prev(app: &mut App) {
         .and_then(|msgs| scan_newer(msgs, cursor + 1, &query));
     match found {
         Some(i) => jump(app, &room, i),
-        None => info(app, NO_NEWER),
+        None => seek_newer(app, &room),
     }
 }
 
@@ -276,7 +295,7 @@ pub fn on_page(app: &mut App, room: &RoomId) {
     let Some(search) = app.search.as_ref() else {
         return;
     };
-    if !search.seeking || app.current_room.as_ref() != Some(room) {
+    if !search.seeking || search.seeking_newer || app.current_room.as_ref() != Some(room) {
         return;
     }
     let query = search.query.clone();
@@ -295,7 +314,38 @@ pub fn on_page(app: &mut App, room: &RoomId) {
     }
 }
 
-/// An older page failed: a waiting search stops, and the history error stays on the status line.
+/// A newer page was applied to `room`. If a search is waiting toward newer, look again after the
+/// cursor: jump on a match, ask for the next page while the room is still detached, and stop with
+/// "No newer match" once the newest message was reached. The cursor never moves without a match.
+pub fn on_newer_page(app: &mut App, room: &RoomId) {
+    let Some(search) = app.search.as_ref() else {
+        return;
+    };
+    if !search.seeking || !search.seeking_newer || app.current_room.as_ref() != Some(room) {
+        return;
+    }
+    let query = search.query.clone();
+    let cursor = messages::view(app, room).cursor;
+    let found = app
+        .messages
+        .get(room)
+        .and_then(|msgs| scan_newer(msgs, cursor + 1, &query));
+    match found {
+        Some(i) => {
+            stop_seeking(app);
+            jump(app, room, i);
+        }
+        None if crate::app::jump::is_detached(app, room) => {
+            crate::app::jump::request_newer(app, room);
+        }
+        None => {
+            stop_seeking(app);
+            info(app, NO_NEWER);
+        }
+    }
+}
+
+/// A page failed: a waiting search stops, and the history error stays on the status line.
 pub fn on_failed(app: &mut App, room: &RoomId) {
     if app.current_room.as_ref() == Some(room) {
         stop_seeking(app);

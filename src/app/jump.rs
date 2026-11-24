@@ -264,7 +264,18 @@ pub fn maybe_load_newer(app: &mut App) {
     let Some(room_id) = app.current_room.clone() else {
         return;
     };
-    let Some(detached) = app.detached.get(&room_id) else {
+    let len = app.messages.get(&room_id).map_or(0, Vec::len);
+    if len == 0 || messages::view(app, &room_id).cursor + 1 < len {
+        return;
+    }
+    request_newer(app, &room_id);
+}
+
+/// Record one request for the page of newer messages after the newest loaded message of the
+/// detached room `room_id`, unless the room is not detached or a page is already in flight. Shared
+/// by the cursor trigger (`maybe_load_newer`) and the search toward newer (`app::search`).
+pub fn request_newer(app: &mut App, room_id: &RoomId) {
+    let Some(detached) = app.detached.get(room_id) else {
         return;
     };
     let Some(raw_ts) = detached
@@ -274,11 +285,7 @@ pub fn maybe_load_newer(app: &mut App) {
     else {
         return;
     };
-    let len = app.messages.get(&room_id).map_or(0, Vec::len);
-    if len == 0 || messages::view(app, &room_id).cursor + 1 < len {
-        return;
-    }
-    let Some(room) = app.rooms.iter().find(|r| r.id == room_id) else {
+    let Some(room) = app.rooms.iter().find(|r| &r.id == room_id) else {
         return;
     };
     app.context_seq += 1;
@@ -291,7 +298,7 @@ pub fn maybe_load_newer(app: &mut App) {
         n: NEWER_PAGE,
         newer_id,
     };
-    if let Some(detached) = app.detached.get_mut(&room_id) {
+    if let Some(detached) = app.detached.get_mut(room_id) {
         detached.pending_newer = Some(newer_id);
     }
     app.effects.push(effect);
@@ -324,6 +331,9 @@ pub fn on_newer_loaded(app: &mut App, room: &RoomId, newer_id: u64, page: NewerP
         info(app, REACHED);
         history::refetch_newest(app, room);
     }
+    // A search waiting toward newer looks at the new messages (after the status above, so its
+    // own "No newer match" is what stays on the line when the newest was reached without one).
+    crate::app::search::on_newer_page(app, room);
 }
 
 /// A forward page failed: the room stays detached and shows the error.
@@ -336,6 +346,7 @@ pub fn on_newer_failed(app: &mut App, room: &RoomId, newer_id: u64, e: ApiError)
     }
     detached.pending_newer = None;
     error(app, &e.to_string());
+    crate::app::search::on_failed(app, room);
 }
 
 /// `G` in a detached room with the cursor already on the last loaded message: return to the newest
@@ -954,6 +965,220 @@ mod tests {
             },
         );
         assert!(app.messages.get(&room).is_none_or(Vec::is_empty));
+    }
+
+    // ---- N toward newer in a detached room ----
+
+    /// A page of messages `from..=to` whose bodies are `body`.
+    fn page_of(room: &RoomId, from: usize, to: usize, body: &str, reached: bool) -> NewerPage {
+        NewerPage {
+            messages: (from..=to).map(|i| msg(room, i, body)).collect(),
+            newest_raw: Some(format!("raw-{to}")),
+            reached_newest: reached,
+        }
+    }
+
+    fn deliver(app: &mut App, room: &RoomId, id: u64, p: NewerPage) {
+        update(
+            app,
+            Action::NewerLoaded {
+                room: room.clone(),
+                newer_id: id,
+                page: p,
+            },
+        );
+    }
+
+    /// A detached room (window bodies "ctx", cursor on message 1) with a search for "needle" and
+    /// `N` already pressed: returns the id of the forward page it asked for.
+    fn seeking_newer() -> (App, RoomId, u64) {
+        let (mut app, room) = jumped(5, 1);
+        app.search = Some(crate::app::search::Search {
+            query: "needle".to_string(),
+            seeking: false,
+            seeking_newer: false,
+        });
+        app.effects.clear();
+        press(&mut app, "N");
+        let (_, id) = newer_effect(&app).expect("N asks for a newer page");
+        assert!(app.search.as_ref().expect("search").seeking);
+        (app, room, id)
+    }
+
+    fn cursor(app: &App, room: &RoomId) -> usize {
+        messages::view(app, room).cursor
+    }
+
+    #[test]
+    fn n_toward_newer_finds_a_match_in_the_first_page() {
+        let (mut app, room, id) = seeking_newer();
+        deliver(
+            &mut app,
+            &room,
+            id,
+            page_of(&room, 100, 103, "a needle here", false),
+        );
+        assert_eq!(
+            cursor(&app, &room),
+            5,
+            "the first matching message of the page"
+        );
+        assert!(!app.search.as_ref().expect("search").seeking);
+        app.effects.clear();
+        press(&mut app, "k");
+        assert!(
+            newer_effect(&app).is_none(),
+            "no more fetching after a match"
+        );
+    }
+
+    #[test]
+    fn n_toward_newer_keeps_fetching_until_a_page_matches() {
+        let (mut app, room, id) = seeking_newer();
+        app.effects.clear();
+        deliver(
+            &mut app,
+            &room,
+            id,
+            page_of(&room, 100, 102, "nothing", false),
+        );
+        let (raw, id2) = newer_effect(&app).expect("the next page is asked for");
+        assert_eq!(raw, "raw-102");
+        assert_eq!(cursor(&app, &room), 1, "the cursor waits");
+        deliver(
+            &mut app,
+            &room,
+            id2,
+            page_of(&room, 103, 105, "needle", false),
+        );
+        assert_eq!(cursor(&app, &room), 8, "the first match of the second page");
+        assert_eq!(app.messages[&room].len(), 5 + 6);
+    }
+
+    #[test]
+    fn reaching_the_newest_without_a_match_says_so_and_keeps_the_cursor() {
+        let (mut app, room, id) = seeking_newer();
+        app.effects.clear();
+        deliver(
+            &mut app,
+            &room,
+            id,
+            page_of(&room, 100, 101, "nothing", true),
+        );
+        assert_eq!(cursor(&app, &room), 1);
+        assert!(!app.search.as_ref().expect("search").seeking);
+        assert!(newer_effect(&app).is_none(), "no further page");
+        assert!(!app.detached.contains_key(&room), "the newest was reached");
+        assert_eq!(status(&app), "No newer match");
+    }
+
+    #[test]
+    fn a_failed_newer_page_stops_the_search() {
+        let (mut app, room, id) = seeking_newer();
+        update(
+            &mut app,
+            Action::NewerFailed {
+                room: room.clone(),
+                newer_id: id,
+                error: ApiError::Timeout,
+            },
+        );
+        assert!(!app.search.as_ref().expect("search").seeking);
+        assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
+        assert_eq!(cursor(&app, &room), 1);
+    }
+
+    #[test]
+    fn leaving_the_room_or_clearing_the_search_stops_the_fetching() {
+        // Clearing the search: the page is still appended, but nothing more is asked for.
+        let (mut app, room, id) = seeking_newer();
+        press(&mut app, "<Esc>");
+        assert!(app.search.is_none());
+        app.effects.clear();
+        deliver(
+            &mut app,
+            &room,
+            id,
+            page_of(&room, 100, 101, "nothing", false),
+        );
+        assert!(newer_effect(&app).is_none());
+        assert_eq!(app.messages[&room].len(), 7);
+        // Opening another room: the detached state is dropped and the late page is ignored.
+        let (mut app, room, id) = seeking_newer();
+        let other = app
+            .rooms
+            .iter()
+            .find(|r| r.id != room && !r.encrypted)
+            .expect("other")
+            .id
+            .clone();
+        app.open_room(other);
+        assert!(app.search.is_none());
+        app.effects.clear();
+        deliver(
+            &mut app,
+            &room,
+            id,
+            page_of(&room, 100, 101, "needle", false),
+        );
+        assert!(newer_effect(&app).is_none());
+        assert!(!app.messages.contains_key(&room));
+    }
+
+    #[test]
+    fn keys_are_ignored_while_waiting_and_a_page_in_flight_is_reused() {
+        let (mut app, room, id) = seeking_newer();
+        app.effects.clear();
+        press(&mut app, "N");
+        press(&mut app, "n");
+        assert!(newer_effect(&app).is_none(), "no second request");
+        assert_eq!(cursor(&app, &room), 1);
+        // A page the cursor asked for resolves a wait started afterwards.
+        let (mut app, room) = jumped(5, 1);
+        press(&mut app, "G");
+        let (_, id2) = newer_effect(&app).expect("cursor-triggered page");
+        app.search = Some(crate::app::search::Search {
+            query: "needle".to_string(),
+            seeking: false,
+            seeking_newer: false,
+        });
+        app.effects.clear();
+        // The cursor is on the last message, so there is nothing newer loaded to scan.
+        press(&mut app, "N");
+        assert!(newer_effect(&app).is_none(), "the page in flight is reused");
+        deliver(
+            &mut app,
+            &room,
+            id2,
+            page_of(&room, 100, 101, "needle", false),
+        );
+        assert_eq!(cursor(&app, &room), 5);
+        let _ = id;
+    }
+
+    #[test]
+    fn an_older_page_does_not_resolve_a_newer_wait() {
+        let (mut app, room, _) = seeking_newer();
+        crate::app::search::on_page(&mut app, &room);
+        assert!(app.search.as_ref().expect("search").seeking);
+        assert!(app.search.as_ref().expect("search").seeking_newer);
+    }
+
+    #[test]
+    fn n_toward_newer_in_a_room_that_is_not_detached_asks_for_nothing() {
+        let mut app = app_80x24();
+        let room = RoomId("general".to_string());
+        app.open_room(room.clone());
+        app.search = Some(crate::app::search::Search {
+            query: "zzzqqq".to_string(),
+            seeking: false,
+            seeking_newer: false,
+        });
+        app.effects.clear();
+        press(&mut app, "N");
+        assert!(app.effects.is_empty());
+        assert_eq!(status(&app), "No newer match");
+        assert!(!app.search.as_ref().expect("search").seeking);
     }
 
     #[test]
