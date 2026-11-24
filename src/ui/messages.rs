@@ -7,8 +7,10 @@ use crate::ui::sanitize::sanitize_line;
 use crate::ui::{pane_block, wrap};
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 /// Draw the messages pane: only the rows of the window `app::messages::view` selects.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -80,6 +82,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .skip(v.top_row)
         .take(usize::from(inner.height))
         .collect();
+    // Where the matches of an active search sit on the visible cursor rows: the cursor highlight
+    // below would reverse them, so they are drawn again afterwards.
+    let match_cells = if app.search.is_some() {
+        cursor_match_cells(&window, &cursor_rows, v.top_row, &app.theme)
+    } else {
+        Vec::new()
+    };
     frame.render_widget(Paragraph::new(window), inner);
     // Highlight the whole width of every visible row of the cursor message, trailing blanks
     // included.
@@ -91,6 +100,46 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .buffer_mut()
             .set_style(Rect::new(inner.x, y, inner.width, 1), highlight);
     }
+    // A match keeps its own style on the cursor row: no reversing, its colors as themed.
+    let match_style = app.theme.search_match.remove_modifier(Modifier::REVERSED);
+    for (row, x, width) in match_cells {
+        let y = inner.y + u16::try_from(row - v.top_row).unwrap_or(u16::MAX);
+        let x = inner.x.saturating_add(x);
+        let width = width.min(inner.right().saturating_sub(x));
+        frame
+            .buffer_mut()
+            .set_style(Rect::new(x, y, width, 1), match_style);
+    }
+}
+
+/// `(row, x, width)` of every span in the match style on the visible rows of the cursor message,
+/// with `x` relative to the pane.
+fn cursor_match_cells(
+    window: &[Line<'_>],
+    cursor_rows: &std::ops::Range<usize>,
+    top_row: usize,
+    theme: &crate::config::Theme,
+) -> Vec<(usize, u16, u16)> {
+    let mut cells = Vec::new();
+    for (i, line) in window.iter().enumerate() {
+        let row = top_row + i;
+        if !cursor_rows.contains(&row) {
+            continue;
+        }
+        let mut x = 0usize;
+        for span in &line.spans {
+            let width = span.content.width();
+            if span.style == theme.search_match && width > 0 {
+                cells.push((
+                    row,
+                    u16::try_from(x).unwrap_or(u16::MAX),
+                    u16::try_from(width).unwrap_or(u16::MAX),
+                ));
+            }
+            x += width;
+        }
+    }
+    cells
 }
 
 #[cfg(test)]
@@ -797,5 +846,169 @@ mod tests {
             "failed style under the cursor"
         );
         assert!(!buffer[(14, 5)].modifier.contains(Modifier::REVERSED));
+    }
+
+    // ---- search highlighting ----
+
+    fn msg_with(id: usize, body: &str, kind: MessageKind) -> Message {
+        Message {
+            id: format!("s{id}"),
+            room_id: general(),
+            author: "alice".to_string(),
+            ts: 1000 + id as i64,
+            body: body.to_string(),
+            kind,
+            send: SendState::Sent,
+            edited: false,
+            plain_text: true,
+        }
+    }
+
+    fn search_app(config: crate::config::Config, bodies: &[(&str, MessageKind)]) -> App {
+        let mut app = crate::test_util::app_with_config(config, 80, 24);
+        app.open_room(general());
+        let msgs = bodies
+            .iter()
+            .enumerate()
+            .map(|(i, (b, k))| msg_with(i, b, *k))
+            .collect();
+        app.messages.insert(general(), msgs);
+        app.msg_views.remove(&general());
+        app
+    }
+
+    fn searching(app: &mut App, query: &str) {
+        app.search = Some(crate::app::search::Search {
+            query: query.to_string(),
+            seeking: false,
+        });
+    }
+
+    /// Cells of the pane (inside the border) whose background is `bg`.
+    fn cells_with_bg(terminal: &Terminal<TestBackend>, bg: Color) -> Vec<(u16, u16)> {
+        let buffer = terminal.backend().buffer();
+        let mut out = Vec::new();
+        for y in 1..buffer.area.height - 1 {
+            for x in 1..buffer.area.width - 1 {
+                if buffer[(x, y)].bg == bg {
+                    out.push((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    const N: MessageKind = MessageKind::Normal;
+
+    #[test]
+    fn every_occurrence_is_drawn_in_the_match_style() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[("foo bar foo", N), ("middle", N), ("last foo", N)],
+        );
+        searching(&mut app, "foo");
+        // Put the cursor on the message with no match, so no row is reversed over a match.
+        press(&mut app, "gg");
+        press(&mut app, "j");
+        let terminal = render_pane(&app);
+        let cells = cells_with_bg(&terminal, Color::Yellow);
+        assert_eq!(cells.len(), 9, "three matches of three columns: {cells:?}");
+        let buffer = terminal.backend().buffer();
+        assert!(
+            cells
+                .iter()
+                .all(|&(x, y)| buffer[(x, y)].fg == Color::Black)
+        );
+        let text: String = cells
+            .iter()
+            .map(|&(x, y)| buffer[(x, y)].symbol())
+            .collect();
+        assert_eq!(text, "foofoofoo");
+    }
+
+    #[test]
+    fn matching_is_smart_case_in_the_highlight() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[("Foo foo", N), ("x", N)],
+        );
+        searching(&mut app, "Foo");
+        let terminal = render_pane(&app);
+        assert_eq!(cells_with_bg(&terminal, Color::Yellow).len(), 3);
+        searching(&mut app, "foo");
+        let terminal = render_pane(&app);
+        assert_eq!(cells_with_bg(&terminal, Color::Yellow).len(), 6);
+    }
+
+    #[test]
+    fn themed_match_style_applies() {
+        let config = crate::test_util::config_from_theme("[search.match]\nbg = 5\n");
+        let mut app = search_app(config, &[("foo", N), ("x", N)]);
+        searching(&mut app, "foo");
+        let terminal = render_pane(&app);
+        assert_eq!(cells_with_bg(&terminal, Color::Indexed(5)).len(), 3);
+        assert!(cells_with_bg(&terminal, Color::Yellow).is_empty());
+    }
+
+    #[test]
+    fn match_on_the_cursor_row_is_not_reversed() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[("older", N), ("say foo now", N)],
+        );
+        searching(&mut app, "foo");
+        // The cursor starts on the newest message, which holds the match.
+        assert_eq!(view(&app, &general()).cursor, 1);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let cells = cells_with_bg(&terminal, Color::Yellow);
+        assert_eq!(cells.len(), 3);
+        for &(x, y) in &cells {
+            assert!(!buffer[(x, y)].modifier.contains(Modifier::REVERSED));
+            assert_eq!(buffer[(x, y)].fg, Color::Black);
+        }
+        // The rest of the cursor row is still the reversed cursor highlight.
+        let y = cells[0].1;
+        assert!(buffer[(2, y)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn deleted_lines_and_encrypted_text_are_not_highlighted() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[
+                ("foo", MessageKind::Deleted),
+                (crate::api::map::ENCRYPTED_TEXT, N),
+                ("plain", N),
+            ],
+        );
+        searching(&mut app, "message");
+        let terminal = render_pane(&app);
+        // "message deleted" and "[encrypted message]" contain the query but are not matches.
+        assert!(cells_with_bg(&terminal, Color::Yellow).is_empty());
+    }
+
+    #[test]
+    fn a_hostile_body_is_matched_as_drawn() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[("a\u{1b}[31mfoo\u{7}b", N), ("x", N)],
+        );
+        searching(&mut app, "foo");
+        let terminal = render_pane(&app);
+        assert_eq!(cells_with_bg(&terminal, Color::Yellow).len(), 3);
+        assert!(!all_text(&terminal).contains('\u{1b}'));
+    }
+
+    #[test]
+    fn a_search_never_changes_row_heights() {
+        let long = "foo ".repeat(40);
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[(long.as_str(), N), ("foo", N), ("tail", N)],
+        );
+        let without = row_starts(&app, &general());
+        searching(&mut app, "foo");
+        assert_eq!(row_starts(&app, &general()), without);
     }
 }

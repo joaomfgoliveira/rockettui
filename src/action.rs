@@ -66,6 +66,12 @@ pub enum Action {
     ShowHelp,
     /// Open the context popup (`?`): the actions that apply to the selected object.
     ShowContext,
+    /// Open the search prompt on the command row (`/`): find text in the open room.
+    SearchStart,
+    /// Jump to the next match toward older messages (`n`), loading older history if needed.
+    SearchNext,
+    /// Jump to the previous match, toward newer messages (`N`).
+    SearchPrev,
     ExecuteCommand,
     Quit,
     /// A `:` command line bound in keymap.toml as `cmd:<command>`; produced only by the keymap.
@@ -224,6 +230,9 @@ impl std::fmt::Debug for Action {
             Action::DeleteMessage => write!(f, "DeleteMessage"),
             Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ShowContext => write!(f, "ShowContext"),
+            Action::SearchStart => write!(f, "SearchStart"),
+            Action::SearchNext => write!(f, "SearchNext"),
+            Action::SearchPrev => write!(f, "SearchPrev"),
             Action::ExecuteCommand => write!(f, "ExecuteCommand"),
             Action::Quit => write!(f, "Quit"),
             Action::RunCommand(_) => write!(f, "RunCommand(..)"),

@@ -75,27 +75,39 @@ pub fn render_status(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Where the hardware cursor goes: right after ":" and the command text, in Command mode only.
+/// What the command row shows: `:` and the command line in Command mode, `/` and the query while
+/// the search prompt is open, otherwise nothing. The text is sanitized to one row.
+fn cmdline_text(app: &App) -> Option<String> {
+    if let Some(query) = &app.search_prompt {
+        Some(format!("/{}", sanitize_line(query)))
+    } else if app.mode == Mode::Command {
+        Some(format!(":{}", sanitize_line(&app.cmdline)))
+    } else {
+        None
+    }
+}
+
+/// Where the hardware cursor goes: right after the `:` or `/` and the typed text, while the
+/// command line or the search prompt is open.
 pub fn cmdline_cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.mode != Mode::Command || area.width == 0 || area.height == 0 {
+    if area.width == 0 || area.height == 0 {
         return None;
     }
-    let text_width = u16::try_from(sanitize_line(&app.cmdline).width()).unwrap_or(u16::MAX);
+    let text = cmdline_text(app)?;
+    let text_width = u16::try_from(text.width()).unwrap_or(u16::MAX);
     let x = area
         .x
-        .saturating_add(1)
         .saturating_add(text_width)
         .min(area.right().saturating_sub(1));
     Some(Position::new(x, area.y))
 }
 
 pub fn render_cmdline(frame: &mut Frame, area: Rect, app: &App) {
-    if app.mode == Mode::Command {
-        let line = Line::styled(
-            format!(":{}", sanitize_line(&app.cmdline)),
-            app.theme.cmdline_text,
+    if let Some(text) = cmdline_text(app) {
+        frame.render_widget(
+            Paragraph::new(Line::styled(text, app.theme.cmdline_text)),
+            area,
         );
-        frame.render_widget(Paragraph::new(line), area);
     }
     if let Some(pos) = cmdline_cursor(app, area) {
         frame.set_cursor_position(pos);
@@ -154,6 +166,40 @@ mod tests {
         let row: String = (0..80).map(|x| buffer[(x, 22)].symbol()).collect();
         let at = u16::try_from(row.find("general").expect("room")).expect("x");
         assert_eq!(buffer[(at, 22)].fg, Color::Indexed(7));
+    }
+
+    #[test]
+    fn search_prompt_on_the_command_row() {
+        let config = config_from_theme("[cmdline.text]\nfg = 6\n");
+        let mut app = app_with_config(config, 80, 24);
+        // Open the first room, then the prompt; hostile text can only arrive by paste.
+        crate::test_util::press(&mut app, "<CR>/");
+        crate::app::update::update(
+            &mut app,
+            crate::action::Action::Paste("x\u{1b}[31my\nz".to_string()),
+        );
+        let buffer = crate::test_util::render_buffer(&app, 80, 24);
+        let row: String = (0..80).map(|x| buffer[(x, 23)].symbol()).collect();
+        assert!(row.starts_with("/x[31my z"), "{row}");
+        assert!(!row.contains('\u{1b}'));
+        assert_eq!(buffer[(0, 23)].fg, Color::Indexed(6));
+        let area = Rect::new(0, 23, 80, 1);
+        assert_eq!(cmdline_cursor(&app, area), Some(Position::new(9, 23)));
+        // The smallest supported size still draws the prompt, with the cursor inside the row.
+        let small = crate::test_util::render_to_string(&app, 40, 8);
+        assert!(
+            small
+                .lines()
+                .last()
+                .is_some_and(|l| l.starts_with("/x[31my z"))
+        );
+        assert_eq!(
+            cmdline_cursor(&app, Rect::new(0, 7, 5, 1)),
+            Some(Position::new(4, 7))
+        );
+        // The mode badge still says Normal.
+        let badge: String = (0..80).map(|x| buffer[(x, 22)].symbol()).collect();
+        assert!(badge.contains("NORMAL"), "{badge}");
     }
 
     #[test]

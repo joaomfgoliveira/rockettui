@@ -119,12 +119,12 @@ pub fn maybe_load_older(app: &mut App) {
     if app.messages.get(&room_id).is_none_or(Vec::is_empty) {
         return;
     }
-    let (exhausted, loading_older, oldest_ts) = match app.history.get(&room_id) {
+    let (exhausted, loading_older) = match app.history.get(&room_id) {
         Some(HistoryState::Loaded {
-            oldest_ts,
             exhausted,
             loading_older,
-        }) => (*exhausted, *loading_older, oldest_ts.clone()),
+            ..
+        }) => (*exhausted, *loading_older),
         _ => return,
     };
     if messages::view(app, &room_id).cursor != 0 || loading_older {
@@ -134,10 +134,24 @@ pub fn maybe_load_older(app: &mut App) {
         app.status_msg = Some(StatusMsg::Info(BEGINNING.into()));
         return;
     }
-    let Some(before) = oldest_ts else {
-        return;
+    request_older(app, &room_id);
+}
+
+/// Record one request for the page older than the oldest message held of the Loaded room
+/// `room_id` and mark it in flight. The caller has already decided a page is wanted: this only
+/// guards the one-in-flight rule, so a page that is already loading is never asked for twice, and
+/// does nothing for a room that is not Loaded, is exhausted, or is unknown. Shared by the cursor
+/// motion (`maybe_load_older`) and the search (`app::search`).
+pub fn request_older(app: &mut App, room_id: &RoomId) {
+    let before = match app.history.get(room_id) {
+        Some(HistoryState::Loaded {
+            oldest_ts: Some(ts),
+            exhausted: false,
+            loading_older: false,
+        }) => ts.clone(),
+        _ => return,
     };
-    let Some(room) = app.rooms.iter().find(|r| r.id == room_id) else {
+    let Some(room) = app.rooms.iter().find(|r| &r.id == room_id) else {
         return;
     };
     let effect = Effect::LoadHistory {
@@ -147,7 +161,7 @@ pub fn maybe_load_older(app: &mut App) {
         count: app.settings.history_size,
         before: Some(before),
     };
-    if let Some(HistoryState::Loaded { loading_older, .. }) = app.history.get_mut(&room_id) {
+    if let Some(HistoryState::Loaded { loading_older, .. }) = app.history.get_mut(room_id) {
         *loading_older = true;
     }
     app.effects.push(effect);
@@ -358,14 +372,17 @@ fn on_older_page(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opt
     }
     if added == 0 {
         app.status_msg = Some(StatusMsg::Info(BEGINNING.into()));
+        crate::app::search::on_page(app, &room);
         return;
     }
     if let Some((cursor, offset)) = anchor {
         let cursor = cursor + added;
         let starts = messages::row_starts(app, &room);
         let top_row = (starts[cursor] as isize - offset).max(0) as usize;
-        app.msg_views.insert(room, MsgView { cursor, top_row });
+        app.msg_views
+            .insert(room.clone(), MsgView { cursor, top_row });
     }
+    crate::app::search::on_page(app, &room);
 }
 
 /// A history request failed. The first page leaves the room Failed (reopening retries); an older
@@ -375,6 +392,7 @@ pub fn on_failed(app: &mut App, room: RoomId, older: bool, error: ApiError) {
         if let Some(HistoryState::Loaded { loading_older, .. }) = app.history.get_mut(&room) {
             *loading_older = false;
         }
+        crate::app::search::on_failed(app, &room);
     } else if matches!(app.history.get(&room), Some(HistoryState::Loaded { .. })) {
         // A failed refetch of a Loaded room leaves it Loaded, with what it holds, and stale again.
         app.stale.insert(room);

@@ -108,6 +108,11 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // `?` opens the context popup; `?` again opens the help overlay, generated from this very
         // keymap. `show_help` has no default key.
         (Mode::Normal, "?", Action::ShowContext),
+        // Find in the open room: `/` opens the prompt, `n` goes to the next match toward older
+        // messages (the way a chat is read) and `N` back toward newer ones.
+        (Mode::Normal, "/", Action::SearchStart),
+        (Mode::Normal, "n", Action::SearchNext),
+        (Mode::Normal, "N", Action::SearchPrev),
         // Insert rows stay single-key so typing never waits for the sequence timeout. Shift-Enter
         // is indistinguishable from Enter in legacy terminals, so a newline is Alt-Enter or Ctrl-j.
         (Mode::Insert, "<Esc>", Action::Cancel),
@@ -239,6 +244,40 @@ mod tests {
                 .any(|(_, a)| matches!(a, Action::ShowHelp)),
             "show_help has no default key"
         );
+    }
+
+    #[test]
+    fn search_keys_are_bound_by_default() {
+        let keymap = default_keymap();
+        for (keys, want) in [
+            ("/", Action::SearchStart),
+            ("n", Action::SearchNext),
+            ("N", Action::SearchPrev),
+        ] {
+            let chords = parse_keys(keys).unwrap();
+            match keymap.lookup(Mode::Normal, &chords) {
+                Lookup::Exact(got) => assert!(*got == want, "{keys}"),
+                _ => panic!("{keys} is not bound"),
+            }
+        }
+        assert!(keymap.clashes(Mode::Normal).is_empty());
+    }
+
+    #[test]
+    fn search_keys_can_be_rebound_and_removed() {
+        let config = crate::test_util::config_from_keymap(
+            "[normal]\n\"<C-f>\" = \"search_start\"\n\"n\" = \"none\"\n",
+        );
+        let ctrl_f = parse_keys("<C-f>").unwrap();
+        assert!(matches!(
+            config.keymap.lookup(Mode::Normal, &ctrl_f),
+            Lookup::Exact(Action::SearchStart)
+        ));
+        let n = parse_keys("n").unwrap();
+        assert!(!matches!(
+            config.keymap.lookup(Mode::Normal, &n),
+            Lookup::Exact(_)
+        ));
     }
 
     #[test]

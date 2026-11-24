@@ -144,7 +144,7 @@ pub fn folders(subs: &[WireSub], rooms: &[Room], prefs: Option<&WirePrefs>) -> V
 
 /// The text shown for an end-to-end encrypted message found in a room's history (D-12, D-15).
 /// The ciphertext is never copied into a body.
-const ENCRYPTED_TEXT: &str = "[encrypted message]";
+pub(crate) const ENCRYPTED_TEXT: &str = "[encrypted message]";
 
 /// Kind and body of one wire message (D-15).
 ///

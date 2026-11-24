@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 /// Most rows of text the popup grows to, borders excluded.
-const MAX_INNER_HEIGHT: u16 = 8;
+const MAX_INNER_HEIGHT: u16 = 10;
 
 /// Draw the popup when `app.context` is set.
 pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {

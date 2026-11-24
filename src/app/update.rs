@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, realtime,
-    send, sidebar,
+    search, send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -18,6 +18,11 @@ pub fn update(app: &mut App, action: Action) {
         Action::Key(ev) => {
             app.status_msg = None;
             let chord = normalize(ev);
+            // An open search prompt takes every key before anything else (see `app::search`).
+            if app.search_prompt.is_some() {
+                search::prompt_key(app, chord);
+                return;
+            }
             // An open help overlay takes the keys next (see `app::help`).
             if app.help.is_some() {
                 help_key(app, chord);
@@ -37,7 +42,7 @@ pub fn update(app: &mut App, action: Action) {
             dispatch(app, outcome);
         }
         Action::KeyTimeout => {
-            if app.context {
+            if app.search_prompt.is_some() || app.context {
                 return;
             }
             if app.help.is_some() {
@@ -152,6 +157,7 @@ pub fn update(app: &mut App, action: Action) {
             }
             Mode::Normal => {
                 app.status_msg = None;
+                search::clear(app);
             }
             // Esc and Ctrl-c leave Insert mode and never quit; the draft is kept (D-17).
             Mode::Insert => {
@@ -210,6 +216,9 @@ pub fn update(app: &mut App, action: Action) {
         Action::DeleteMessage => edit::delete(app),
         Action::ShowHelp => app.help = Some(0),
         Action::ShowContext => app.context = true,
+        Action::SearchStart => search::start(app),
+        Action::SearchNext => search::next(app),
+        Action::SearchPrev => search::prev(app),
         Action::ExecuteCommand => {
             if app.mode == Mode::Command {
                 let line = std::mem::take(&mut app.cmdline);
@@ -218,6 +227,7 @@ pub fn update(app: &mut App, action: Action) {
             }
         }
         // A paste is one insert and never a submit (T-01-22).
+        Action::Paste(text) if app.search_prompt.is_some() => search::prompt_paste(app, &text),
         Action::Paste(text) => match app.mode {
             Mode::Insert => edit_input(app, |input| {
                 input.insert_str(&text);

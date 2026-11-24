@@ -96,6 +96,9 @@ pub struct RowCtx<'a> {
     pub zone: Zone,
     /// The theme: the author palette now, the messages element styles next (D-09, D-10).
     pub theme: &'a crate::config::Theme,
+    /// The query of the active search, whose matches are drawn in `theme.search_match`. Only the
+    /// styling of spans depends on it: the number of rows never does.
+    pub search: Option<&'a str>,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -246,9 +249,12 @@ fn body_rows(
     if msg.kind == MessageKind::Deleted {
         return vec![vec![Span::styled(DELETED_TEXT, body_style)]];
     }
+    let query = ctx
+        .search
+        .filter(|_| crate::app::search::highlightable(msg));
     let mut rows: Vec<Vec<Span<'static>>> = wrap_body(&msg.body, width)
         .into_iter()
-        .map(|row| vec![Span::styled(row, body_style)])
+        .map(|row| highlight_row(row, body_style, query, ctx.theme.search_match))
         .collect();
     if msg.edited {
         let last_width: usize = rows
@@ -266,6 +272,35 @@ fn body_rows(
         }
     }
     rows
+}
+
+/// One wrapped body row as spans: the text outside a search match in `body_style`, each match in
+/// `match_style`. Without a query, or without a match in this row, it is the one plain span. A
+/// match that crosses a wrap boundary is found in neither row and so is not highlighted (it still
+/// counts when jumping, which looks at the whole body).
+fn highlight_row(
+    row: String,
+    body_style: ratatui::style::Style,
+    query: Option<&str>,
+    match_style: ratatui::style::Style,
+) -> Vec<Span<'static>> {
+    let ranges = query.map_or_else(Vec::new, |q| crate::app::search::find(&row, q));
+    if ranges.is_empty() {
+        return vec![Span::styled(row, body_style)];
+    }
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for r in ranges {
+        if r.start > at {
+            spans.push(Span::styled(row[at..r.start].to_string(), body_style));
+        }
+        spans.push(Span::styled(row[r.start..r.end].to_string(), match_style));
+        at = r.end;
+    }
+    if at < row.len() {
+        spans.push(Span::styled(row[at..].to_string(), body_style));
+    }
+    spans
 }
 
 /// What takes the time's place in a message's first row, and the style of the time cell, the
@@ -333,6 +368,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+            search: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -352,6 +388,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme,
+            search: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -408,6 +445,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+            search: None,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -435,6 +473,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+            search: None,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -834,6 +873,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+            search: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
         for state in [
@@ -870,6 +910,7 @@ mod tests {
                 time_format: &format,
                 zone: Zone::Utc,
                 theme: &theme,
+                search: None,
             };
             for state in [
                 crate::data::SendState::Sending,
@@ -902,6 +943,7 @@ mod tests {
                     time_format: &format,
                     zone: Zone::Utc,
                     theme: &theme,
+                    search: None,
                 };
                 let m = with_state(state, "alice", "hello there");
                 let rows = render_rows(&m, 60, &ctx);
@@ -1013,6 +1055,7 @@ mod tests {
             time_format: &format,
             zone: Zone::Utc,
             theme: &theme,
+            search: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
     }

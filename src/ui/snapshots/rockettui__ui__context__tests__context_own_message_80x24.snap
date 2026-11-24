@@ -13,15 +13,15 @@ expression: "render_to_string(&app, 80, 24)"
 │      +platform           │┃                                                  ┃
 │  ▾ People (1)            │┃                                                  ┃
 │  Recent                  │┃                                                  ┃
-│    #random               │┃                                                  ┃
-│    &secrets [e2e]        │┃                                                  ┃
-│    #quiet                │┃                                                  ┃
-│                          │┃                                                  ┃
-│                          │┃                                                  ┃
-│                          │┌ ? ───────────────────────────────────────────────┐
-│                          ││Your message                                      │
-│                          ││e   edit the message                              │
+│    #random               │┌ ? ───────────────────────────────────────────────┐
+│    &secrets [e2e]        ││Your message                                      │
+│    #quiet                ││e   edit the message                              │
 │                          ││dd  delete the message                            │
+│                          ││gg  jump to the oldest message                    │
+│                          ││G   jump to the newest message                    │
+│                          ││/   find text in the room                         │
+│                          ││n   next match, older                             │
+│                          ││N   previous match, newer                         │
 │                          ││?   all keys (full help)                          │
 └──────────────────────────┘└──────────────────────────────────────────────────┘
  NORMAL  general

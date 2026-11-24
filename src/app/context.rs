@@ -48,11 +48,28 @@ impl Kind {
             Kind::OwnMessage => &[
                 ("edit_message", "edit the message"),
                 ("delete_message", "delete the message"),
+                ("goto_top", "jump to the oldest message"),
+                ("goto_bottom", "jump to the newest message"),
+                ("search_start", "find text in the room"),
+                ("search_next", "next match, older"),
+                ("search_prev", "previous match, newer"),
             ],
             Kind::UnsentMessage => &[
                 ("retry_send", "retry sending"),
                 ("discard_send", "discard it"),
                 ("delete_message", "discard it"),
+                ("goto_top", "jump to the oldest message"),
+                ("goto_bottom", "jump to the newest message"),
+                ("search_start", "find text in the room"),
+                ("search_next", "next match, older"),
+                ("search_prev", "previous match, newer"),
+            ],
+            Kind::OtherMessage => &[
+                ("goto_top", "jump to the oldest message"),
+                ("goto_bottom", "jump to the newest message"),
+                ("search_start", "find text in the room"),
+                ("search_next", "next match, older"),
+                ("search_prev", "previous match, newer"),
             ],
             Kind::Input => &[
                 ("enter_insert", "type a message (Insert mode)"),
@@ -61,7 +78,7 @@ impl Kind {
                 ("move_up", "move up in the draft"),
                 ("move_down", "move down in the draft"),
             ],
-            Kind::Header | Kind::OtherMessage | Kind::Nothing => &[],
+            Kind::Header | Kind::Nothing => &[],
         }
     }
 }
@@ -245,9 +262,25 @@ mod tests {
         let app = messages_app("me", SendState::Sent);
         let ctx = lines(&app);
         assert_eq!(ctx.kind, Kind::OwnMessage);
-        assert_eq!(descs(&ctx), ["edit the message", "delete the message"]);
+        assert_eq!(
+            descs(&ctx),
+            [
+                "edit the message",
+                "delete the message",
+                "jump to the oldest message",
+                "jump to the newest message",
+                "find text in the room",
+                "next match, older",
+                "previous match, newer"
+            ]
+        );
         assert_eq!(ctx.rows[0].keys, "e");
         assert_eq!(ctx.rows[1].keys, "dd");
+        assert_eq!(ctx.rows[2].keys, "gg");
+        assert_eq!(ctx.rows[3].keys, "G");
+        assert_eq!(ctx.rows[4].keys, "/");
+        assert_eq!(ctx.rows[5].keys, "n");
+        assert_eq!(ctx.rows[6].keys, "N");
     }
 
     #[test]
@@ -255,7 +288,13 @@ mod tests {
         let app = messages_app("me", SendState::Failed);
         let ctx = lines(&app);
         assert_eq!(ctx.kind, Kind::UnsentMessage);
-        assert_eq!(descs(&ctx), ["retry sending", "discard it"]);
+        assert_eq!(
+            &descs(&ctx)[..2],
+            ["retry sending", "discard it"],
+            "the search rows come after the unsent ones"
+        );
+        assert!(!descs(&ctx).contains(&"edit the message"));
+        assert!(descs(&ctx).contains(&"find text in the room"));
         assert_eq!(ctx.rows[0].keys, "r");
         assert_eq!(ctx.rows[1].keys, "dd");
     }
@@ -265,7 +304,17 @@ mod tests {
         let app = messages_app("someone-else", SendState::Sent);
         let ctx = lines(&app);
         assert_eq!(ctx.kind, Kind::OtherMessage);
-        assert!(ctx.rows.is_empty());
+        assert_eq!(
+            descs(&ctx),
+            [
+                "jump to the oldest message",
+                "jump to the newest message",
+                "find text in the room",
+                "next match, older",
+                "previous match, newer"
+            ],
+            "someone else's message lists only the jumps and the search actions"
+        );
     }
 
     #[test]
@@ -319,7 +368,32 @@ mod tests {
         app.own_username = Some("me".to_string());
         app.focus = Focus::Messages;
         let ctx = lines(&app);
-        assert_eq!(descs(&ctx), ["delete the message"]);
+        assert_eq!(&descs(&ctx)[..1], ["delete the message"]);
+        assert!(!descs(&ctx).contains(&"edit the message"));
+    }
+
+    #[test]
+    fn search_rows_follow_the_keymap() {
+        let config =
+            config_from_keymap("[normal]\n\"<C-f>\" = \"search_start\"\n\"N\" = \"none\"\n");
+        let mut app = app_with_config(config, 80, 24);
+        let room = app.rooms[0].id.clone();
+        let mut m = sample_message("m-ctx");
+        m.room_id = room.clone();
+        m.author = "someone-else".to_string();
+        m.ts = i64::MAX / 4;
+        app.messages.insert(room.clone(), vec![m]);
+        app.current_room = Some(room);
+        app.focus = Focus::Messages;
+        let ctx = lines(&app);
+        let find = ctx
+            .rows
+            .iter()
+            .find(|r| r.desc == "find text in the room")
+            .expect("find row");
+        assert_eq!(find.keys, "/ <C-f>");
+        assert!(!descs(&ctx).contains(&"previous match, newer"));
+        assert!(descs(&ctx).contains(&"next match, older"));
     }
 
     #[test]

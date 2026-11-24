@@ -54,6 +54,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "context.title",
     "context.key",
     "context.desc",
+    "search.match",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -236,6 +237,8 @@ pub struct Theme {
     pub context_title: Style,
     pub context_key: Style,
     pub context_desc: Style,
+    /// The matched text of an active search in the messages pane (`/`, `n`, `N`).
+    pub search_match: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -284,6 +287,7 @@ impl Default for Theme {
             context_title: plain.add_modifier(Modifier::BOLD),
             context_key: plain.add_modifier(Modifier::BOLD),
             context_desc: plain,
+            search_match: plain.fg(Color::Black).bg(Color::Yellow),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -331,6 +335,7 @@ impl Theme {
             ("context", "title") => Some(&mut self.context_title),
             ("context", "key") => Some(&mut self.context_key),
             ("context", "desc") => Some(&mut self.context_desc),
+            ("search", "match") => Some(&mut self.search_match),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -791,6 +796,22 @@ mod tests {
     }
 
     #[test]
+    fn search_match_default_and_override() {
+        let (theme, problems) = parse_str("");
+        assert!(problems.is_empty());
+        assert_eq!(theme.search_match.fg, Some(Color::Black));
+        assert_eq!(theme.search_match.bg, Some(Color::Yellow));
+        let (theme, problems) = parse_str("[search.match]\nbg = \"#ff8800\"\n");
+        assert!(problems.is_empty());
+        assert_eq!(theme.search_match.bg, Some(Color::Rgb(0xff, 0x88, 0x00)));
+        // Unset fields keep the built-in style.
+        assert_eq!(theme.search_match.fg, Some(Color::Black));
+        // An unknown element under `search` only warns, like every unknown element (D-03).
+        let (_, problems) = parse_str("[search.nope]\nfg = 1\n");
+        assert!(!problems.is_empty());
+    }
+
+    #[test]
     fn unknown_theme_keys_warn() {
         for alone in [
             "[status.mode]\nunderline = true\n",
@@ -828,8 +849,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            35,
-            "16 chrome and border paths, the ten messages elements, the five help elements and the four context elements"
+            36,
+            "16 chrome and border paths, the ten messages elements, the five help elements, the four context elements and the search match"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {

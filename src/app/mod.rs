@@ -11,6 +11,7 @@ pub mod history;
 pub mod input_buf;
 pub mod messages;
 pub mod realtime;
+pub mod search;
 pub mod send;
 pub mod sidebar;
 pub mod update;
@@ -146,6 +147,10 @@ pub struct App {
     /// The context popup (`app::context`), when open. Like `help` it is a state, not a mode; its
     /// content is recomputed from the app on every draw.
     pub context: bool,
+    /// The active find in the open room (`app::search`), if any. No `Debug`: it holds the query.
+    pub search: Option<search::Search>,
+    /// The text of the open search prompt (`/`), when open. Like `help` it is a state, not a mode.
+    pub search_prompt: Option<String>,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
     pub theme: crate::config::Theme,
@@ -209,6 +214,8 @@ impl App {
             confirm: None,
             help: None,
             context: false,
+            search: None,
+            search_prompt: None,
             keymap: config.keymap,
             theme: config.theme,
             matcher: Matcher::default(),
@@ -255,6 +262,7 @@ impl App {
             time_format: &self.settings.timestamp_format,
             zone: self.zone,
             theme: &self.theme,
+            search: self.search.as_ref().map(|s| s.query.as_str()),
         }
     }
 
@@ -310,6 +318,7 @@ impl App {
             // user had before the edit, never the edit text.
             edit::cancel(self);
             self.confirm = None;
+            search::clear(self);
             match self.current_room.clone() {
                 Some(old) => {
                     let live = std::mem::take(&mut self.input);

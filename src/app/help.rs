@@ -60,6 +60,9 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
     ("delete_message", "delete your message under the cursor"),
     ("show_help", "show or close this help"),
     ("show_context", "show what the selected object can do"),
+    ("search_start", "find text in the open room"),
+    ("search_next", "next match, toward older messages"),
+    ("search_prev", "previous match, toward newer messages"),
     ("execute_command", "run the command line"),
     ("quit", "quit"),
 ];
@@ -190,6 +193,14 @@ mod tests {
         let lines = build(&config.keymap);
         assert!(has(&lines, "<Tab>", "focus the next pane"));
         assert!(has(&lines, "<S-Tab>", "focus the previous pane"));
+    }
+
+    #[test]
+    fn search_keys_listed() {
+        let lines = build(&default_keymap());
+        assert!(has(&lines, "/", "find text in the open room"));
+        assert!(has(&lines, "n", "next match, toward older messages"));
+        assert!(has(&lines, "N", "previous match, toward newer messages"));
     }
 
     #[test]
