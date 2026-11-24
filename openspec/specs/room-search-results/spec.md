@@ -37,7 +37,7 @@ The app SHALL refuse the command, send no request and show an error on the statu
 - **THEN** the status line says encrypted rooms cannot be searched and no request is sent
 
 ### Requirement: Results list
-Results SHALL be shown in a read-only list over the messages pane, newest first, each result with its author, time and text drawn like a message in the pane. The list SHALL be a state of the app and not a mode: the mode badge SHALL keep its value, and the list SHALL take the motion keys and `q`, `Esc` and `Ctrl-c` while it is open. The text of the query SHALL be shown in the list's title.
+Results SHALL be shown in a read-only list over the messages pane, newest first, each result with its author, time and text drawn like a message in the pane, with a day divider above the first result of each day. The list SHALL be a state of the app and not a mode: the mode badge SHALL keep its value, and the list SHALL take the motion keys and `q`, `Esc` and `Ctrl-c` while it is open. The text of the query SHALL be shown in the list's title.
 
 #### Scenario: Newest first
 - **WHEN** a search finds three messages from different days
@@ -50,6 +50,18 @@ Results SHALL be shown in a read-only list over the messages pane, newest first,
 #### Scenario: Title shows the query
 - **WHEN** the user searched for `deploy`
 - **THEN** the list title shows `deploy`
+
+#### Scenario: Rows show only the time
+- **WHEN** a result was written on 2026-10-02 at 22:13
+- **THEN** its row shows `22:13`, and a divider `2026-10-02` is above it
+
+#### Scenario: Divider where the day changes
+- **WHEN** two results are from 2026-11-24 and one is from 2026-10-02
+- **THEN** a `2026-11-24` divider is above the first two and a `2026-10-02` divider above the third
+
+#### Scenario: Divider is not a result
+- **WHEN** the user moves down through the list
+- **THEN** the selection goes from result to result and never rests on a divider
 
 ### Requirement: Navigating and closing results
 While the list is open, the move down and up, go to top and bottom, and half-page actions SHALL move a selection in the list by the same rules as the messages pane. `q`, `Esc` and `Ctrl-c` SHALL close the list. Closing SHALL leave the open room, the focus and the messages cursor as they were. Keys that act on messages (send, edit, delete, retry, open prompts) SHALL do nothing while the list is open.
@@ -113,3 +125,18 @@ The query text and the results SHALL never be written to a log, shown in an erro
 #### Scenario: Failed request
 - **WHEN** a search request fails
 - **THEN** the error shown and any log line contain no part of the query or of a result text
+
+### Requirement: Opening a result
+While the results list is open, the select action (`Enter` by default) SHALL open the context view of the selected result (see `search-result-context`). The list and its selection SHALL be kept underneath, so returning from the context view shows them as they were.
+
+#### Scenario: Open the selected result
+- **WHEN** the list is open with the third result selected and the user presses `Enter`
+- **THEN** the context view of that result is requested and, when it arrives, shown
+
+#### Scenario: List is kept
+- **WHEN** the user opens a result and then returns from its context view
+- **THEN** the list is shown again with the same result selected
+
+#### Scenario: Select with no result
+- **WHEN** no list is open and the user presses `Enter` in the messages pane
+- **THEN** the behaviour is unchanged by this requirement
