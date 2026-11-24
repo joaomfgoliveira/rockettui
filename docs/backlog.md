@@ -12,7 +12,7 @@ current specs with what the Rocket.Chat web app does daily, to get a ranked gap 
 
 ## Candidates (unchecked against the specs, to be confirmed)
 
-- Search (`/`)
+- Search: `/`, `n`, `N` in the open room is the `find-in-room` change (`n` goes toward older messages, `Esc` clears); searching the whole history on the server is the separate `search-room` change
 - Threads
 - Reactions
 - Room switching and filtering
