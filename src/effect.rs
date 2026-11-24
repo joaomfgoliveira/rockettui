@@ -68,6 +68,17 @@ pub enum Effect {
         before: u16,
         after: u16,
     },
+    /// The next page of messages after `raw_ts` for a detached room (`Client::load_newer`), `n` of
+    /// them. Answers `Action::NewerLoaded` or `Action::NewerFailed`, addressed by `room` and
+    /// `newer_id`.
+    LoadNewer {
+        room: RoomId,
+        kind: RoomKind,
+        private: bool,
+        raw_ts: String,
+        n: u16,
+        newer_id: u64,
+    },
     /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
     /// `id` as the message `_id` (D-07, D-15). With `reconcile` (a retry of an `Unconfirmed`
     /// message) the server is asked first with `GET chat.getMessage`: a 200 is the answer and no
@@ -124,6 +135,11 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 } => Action::ContextFailed {
                     room,
                     context_id,
+                    error,
+                },
+                Effect::LoadNewer { room, newer_id, .. } => Action::NewerFailed {
+                    room,
+                    newer_id,
                     error,
                 },
                 Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
@@ -208,6 +224,25 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 }],
             }
         }
+        Effect::LoadNewer {
+            room,
+            kind,
+            private,
+            raw_ts,
+            n,
+            newer_id,
+        } => match client.load_newer(&room, kind, private, &raw_ts, n).await {
+            Ok(page) => vec![Action::NewerLoaded {
+                room,
+                newer_id,
+                page,
+            }],
+            Err(error) => vec![Action::NewerFailed {
+                room,
+                newer_id,
+                error,
+            }],
+        },
         Effect::SendMessage {
             room,
             id,

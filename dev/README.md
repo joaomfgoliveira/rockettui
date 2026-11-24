@@ -327,10 +327,17 @@ results):
 - `channels.history?latest=<raw ts>&inclusive=true&count=26` returns the message and the 25
   before it, contiguous, ending at the message. The raw `ts` string must be sent verbatim.
 - `channels.history?oldest=<raw ts>&count=100` returns the **newest** 100 messages after that time
-  (the target excluded), not the ones next to it. The neighbours are therefore reachable only when
-  fewer than 100 newer messages exist; with 100 or more the nearest ones cannot be fetched.
+  (the target excluded), not the ones next to it.
+- Adding `offset` fixes that (probe P8, 8.9.1 and 9.0.0): the server sorts newest first and skips
+  `offset` messages before applying `count`, so with `M` messages after the time,
+  `offset=M-N&count=N` returns exactly the N next to it, `offset=M-1&count=1` the very next one and
+  `offset=M` nothing. `M` is found by doubling the offset and bisecting with one-message requests
+  (about `2*log2(M)` of them); a short answer to the first 100-message request already is every
+  message after the time. This is `Client::load_newer`, used for the context window's newer side
+  and for reading on from a detached room.
 - The same smoke scenario also opens a result (`Enter`), returns (`q`), jumps into the room
-  (`Enter` twice) and leaves the detached state with `G`. Passed on 8.9.1 and 9.0.0.
+  (`Enter` twice), leaves the detached state with `:reload`, and reads on from the oldest result with
+  `j` until the newest message is reached. Passed on 8.9.1 and 9.0.0.
 
 ## Security
 

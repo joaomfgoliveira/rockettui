@@ -10,7 +10,7 @@
 //! newest by dropping the loaded messages. No `Debug`: the view holds message text.
 
 use crate::action::Action;
-use crate::api::{ApiError, ContextWindow};
+use crate::api::{ApiError, ContextWindow, NewerPage};
 use crate::app::history::{self, HistoryState};
 use crate::app::messages::{self, MsgView};
 use crate::app::{App, Focus, StatusMsg};
@@ -23,19 +23,30 @@ pub const AFTER: u16 = 25;
 
 const NOT_OPENABLE: &str = "This result cannot be opened";
 const GONE: &str = "That message was not found on the server";
-const NEWER_HIDDEN: &str = "Newer messages are not shown: more than 100 follow this one";
 const UNSENT: &str = "Resolve the unsent message first (r to retry, dd to discard)";
-const OLDER: &str = "Showing older messages: press G on the last message to return to the newest";
-const OLDER_HIDDEN: &str =
-    "Showing older messages that end before the newest: press G on the last message to load them";
+const OLDER: &str =
+    "Showing older messages: scroll down to read on, or G on the last message for the newest";
+const REACHED: &str = "Reached the newest messages";
+/// Messages one forward page asks for.
+pub const NEWER_PAGE: u16 = 50;
+
+/// A room showing a window of older history (see the module doc).
+pub struct Detached {
+    /// The raw timestamp of the newest loaded message: the `oldest` of the next forward page.
+    pub newest_raw: Option<String>,
+    /// The forward request in flight, by `App.context_seq`; an answer with another id is dropped.
+    pub pending_newer: Option<u64>,
+}
 
 /// The read-only window around one search result, oldest first.
 pub struct ContextView {
     pub messages: Vec<Message>,
     pub selected: usize,
     pub top_row: usize,
-    /// More than 100 newer messages exist, so none of the ones after the result are shown.
-    pub newer_missing: bool,
+    /// The raw timestamp of the newest message, the `oldest` of the page after the window.
+    pub newest_raw: Option<String>,
+    /// Nothing newer than the window exists.
+    pub reaches_newest: bool,
     /// The raw timestamp of the oldest message, the `latest` of the next older page after a jump.
     pub oldest_raw: Option<String>,
 }
@@ -92,17 +103,14 @@ pub fn on_loaded(app: &mut App, room: &RoomId, context_id: u64, window: ContextW
         return;
     }
     list.pending_context = None;
-    let newer_missing = window.newer_missing;
     list.context = Some(ContextView {
         messages: window.messages,
         selected: window.selected,
         top_row: 0,
-        newer_missing,
+        newest_raw: window.newest_raw,
+        reaches_newest: window.reaches_newest,
         oldest_raw: window.oldest_raw,
     });
-    if newer_missing {
-        info(app, NEWER_HIDDEN);
-    }
 }
 
 /// The request failed. Same addressing rule as `on_loaded`; the list stays as it was.
@@ -178,7 +186,7 @@ fn jump_to_chat(app: &mut App) {
     let Some(ctx) = app.results.as_mut().and_then(|l| l.context.take()) else {
         return;
     };
-    let newer_missing = ctx.newer_missing;
+    let (newest_raw, reaches_newest) = (ctx.newest_raw, ctx.reaches_newest);
     app.messages.insert(room.clone(), ctx.messages);
     app.history.insert(
         room.clone(),
@@ -188,7 +196,15 @@ fn jump_to_chat(app: &mut App) {
             loading_older: false,
         },
     );
-    app.detached.insert(room.clone());
+    if !reaches_newest {
+        app.detached.insert(
+            room.clone(),
+            Detached {
+                newest_raw,
+                pending_newer: None,
+            },
+        );
+    }
     crate::app::search::clear(app);
     crate::app::results::close_all(app);
     app.focus = Focus::Messages;
@@ -196,18 +212,24 @@ fn jump_to_chat(app: &mut App) {
     let starts = messages::row_starts(app, &room);
     let top_row = messages::scroll_into_view(&starts, selected, 0, usize::from(height));
     app.msg_views.insert(
-        room,
+        room.clone(),
         MsgView {
             cursor: selected,
             top_row,
         },
     );
-    info(app, if newer_missing { OLDER_HIDDEN } else { OLDER });
+    if reaches_newest {
+        // The window ends at the newest: the room is live again, and the merge by id closes the
+        // gap of messages that arrived while the list was open.
+        history::refetch_newest(app, &room);
+    } else {
+        info(app, OLDER);
+    }
 }
 
 /// True while `room` shows a window of older history instead of its newest messages.
 pub fn is_detached(app: &App, room: &RoomId) -> bool {
-    app.detached.contains(room)
+    app.detached.contains_key(room)
 }
 
 /// Refuse a send, edit or delete in a detached room: sets the status line and returns true.
@@ -228,11 +250,92 @@ pub fn refuse_if_detached(app: &mut App) -> bool {
 /// End the detached state of `room`: drop its loaded messages, history state and view, so the next
 /// open loads the newest page. Does nothing for a room that is not detached.
 pub fn reset(app: &mut App, room: &RoomId) {
-    if app.detached.remove(room) {
+    if app.detached.remove(room).is_some() {
         app.messages.remove(room);
         app.history.remove(room);
         app.msg_views.remove(room);
     }
+}
+
+/// After a messages-pane motion: when the cursor is on the last loaded message of a detached room
+/// and no forward page is in flight, ask for the next page of newer messages. A page that failed is
+/// asked for again by moving onto the last message again.
+pub fn maybe_load_newer(app: &mut App) {
+    let Some(room_id) = app.current_room.clone() else {
+        return;
+    };
+    let Some(detached) = app.detached.get(&room_id) else {
+        return;
+    };
+    let Some(raw_ts) = detached
+        .newest_raw
+        .clone()
+        .filter(|_| detached.pending_newer.is_none())
+    else {
+        return;
+    };
+    let len = app.messages.get(&room_id).map_or(0, Vec::len);
+    if len == 0 || messages::view(app, &room_id).cursor + 1 < len {
+        return;
+    }
+    let Some(room) = app.rooms.iter().find(|r| r.id == room_id) else {
+        return;
+    };
+    app.context_seq += 1;
+    let newer_id = app.context_seq;
+    let effect = Effect::LoadNewer {
+        room: room.id.clone(),
+        kind: room.kind,
+        private: room.private,
+        raw_ts,
+        n: NEWER_PAGE,
+        newer_id,
+    };
+    if let Some(detached) = app.detached.get_mut(&room_id) {
+        detached.pending_newer = Some(newer_id);
+    }
+    app.effects.push(effect);
+}
+
+/// A forward page arrived. It is applied only if the room is still detached and this is the
+/// request it waits for. Held ids are skipped, the rest are appended (an append shifts no index, so
+/// the cursor and the scroll stay). A page that reaches the newest ends the detached state.
+pub fn on_newer_loaded(app: &mut App, room: &RoomId, newer_id: u64, page: NewerPage) {
+    let Some(detached) = app.detached.get_mut(room) else {
+        return;
+    };
+    if detached.pending_newer != Some(newer_id) {
+        return;
+    }
+    detached.pending_newer = None;
+    if let Some(raw) = page.newest_raw {
+        detached.newest_raw = Some(raw);
+    }
+    // An empty page cannot be followed by another: treat it as the end.
+    let reached = page.reached_newest || page.messages.is_empty();
+    let held = app.messages.entry(room.clone()).or_default();
+    for message in page.messages {
+        if !held.iter().any(|m| m.id == message.id) {
+            held.push(message);
+        }
+    }
+    if reached {
+        app.detached.remove(room);
+        info(app, REACHED);
+        history::refetch_newest(app, room);
+    }
+}
+
+/// A forward page failed: the room stays detached and shows the error.
+pub fn on_newer_failed(app: &mut App, room: &RoomId, newer_id: u64, e: ApiError) {
+    let Some(detached) = app.detached.get_mut(room) else {
+        return;
+    };
+    if detached.pending_newer != Some(newer_id) {
+        return;
+    }
+    detached.pending_newer = None;
+    error(app, &e.to_string());
 }
 
 /// `G` in a detached room with the cursor already on the last loaded message: return to the newest
@@ -310,11 +413,12 @@ mod tests {
         (app, room)
     }
 
-    fn window(room: &RoomId, count: usize, selected: usize, newer_missing: bool) -> ContextWindow {
+    fn window(room: &RoomId, count: usize, selected: usize, reaches_newest: bool) -> ContextWindow {
         ContextWindow {
             messages: (0..count).map(|i| msg(room, i, "ctx")).collect(),
             selected,
-            newer_missing,
+            newest_raw: Some("newest-raw".to_string()),
+            reaches_newest,
             oldest_raw: Some("oldest-raw".to_string()),
         }
     }
@@ -396,10 +500,10 @@ mod tests {
     }
 
     #[test]
-    fn the_window_opens_with_the_result_selected_and_notes_hidden_newer() {
+    fn the_window_opens_with_the_result_selected() {
         let (mut app, room) = with_list(2);
         press(&mut app, "<CR>");
-        loaded(&mut app, &room, window(&room, 6, 3, true));
+        loaded(&mut app, &room, window(&room, 6, 3, false));
         let ctx = app
             .results
             .as_ref()
@@ -409,7 +513,6 @@ mod tests {
             .expect("view");
         assert_eq!((ctx.messages.len(), ctx.selected), (6, 3));
         assert_eq!(view(&app).cursor, 3);
-        assert!(status(&app).contains("Newer messages are not shown"));
         assert_eq!(app.mode, crate::app::Mode::Normal);
     }
 
@@ -539,7 +642,7 @@ mod tests {
         open_view(&mut app, &room, 6, 3);
         press(&mut app, "<CR>");
         assert!(app.results.is_none(), "list and view are closed");
-        assert!(app.detached.contains(&room));
+        assert!(app.detached.contains_key(&room));
         assert_eq!(app.focus, Focus::Messages);
         let held = &app.messages[&room];
         assert_eq!(held.len(), 6);
@@ -557,12 +660,24 @@ mod tests {
     }
 
     #[test]
-    fn jump_with_hidden_newer_says_the_view_ends_early() {
+    fn a_window_that_reaches_the_newest_does_not_detach_the_room() {
         let (mut app, room) = with_list(1);
         press(&mut app, "<CR>");
-        loaded(&mut app, &room, window(&room, 4, 3, true));
+        loaded(&mut app, &room, window(&room, 4, 2, true));
+        app.effects.clear();
         press(&mut app, "<CR>");
-        assert!(status(&app).contains("before the newest"));
+        assert!(!app.detached.contains_key(&room));
+        assert_eq!(app.messages[&room].len(), 4);
+        // The room is live again; one refetch closes the gap of what arrived while reading.
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadHistory { before: None, .. })),
+            "{:?}",
+            app.effects
+        );
+        update(&mut app, Action::RtMessage(msg(&room, 9100, "live")));
+        assert!(app.messages[&room].iter().any(|m| m.id == "c9100"));
     }
 
     #[test]
@@ -573,7 +688,7 @@ mod tests {
         app.messages.entry(room.clone()).or_default().push(unsent);
         open_view(&mut app, &room, 3, 1);
         press(&mut app, "<CR>");
-        assert!(!app.detached.contains(&room));
+        assert!(!app.detached.contains_key(&room));
         assert!(app.results.as_ref().expect("still open").context.is_some());
         assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
     }
@@ -582,7 +697,7 @@ mod tests {
         let (mut app, room) = with_list(1);
         open_view(&mut app, &room, count, selected);
         press(&mut app, "<CR>");
-        assert!(app.detached.contains(&room));
+        assert!(app.detached.contains_key(&room));
         app.effects.clear();
         (app, room)
     }
@@ -620,18 +735,18 @@ mod tests {
             "{:?}",
             app.effects
         );
-        assert!(app.detached.contains(&room));
+        assert!(app.detached.contains_key(&room));
     }
 
     #[test]
     fn g_on_the_last_message_returns_to_the_newest() {
         let (mut app, room) = jumped(4, 1);
         press(&mut app, "G");
-        assert!(app.detached.contains(&room), "first G only moves");
+        assert!(app.detached.contains_key(&room), "first G only moves");
         assert_eq!(messages::view(&app, &room).cursor, 3);
         app.effects.clear();
         press(&mut app, "G");
-        assert!(!app.detached.contains(&room));
+        assert!(!app.detached.contains_key(&room));
         assert!(app.messages.get(&room).is_none_or(Vec::is_empty));
         assert!(
             app.effects
@@ -651,7 +766,7 @@ mod tests {
             .id
             .clone();
         app.open_room(other);
-        assert!(!app.detached.contains(&room));
+        assert!(!app.detached.contains_key(&room));
         assert!(!app.messages.contains_key(&room));
         assert!(!app.history.contains_key(&room));
     }
@@ -670,6 +785,175 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::SendMessage { .. }))
         );
+    }
+
+    fn page(room: &RoomId, from: usize, to: usize, reached: bool) -> NewerPage {
+        NewerPage {
+            messages: (from..=to).map(|i| msg(room, i, "newer")).collect(),
+            newest_raw: Some(format!("raw-{to}")),
+            reached_newest: reached,
+        }
+    }
+
+    fn newer_effect(app: &App) -> Option<(String, u64)> {
+        app.effects.iter().find_map(|e| match e {
+            Effect::LoadNewer {
+                raw_ts,
+                newer_id,
+                n,
+                ..
+            } => {
+                assert_eq!(*n, NEWER_PAGE);
+                Some((raw_ts.clone(), *newer_id))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn moving_onto_the_last_message_asks_for_the_next_newer_page() {
+        let (mut app, room) = jumped(5, 1);
+        press(&mut app, "j");
+        assert!(newer_effect(&app).is_none(), "not on the last message yet");
+        press(&mut app, "jj");
+        let (raw, id) = newer_effect(&app).expect("a request on the last message");
+        assert_eq!(raw, "newest-raw");
+        assert_eq!(app.detached[&room].pending_newer, Some(id));
+        // One request at a time: more motions on the last message ask nothing.
+        app.effects.clear();
+        press(&mut app, "j");
+        press(&mut app, "k");
+        press(&mut app, "j");
+        assert!(newer_effect(&app).is_none());
+    }
+
+    #[test]
+    fn a_newer_page_is_appended_without_moving_the_view() {
+        let (mut app, room) = jumped(5, 1);
+        press(&mut app, "G");
+        let (_, id) = newer_effect(&app).expect("request");
+        let before = messages::view(&app, &room);
+        update(
+            &mut app,
+            Action::NewerLoaded {
+                room: room.clone(),
+                newer_id: id,
+                page: page(&room, 100, 102, false),
+            },
+        );
+        let ids: Vec<&str> = app.messages[&room].iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids.len(), 8);
+        assert_eq!(&ids[5..], ["c100", "c101", "c102"]);
+        assert_eq!(messages::view(&app, &room), before);
+        let detached = &app.detached[&room];
+        assert_eq!(detached.newest_raw.as_deref(), Some("raw-102"));
+        assert_eq!(detached.pending_newer, None);
+        // Moving onto the new last message asks for the following page from its raw time.
+        app.effects.clear();
+        press(&mut app, "G");
+        let (raw, _) = newer_effect(&app).expect("next request");
+        assert_eq!(raw, "raw-102");
+    }
+
+    #[test]
+    fn a_page_that_reaches_the_newest_ends_the_detached_state() {
+        let (mut app, room) = jumped(5, 1);
+        press(&mut app, "G");
+        let (_, id) = newer_effect(&app).expect("request");
+        app.effects.clear();
+        update(
+            &mut app,
+            Action::NewerLoaded {
+                room: room.clone(),
+                newer_id: id,
+                page: page(&room, 100, 101, true),
+            },
+        );
+        assert!(!app.detached.contains_key(&room));
+        assert!(status(&app).contains("Reached the newest"));
+        // Writing works and live messages are added again, and one refetch closes the gap.
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadHistory { before: None, .. }))
+        );
+        update(&mut app, Action::RtMessage(msg(&room, 9200, "live")));
+        assert!(app.messages[&room].iter().any(|m| m.id == "c9200"));
+        press(&mut app, "ihello<CR>");
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SendMessage { .. }))
+        );
+    }
+
+    #[test]
+    fn stale_and_failed_newer_answers() {
+        let (mut app, room) = jumped(5, 1);
+        press(&mut app, "G");
+        let (_, id) = newer_effect(&app).expect("request");
+        // A stale id and another room change nothing.
+        update(
+            &mut app,
+            Action::NewerLoaded {
+                room: room.clone(),
+                newer_id: id + 1,
+                page: page(&room, 100, 100, false),
+            },
+        );
+        update(
+            &mut app,
+            Action::NewerLoaded {
+                room: RoomId("other".to_string()),
+                newer_id: id,
+                page: page(&room, 100, 100, false),
+            },
+        );
+        assert_eq!(app.messages[&room].len(), 5);
+        assert_eq!(app.detached[&room].pending_newer, Some(id));
+        // A failure shows the error, keeps the room detached and allows another request.
+        update(
+            &mut app,
+            Action::NewerFailed {
+                room: room.clone(),
+                newer_id: id,
+                error: ApiError::Timeout,
+            },
+        );
+        assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
+        assert!(app.detached.contains_key(&room));
+        app.effects.clear();
+        press(&mut app, "k");
+        press(&mut app, "j");
+        assert!(
+            newer_effect(&app).is_some(),
+            "moving onto the last message asks again"
+        );
+    }
+
+    #[test]
+    fn g_and_reload_still_return_to_the_newest() {
+        let (mut app, room) = jumped(3, 2);
+        assert_eq!(messages::view(&app, &room).cursor, 2);
+        // The cursor is on the last message: a first request may be pending, `G` still returns.
+        app.effects.clear();
+        press(&mut app, "G");
+        assert!(!app.detached.contains_key(&room));
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadHistory { before: None, .. }))
+        );
+        // A late forward page for the dropped window changes nothing.
+        update(
+            &mut app,
+            Action::NewerLoaded {
+                room: room.clone(),
+                newer_id: 1,
+                page: page(&room, 100, 100, false),
+            },
+        );
+        assert!(app.messages.get(&room).is_none_or(Vec::is_empty));
     }
 
     #[test]

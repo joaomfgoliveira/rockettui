@@ -208,6 +208,26 @@ def main():
         got = [m.get("_id") for m in (capped or {}).get("messages", [])][::-1]
         out("P7 newer(>100 exist) status=%s returned=%d newest_100=%s adjacent_to_target=%s" % (
             status, len(got), got == ids_all[-100:], got[:1] == ids_all[11:12]))
+
+    # P8: `oldest` with `offset` returns the messages next to a time (page-forward-detached).
+    if len(ids_all) >= 130:
+        at = 10
+        ts = everything[at].get("ts")
+        newer_total = len(ids_all) - at - 1
+        take = 50
+        status, page = get("/api/v1/channels.history", roomId=room, oldest=ts, count=take,
+                           offset=newer_total - take)
+        got = [m.get("_id") for m in (page or {}).get("messages", [])][::-1]
+        out("P8 nearest_50_after(%d newer) status=%s returned=%d is_nearest=%s" % (
+            newer_total, status, len(got), got == ids_all[at + 1: at + 1 + take]))
+        status, last = get("/api/v1/channels.history", roomId=room, oldest=ts, count=1, offset=newer_total - 1)
+        out("P8 offset=M-1 count=1 returned=%d is_next=%s" % (
+            len((last or {}).get("messages", [])),
+            [m.get("_id") for m in (last or {}).get("messages", [])] == [ids_all[at + 1]]))
+        status, past = get("/api/v1/channels.history", roomId=room, oldest=ts, count=1, offset=newer_total)
+        out("P8 offset=M count=1 returned=%d" % len((past or {}).get("messages", [])))
+        status, beyond = get("/api/v1/channels.history", roomId=room, oldest=ts, count=50, offset=newer_total - 20)
+        out("P8 short_final_page returned=%d" % len((beyond or {}).get("messages", [])))
     out("PROBE DONE")
     return 0
 

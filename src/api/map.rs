@@ -258,6 +258,21 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
     }
 }
 
+/// Like `history`, but each message keeps the raw server timestamp string beside it (`None` when
+/// it could not be read), oldest first. A forward page needs the raw timestamp of the newest
+/// message it holds, to ask for the page after it.
+pub fn history_with_raw(room: &RoomId, msgs: Vec<WireMsg>) -> Vec<(Message, Option<String>)> {
+    let mut keyed: Vec<(i64, Message, Option<String>)> = msgs
+        .into_iter()
+        .map(|msg| {
+            let raw = msg.ts.raw_iso();
+            (msg.ts.millis().unwrap_or(0), message(room, msg), raw)
+        })
+        .collect();
+    keyed.sort_by(|(a_ms, a, _), (b_ms, b, _)| a_ms.cmp(b_ms).then_with(|| a.id.cmp(&b.id)));
+    keyed.into_iter().map(|(_, m, raw)| (m, raw)).collect()
+}
+
 /// A page of `chat.search` results mapped one by one, keeping the server's order (newest first):
 /// unlike history, the list is not re-sorted. Each result keeps the raw server timestamp string
 /// beside it (verbatim, never recomputed), the `latest` value of its context request.

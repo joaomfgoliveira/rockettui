@@ -1402,50 +1402,60 @@ def scenario_docker_search(binary):
     if not read_until(fd, buf, lambda b: not any("Search:" in r for r in screen_of(b).rows()), 5):
         raise SmokeFail("q did not close the list")
 
+    def open_list_at_oldest():
+        """:search, then G until the oldest result is shown and selected."""
+        type_keys(fd, buf, b":search seed message\r")
+        if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
+            raise SmokeFail("the results list did not open")
+        for _ in range(6):
+            type_keys(fd, buf, b"G")
+            if read_until(fd, buf, lambda b: any(oldest.search(r) for r in screen_of(b).rows()), 3):
+                return
+        raise SmokeFail("paging never reached the oldest results")
+
+    def jump_from_oldest():
+        """Enter twice: the context view, then the room (detached)."""
+        type_keys(fd, buf, b"\r")
+        if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
+            raise SmokeFail("Enter on a result did not open its context view")
+        type_keys(fd, buf, b"\r")
+        if not read_until(fd, buf, lambda b: "older messages" in screen_of(b).rows()[22], 10):
+            raise SmokeFail("Enter in the context view did not jump into the room")
+        if any("Search:" in r or "Context" in r for r in screen_of(buf).rows()):
+            raise SmokeFail("the list or the view is still open after the jump")
+
     # Opening a result: Enter shows the history around it, q returns to the list, Enter twice
-    # jumps into the room, which is then detached until G returns to the newest.
-    type_keys(fd, buf, b":search seed message\r")
-    if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
-        raise SmokeFail("the results list did not reopen")
+    # jumps into the room, which is then detached; :reload returns to the newest.
+    open_list_at_oldest()
     type_keys(fd, buf, b"\r")
     if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
         raise SmokeFail("Enter on a result did not open its context view")
-    if not (screen_of(buf).contains("seed message 129") and screen_of(buf).contains("seed message 128")):
-        raise SmokeFail("the context view does not show the result and the message before it")
+    if sum("seed message" in r for r in screen_of(buf).rows()) < 5:
+        raise SmokeFail("the context view does not show the messages around the result")
     type_keys(fd, buf, b"q")
     if not read_until(fd, buf, lambda b: not any("Context" in r for r in screen_of(b).rows()) and any("Search: seed message" in r for r in screen_of(b).rows()), 5):
         raise SmokeFail("q in the context view did not return to the list")
-    type_keys(fd, buf, b"\r")
-    if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
-        raise SmokeFail("the context view did not reopen")
-    type_keys(fd, buf, b"\r")
-    if not read_until(fd, buf, lambda b: "older messages" in screen_of(b).rows()[22], 10):
-        raise SmokeFail("Enter in the context view did not jump into the room")
-    if any("Search:" in r or "Context" in r for r in screen_of(buf).rows()):
-        raise SmokeFail("the list or the view is still open after the jump")
-    if not screen_of(buf).contains("seed message 129"):
-        raise SmokeFail("the room does not show the result after the jump")
-    type_keys(fd, buf, b"G")
-    if not read_until(fd, buf, lambda b: "older messages" not in screen_of(b).rows()[22], 10):
-        raise SmokeFail("G on the last message did not leave the detached state")
-    if not read_until(fd, buf, history_settled, 10):
-        raise SmokeFail("the room did not reload its newest messages")
-
-    # The same jump again, left with :reload instead of G.
-    type_keys(fd, buf, b":search seed message\r")
-    if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
-        raise SmokeFail("the results list did not open for the :reload check")
-    type_keys(fd, buf, b"\r")
-    if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
-        raise SmokeFail("the context view did not open for the :reload check")
-    type_keys(fd, buf, b"\r")
-    if not read_until(fd, buf, lambda b: "older messages" in screen_of(b).rows()[22], 10):
-        raise SmokeFail("the second jump did not detach the room")
+    jump_from_oldest()
     type_keys(fd, buf, b":reload\r")
     if not read_until(fd, buf, lambda b: "older messages" not in screen_of(b).rows()[22], 10):
         raise SmokeFail(":reload did not leave the detached state")
     if not read_until(fd, buf, lambda b: screen_of(b).contains("seed message 129"), 10):
         raise SmokeFail("the room does not show its newest message after :reload")
+
+    # Reading on from an old result: jump to the oldest result, move down onto the end of the
+    # window and keep going; newer pages are appended until the newest message is reached.
+    open_list_at_oldest()
+    jump_from_oldest()
+    for _ in range(8):
+        type_keys(fd, buf, b"300j")
+        if read_until(fd, buf, lambda b: "Reached the newest" in screen_of(b).rows()[22], 4):
+            break
+    else:
+        raise SmokeFail("reading on never reached the newest messages: " + screen_of(buf).rows()[22].strip())
+    # The page was appended below the cursor; one more motion brings the newest message into view.
+    type_keys(fd, buf, b"300j")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("seed message 129"), 5):
+        raise SmokeFail("the newest message is not shown after reading on")
 
     type_keys(fd, buf, b":search zzzqqqxxxnomatch\r")
     if not read_until(fd, buf, lambda b: "No results" in screen_of(b).rows()[22], 10):

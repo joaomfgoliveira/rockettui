@@ -165,6 +165,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::SearchPage { .. }
         | Action::ContextLoaded { .. }
         | Action::ContextFailed { .. }
+        | Action::NewerLoaded { .. }
+        | Action::NewerFailed { .. }
         | Action::MessageSent { .. }
         | Action::SendFailed { .. }
         | Action::EditDone { .. }

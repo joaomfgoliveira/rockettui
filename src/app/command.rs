@@ -636,13 +636,19 @@ mod tests {
     #[test]
     fn reload_ends_the_detached_state() {
         let mut app = reload_app(&[]);
-        app.detached.insert(rid("r-a"));
+        app.detached.insert(
+            rid("r-a"),
+            crate::app::jump::Detached {
+                newest_raw: None,
+                pending_newer: None,
+            },
+        );
         app.search = Some(crate::app::search::Search {
             query: "body".to_string(),
             seeking: false,
         });
         press(&mut app, ":reload<CR>");
-        assert!(!app.detached.contains(&rid("r-a")));
+        assert!(!app.detached.contains_key(&rid("r-a")));
         assert!(
             app.search.is_none(),
             "find matches pointed into the old window"

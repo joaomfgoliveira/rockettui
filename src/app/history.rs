@@ -78,7 +78,7 @@ pub fn refetch_newest(app: &mut App, id: &RoomId) {
     let Some(room) = app.rooms.iter().find(|r| &r.id == id) else {
         return;
     };
-    if room.encrypted || app.detached.contains(id) {
+    if room.encrypted || app.detached.contains_key(id) {
         return;
     }
     let effect = Effect::LoadHistory {
@@ -114,7 +114,7 @@ pub fn reload(app: &mut App) -> Result<(), String> {
         app.status_msg = Some(StatusMsg::Info("Already loading this room".to_string()));
         return Ok(());
     }
-    if app.detached.contains(&id) {
+    if app.detached.contains_key(&id) {
         crate::app::jump::reset(app, &id);
         crate::app::search::clear(app);
         on_open(app, &id);

@@ -113,6 +113,19 @@ pub enum Action {
         context_id: u64,
         window: crate::api::ContextWindow,
     },
+    /// A page of messages after the newest one of a detached room arrived (`newer_id` tells which
+    /// request asked for it; a stale one is dropped).
+    NewerLoaded {
+        room: RoomId,
+        newer_id: u64,
+        page: crate::api::NewerPage,
+    },
+    /// A forward page failed; the error is a fixed kind with no payload text.
+    NewerFailed {
+        room: RoomId,
+        newer_id: u64,
+        error: crate::api::ApiError,
+    },
     /// A context request failed; the error is a fixed kind with no payload text.
     ContextFailed {
         room: RoomId,
@@ -307,6 +320,16 @@ impl std::fmt::Debug for Action {
                 context_id,
                 window,
             } => write!(f, "ContextLoaded({room:?}, #{context_id}, {window:?})"),
+            Action::NewerLoaded {
+                room,
+                newer_id,
+                page,
+            } => write!(f, "NewerLoaded({room:?}, #{newer_id}, {page:?})"),
+            Action::NewerFailed {
+                room,
+                newer_id,
+                error,
+            } => write!(f, "NewerFailed({room:?}, #{newer_id}, {error:?})"),
             Action::ContextFailed {
                 room,
                 context_id,

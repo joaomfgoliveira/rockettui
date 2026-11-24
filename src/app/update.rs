@@ -123,6 +123,16 @@ pub fn update(app: &mut App, action: Action) {
             context_id,
             error,
         } => jump::on_failed(app, &room, context_id, error),
+        Action::NewerLoaded {
+            room,
+            newer_id,
+            page,
+        } => jump::on_newer_loaded(app, &room, newer_id, page),
+        Action::NewerFailed {
+            room,
+            newer_id,
+            error,
+        } => jump::on_newer_failed(app, &room, newer_id, error),
         Action::HistoryFailed { room, older, error } => {
             history::on_failed(app, room, older, error);
         }
@@ -392,6 +402,7 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
             }
             crate::app::messages::apply_motion(app, motion, count);
             history::maybe_load_older(app);
+            jump::maybe_load_newer(app);
         }
         Focus::Input => input_motion(app, motion, count),
     }

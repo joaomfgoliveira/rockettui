@@ -215,7 +215,8 @@ mod tests {
                 })
                 .collect(),
             selected,
-            newer_missing: false,
+            newest_raw: None,
+            reaches_newest: false,
             oldest_raw: None,
         };
         let id = app.context_seq;

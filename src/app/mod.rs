@@ -158,7 +158,7 @@ pub struct App {
     /// The last context request's id (`app::jump`).
     pub context_seq: u64,
     /// Rooms showing a window of older history after a jump from a search result (`app::jump`).
-    pub detached: std::collections::HashSet<RoomId>,
+    pub detached: std::collections::HashMap<RoomId, jump::Detached>,
     /// Counter behind the ids of server searches; an answer carrying an older id is dropped.
     pub search_seq: u64,
     /// The first page of a server search in flight: its id and query text.
@@ -230,7 +230,7 @@ impl App {
             search_prompt: None,
             results: None,
             context_seq: 0,
-            detached: std::collections::HashSet::new(),
+            detached: std::collections::HashMap::new(),
             search_seq: 0,
             pending_search: None,
             keymap: config.keymap,

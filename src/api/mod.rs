@@ -264,14 +264,16 @@ impl fmt::Debug for SearchHits {
 }
 
 /// The room's history around one message, oldest first. `selected` is the index of that message;
-/// `newer_missing` is true when more than `CONTEXT_NEWER_CAP` newer messages exist, so none of the
-/// ones next to the message could be reached; `oldest_raw` is the raw timestamp of the oldest
-/// message held, the `latest` value of the next older page.
+/// `newest_raw` is the raw timestamp of the newest message held, the `oldest` value of the page
+/// after the window; `reaches_newest` is true when nothing newer than the window exists;
+/// `oldest_raw` is the raw timestamp of the oldest message held, the `latest` value of the next
+/// older page.
 #[derive(Clone, PartialEq)]
 pub struct ContextWindow {
     pub messages: Vec<Message>,
     pub selected: usize,
-    pub newer_missing: bool,
+    pub newest_raw: Option<String>,
+    pub reaches_newest: bool,
     pub oldest_raw: Option<String>,
 }
 
@@ -280,18 +282,43 @@ impl fmt::Debug for ContextWindow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ContextWindow(<{} messages>, selected={}, newer_missing={})",
+            "ContextWindow(<{} messages>, selected={}, reaches_newest={})",
             self.messages.len(),
             self.selected,
-            self.newer_missing
+            self.reaches_newest
         )
     }
 }
 
-/// The most the history endpoint returns for one request. `oldest` returns the newest messages
-/// after a time, not the ones next to it (measured on 8.9.1), so the newer neighbours of a message
-/// are reachable only when fewer than this many exist.
-pub const CONTEXT_NEWER_CAP: u16 = 100;
+/// One page of messages after a point in time, oldest first. `newest_raw` is the raw timestamp of
+/// the newest message in it (`None` for an empty page); `reached_newest` is true when no message
+/// newer than the page exists.
+#[derive(Clone, PartialEq)]
+pub struct NewerPage {
+    pub messages: Vec<Message>,
+    pub newest_raw: Option<String>,
+    pub reached_newest: bool,
+}
+
+/// Redacting `Debug`: the count and the flag only.
+impl fmt::Debug for NewerPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "NewerPage(<{} messages>, reached_newest={})",
+            self.messages.len(),
+            self.reached_newest
+        )
+    }
+}
+
+/// The most the history endpoint returns for one request.
+const HISTORY_MAX: u16 = 100;
+
+/// The most one-message probes a newer page may spend finding how many messages follow a point.
+/// Doubling then bisecting needs about `2 * log2(M)`, so 24 covers any room the server can hold; a
+/// server that keeps answering "more" is cut off as a bad response.
+const NEWER_PROBE_LIMIT: u32 = 24;
 
 /// The history endpoint of a room. It follows the server room type, never the name: a direct
 /// message is `im.history`, a room whose server type is `p` (private groups, and private
@@ -457,11 +484,104 @@ impl Client {
         Ok(map::search_page(room, resp.messages))
     }
 
+    /// One `*.history` request for the messages after `raw_ts` (`oldest`, exclusive), newest first
+    /// on the wire. `offset` skips that many of the newest ones, which is how the messages next to
+    /// `raw_ts` are reached (measured on 8.9.1 and 9.0.0).
+    async fn history_after(
+        &self,
+        method: &str,
+        room: &RoomId,
+        raw_ts: &str,
+        count: u16,
+        offset: u32,
+    ) -> Result<Vec<wire::WireMsg>, ApiError> {
+        let mut query = vec![
+            ("roomId", room.0.clone()),
+            ("oldest", raw_ts.to_string()),
+            ("count", count.to_string()),
+        ];
+        if offset > 0 {
+            query.push(("offset", offset.to_string()));
+        }
+        let resp: wire::HistoryResp = self.get_json(method, &query).await?;
+        Ok(resp.messages)
+    }
+
+    /// The nearest `n` (at most 100) messages after `raw_ts`, oldest first. The server returns the
+    /// newest messages after a time, so the ones next to it are found by counting: the first
+    /// request asks for 100, and a short answer is everything after `raw_ts`. Otherwise `M`, how
+    /// many follow, is found by doubling an offset and bisecting with one-message requests, and
+    /// the page is read at `offset = M - n`. More than `NEWER_PROBE_LIMIT` probes is
+    /// `ApiError::BadResponse`.
+    pub async fn load_newer(
+        &self,
+        room: &RoomId,
+        kind: RoomKind,
+        private: bool,
+        raw_ts: &str,
+        n: u16,
+    ) -> Result<NewerPage, ApiError> {
+        let method = history_method(kind, private);
+        let n = n.clamp(1, HISTORY_MAX);
+        let first = self
+            .history_after(method, room, raw_ts, HISTORY_MAX, 0)
+            .await?;
+        let (taken, reached_newest) = if first.len() < usize::from(HISTORY_MAX) {
+            // Every message after `raw_ts` is in the answer.
+            let all = map::history_with_raw(room, first);
+            let reached = all.len() <= usize::from(n);
+            (
+                all.into_iter().take(usize::from(n)).collect::<Vec<_>>(),
+                reached,
+            )
+        } else {
+            // At least 100 follow. Item `lo` exists; find the first offset with no item: that
+            // offset is M.
+            let mut probes = 0u32;
+            let mut exists = async |offset: u32| -> Result<bool, ApiError> {
+                probes += 1;
+                if probes > NEWER_PROBE_LIMIT {
+                    return Err(ApiError::BadResponse);
+                }
+                Ok(!self
+                    .history_after(method, room, raw_ts, 1, offset)
+                    .await?
+                    .is_empty())
+            };
+            let mut lo = u32::from(HISTORY_MAX) - 1;
+            let mut hi = (lo + 1) * 2 - 1;
+            while exists(hi).await? {
+                lo = hi;
+                hi = (lo + 1) * 2 - 1;
+            }
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if exists(mid).await? {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let total = hi;
+            let take = u32::from(n).min(total);
+            let page = self
+                .history_after(method, room, raw_ts, take as u16, total - take)
+                .await?;
+            (map::history_with_raw(room, page), total <= u32::from(n))
+        };
+        let newest_raw = taken.last().and_then(|(_, raw)| raw.clone());
+        Ok(NewerPage {
+            messages: taken.into_iter().map(|(m, _)| m).collect(),
+            newest_raw,
+            reached_newest,
+        })
+    }
+
     /// The history around message `id` of `room`, whose raw server timestamp is `raw_ts`: the
-    /// message with up to `before` messages before it (`latest=raw_ts&inclusive=true`) and, when
-    /// at most `CONTEXT_NEWER_CAP` newer messages exist, up to `after` after it (`oldest=raw_ts`).
-    /// The two requests run together. The message must be in the older answer, else it is gone
-    /// (`ApiError::NotFound`); a failure of either request fails the whole load.
+    /// message with up to `before` messages before it (`latest=raw_ts&inclusive=true`) and up to
+    /// `after` messages after it (`load_newer`), however many newer ones exist. The two sides run
+    /// together. The message must be in the older answer, else it is gone (`ApiError::NotFound`);
+    /// a failure of either side fails the whole load.
     #[allow(clippy::too_many_arguments)] // one request: where, which message, how much
     pub async fn load_context(
         &self,
@@ -473,44 +593,31 @@ impl Client {
         before: u16,
         after: u16,
     ) -> Result<ContextWindow, ApiError> {
-        let method = history_method(kind, private);
         let older_query = [
             ("roomId", room.0.clone()),
             ("latest", raw_ts.to_string()),
             ("inclusive", "true".to_string()),
             ("count", (u32::from(before) + 1).to_string()),
         ];
-        let newer_query = [
-            ("roomId", room.0.clone()),
-            ("oldest", raw_ts.to_string()),
-            ("count", CONTEXT_NEWER_CAP.to_string()),
-        ];
         let (older, newer) = tokio::join!(
-            self.get_json::<wire::HistoryResp>(method, &older_query),
-            self.get_json::<wire::HistoryResp>(method, &newer_query),
+            self.get_json::<wire::HistoryResp>(history_method(kind, private), &older_query),
+            self.load_newer(room, kind, private, raw_ts, after),
         );
         let older = map::history(room, older?.messages);
-        let newer = map::history(room, newer?.messages);
+        let newer = newer?;
         let mut messages = older.messages;
         let Some(at) = messages.iter().position(|m| m.id == id) else {
             return Err(ApiError::NotFound);
         };
         // The answer is `latest`-bounded, so nothing should follow the message; cut anyway.
         messages.truncate(at + 1);
-        let newer_missing = newer.messages.len() >= usize::from(CONTEXT_NEWER_CAP);
-        if !newer_missing {
-            messages.extend(
-                newer
-                    .messages
-                    .into_iter()
-                    .filter(|m| m.id != id)
-                    .take(usize::from(after)),
-            );
-        }
+        let newest_raw = newer.newest_raw.or_else(|| Some(raw_ts.to_string()));
+        messages.extend(newer.messages.into_iter().filter(|m| m.id != id));
         Ok(ContextWindow {
             messages,
             selected: at,
-            newer_missing,
+            newest_raw,
+            reaches_newest: newer.reached_newest,
             oldest_raw: older.oldest_ts,
         })
     }
@@ -1385,148 +1492,223 @@ mod tests {
         assert_eq!(requests[0].headers.get("x-auth-token").unwrap(), TOKEN);
     }
 
-    /// A `*.history` body of messages `m<a>..=m<b>`, newest first, one second apart.
-    fn history_body(range: std::ops::RangeInclusive<u32>) -> String {
-        let msgs: Vec<String> = range
-            .rev()
+    /// The timestamp of message `n` of the simulated room: one second apart.
+    fn ts_of(n: u32) -> String {
+        format!("2026-01-01T00:{:02}:{:02}.000Z", n / 60, n % 60)
+    }
+
+    fn num_of(ts: &str) -> u32 {
+        let minutes: u32 = ts[14..16].parse().expect("minutes");
+        let seconds: u32 = ts[17..19].parse().expect("seconds");
+        minutes * 60 + seconds
+    }
+
+    /// A `*.history` answer holding messages `ns`, in the order given (newest first on the wire).
+    fn history_of(ns: impl IntoIterator<Item = u32>) -> String {
+        let msgs: Vec<String> = ns
+            .into_iter()
             .map(|n| {
-                let (m, sec) = (n / 60, n % 60);
                 format!(
-                    r#"{{"_id":"m{n}","rid":"r","msg":"t{n}","ts":"2026-01-01T00:{m:02}:{sec:02}.000Z","u":{{"_id":"u","username":"bob"}}}}"#
+                    r#"{{"_id":"m{n}","rid":"r","msg":"t{n}","ts":"{}","u":{{"_id":"u","username":"bob"}}}}"#,
+                    ts_of(n)
                 )
             })
             .collect();
         format!(r#"{{"messages":[{}],"success":true}}"#, msgs.join(","))
     }
 
-    const RAW: &str = "2026-01-01T00:00:30.000Z";
+    /// A simulated room `m1..=m<total>` that answers `*.history` the way the server was measured
+    /// to: `latest` (with `inclusive`) gives the newest `count` messages up to it, `oldest` gives
+    /// the newest `count` messages after it after skipping `offset` of the newest. `fail` makes
+    /// every request with that parameter a 500, `stuck` makes every one-message request say "more".
+    struct Room {
+        total: u32,
+        fail: Option<&'static str>,
+        stuck: bool,
+    }
 
-    /// Mount the two answers of a context load: the `latest` request and the `oldest` one.
-    async fn mount_context(server: &MockServer, older: &str, newer: &str) {
-        use wiremock::matchers::query_param;
-        for (key, body) in [("latest", older), ("oldest", newer)] {
-            Mock::given(method("GET"))
-                .and(path("/api/v1/channels.history"))
-                .and(query_param(key, RAW))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_raw(body.to_string(), "application/json"),
-                )
-                .mount(server)
-                .await;
+    impl wiremock::Respond for Room {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let q = query_of(request);
+            let get = |key: &str| q.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+            if self.fail.is_some_and(|key| get(key).is_some()) {
+                return ResponseTemplate::new(500);
+            }
+            let count: u32 = get("count").and_then(|c| c.parse().ok()).unwrap_or(20);
+            let body = if let Some(latest) = get("latest") {
+                let t = num_of(&latest).min(self.total);
+                history_of((1..=t).rev().take(count as usize))
+            } else {
+                let t = num_of(&get("oldest").expect("oldest"));
+                let offset: u32 = get("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
+                if self.stuck && count == 1 {
+                    history_of([t + 1])
+                } else {
+                    history_of(
+                        ((t + 1)..=self.total)
+                            .rev()
+                            .skip(offset as usize)
+                            .take(count as usize),
+                    )
+                }
+            };
+            ResponseTemplate::new(200).set_body_raw(body, "application/json")
         }
     }
 
-    async fn load_context(server: &MockServer, id: &str) -> Result<ContextWindow, ApiError> {
+    async fn room_server(total: u32, fail: Option<&'static str>, stuck: bool) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels.history"))
+            .respond_with(Room { total, fail, stuck })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    async fn newer(server: &MockServer, t: u32, n: u16) -> Result<NewerPage, ApiError> {
+        client_for(server)
+            .load_newer(
+                &RoomId("r".to_string()),
+                RoomKind::Channel,
+                false,
+                &ts_of(t),
+                n,
+            )
+            .await
+    }
+
+    async fn context(server: &MockServer, t: u32) -> Result<ContextWindow, ApiError> {
         client_for(server)
             .load_context(
                 &RoomId("r".to_string()),
                 RoomKind::Channel,
                 false,
-                id,
-                RAW,
+                &format!("m{t}"),
+                &ts_of(t),
                 25,
                 25,
             )
             .await
     }
 
-    fn ids_of(window: &ContextWindow) -> Vec<&str> {
-        window.messages.iter().map(|m| m.id.as_str()).collect()
+    fn ids_of(messages: &[Message]) -> Vec<String> {
+        messages.iter().map(|m| m.id.clone()).collect()
+    }
+
+    fn range_ids(r: std::ops::RangeInclusive<u32>) -> Vec<String> {
+        r.map(|n| format!("m{n}")).collect()
+    }
+
+    #[tokio::test]
+    async fn newer_with_nothing_after() {
+        let server = room_server(30, None, false).await;
+        let page = newer(&server, 30, 50).await.expect("page");
+        assert!(page.messages.is_empty() && page.reached_newest);
+        assert_eq!(page.newest_raw, None);
+    }
+
+    #[tokio::test]
+    async fn newer_short_answer_is_everything_after() {
+        let server = room_server(90, None, false).await;
+        let page = newer(&server, 30, 25).await.expect("page");
+        assert_eq!(ids_of(&page.messages), range_ids(31..=55));
+        assert!(!page.reached_newest, "35 more follow");
+        assert_eq!(page.newest_raw, Some(ts_of(55)));
+        let page = newer(&server, 80, 25).await.expect("page");
+        assert_eq!(ids_of(&page.messages), range_ids(81..=90));
+        assert!(page.reached_newest);
+        assert_eq!(server.received_requests().await.expect("recorded").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn newer_finds_the_nearest_page_however_far_the_end_is() {
+        for after in [100u32, 101, 150, 199, 200, 1000] {
+            let server = room_server(30 + after, None, false).await;
+            let page = newer(&server, 30, 50).await.expect("page");
+            assert_eq!(ids_of(&page.messages), range_ids(31..=80), "{after} newer");
+            assert_eq!(page.newest_raw, Some(ts_of(80)));
+            assert!(!page.reached_newest, "{after} newer");
+            let requests = server.received_requests().await.expect("recorded").len();
+            assert!(requests <= 26, "{after} newer took {requests} requests");
+        }
+    }
+
+    #[tokio::test]
+    async fn newer_exactly_one_page_from_the_end_reaches_it() {
+        let server = room_server(30 + 150, None, false).await;
+        let page = newer(&server, 130, 50).await.expect("page");
+        assert_eq!(ids_of(&page.messages), range_ids(131..=180));
+        assert!(page.reached_newest);
+        // Exactly 100 after the point is also found by probing, not mistaken for "many".
+        let server = room_server(130, None, false).await;
+        let page = newer(&server, 30, 100).await.expect("page");
+        assert_eq!(ids_of(&page.messages), range_ids(31..=130));
+        assert!(page.reached_newest);
+    }
+
+    #[tokio::test]
+    async fn newer_errors_and_runaway_probing_fail_the_page() {
+        let server = room_server(500, Some("oldest"), false).await;
+        assert_eq!(
+            newer(&server, 30, 50).await.expect_err("500"),
+            ApiError::Server(500)
+        );
+        let server = room_server(500, None, true).await;
+        assert_eq!(
+            newer(&server, 30, 50).await.expect_err("stuck"),
+            ApiError::BadResponse
+        );
     }
 
     #[tokio::test]
     async fn context_has_both_sides() {
-        let server = MockServer::start().await;
-        // The result is m30; 26 older answers (25 before + itself), 10 newer.
-        mount_context(&server, &history_body(5..=30), &history_body(31..=40)).await;
-        let window = load_context(&server, "m30").await.expect("window");
-        assert_eq!(window.messages.len(), 36);
-        assert_eq!(ids_of(&window)[0], "m5");
-        assert_eq!(ids_of(&window)[25], "m30");
-        assert_eq!(ids_of(&window)[35], "m40");
+        let server = room_server(40, None, false).await;
+        let window = context(&server, 30).await.expect("window");
+        assert_eq!(ids_of(&window.messages), range_ids(5..=40));
         assert_eq!(window.selected, 25);
-        assert!(!window.newer_missing);
-        assert_eq!(
-            window.oldest_raw.as_deref(),
-            Some("2026-01-01T00:00:05.000Z")
-        );
-
-        let requests = server.received_requests().await.expect("recorded");
-        assert_eq!(requests.len(), 2);
-        let older = requests
-            .iter()
-            .map(query_of)
-            .find(|q| q.iter().any(|(k, _)| k == "latest"))
-            .expect("older request");
-        assert!(older.contains(&("inclusive".to_string(), "true".to_string())));
-        assert!(older.contains(&("count".to_string(), "26".to_string())));
-        let newer = requests
-            .iter()
-            .map(query_of)
-            .find(|q| q.iter().any(|(k, _)| k == "oldest"))
-            .expect("newer request");
-        assert!(newer.contains(&("count".to_string(), "100".to_string())));
+        assert!(window.reaches_newest);
+        assert_eq!(window.oldest_raw, Some(ts_of(5)));
+        assert_eq!(window.newest_raw, Some(ts_of(40)));
     }
 
     #[tokio::test]
-    async fn context_takes_only_the_nearest_newer_messages() {
-        let server = MockServer::start().await;
-        mount_context(&server, &history_body(30..=30), &history_body(31..=90)).await;
-        let window = load_context(&server, "m30").await.expect("window");
-        // 60 newer exist (fewer than 100): the 25 nearest, oldest first.
-        assert_eq!(window.messages.len(), 26);
-        assert_eq!(ids_of(&window)[1], "m31");
-        assert_eq!(*ids_of(&window).last().expect("last"), "m55");
-        assert!(!window.newer_missing);
+    async fn context_takes_the_nearest_newer_messages_however_many_exist() {
+        let server = room_server(1500, None, false).await;
+        let window = context(&server, 30).await.expect("window");
+        assert_eq!(ids_of(&window.messages), range_ids(5..=55));
+        assert!(!window.reaches_newest);
+        assert_eq!(window.newest_raw, Some(ts_of(55)));
     }
 
     #[tokio::test]
-    async fn context_with_exactly_100_newer_hides_them() {
-        let server = MockServer::start().await;
-        mount_context(&server, &history_body(28..=30), &history_body(31..=130)).await;
-        let window = load_context(&server, "m30").await.expect("window");
-        assert_eq!(ids_of(&window), ["m28", "m29", "m30"]);
-        assert!(window.newer_missing);
-        assert_eq!(window.selected, 2);
+    async fn context_at_the_newest_message_reaches_it() {
+        let server = room_server(30, None, false).await;
+        let window = context(&server, 30).await.expect("window");
+        assert_eq!(*ids_of(&window.messages).last().expect("last"), "m30");
+        assert!(window.reaches_newest);
+        assert_eq!(window.newest_raw, Some(ts_of(30)), "the result's own time");
     }
 
     #[tokio::test]
     async fn context_result_missing_is_not_found() {
-        let server = MockServer::start().await;
-        mount_context(&server, &history_body(10..=20), &history_body(31..=35)).await;
+        // The room's older side ends before the result: it was deleted.
+        let server = room_server(20, None, false).await;
         assert_eq!(
-            load_context(&server, "m30").await.expect_err("gone"),
+            context(&server, 30).await.expect_err("gone"),
             ApiError::NotFound
         );
     }
 
     #[tokio::test]
-    async fn context_error_from_either_request_fails_the_load() {
-        use wiremock::matchers::query_param;
+    async fn context_error_from_either_side_fails_the_load() {
         for failing in ["latest", "oldest"] {
-            let server = MockServer::start().await;
-            let other = if failing == "latest" {
-                "oldest"
-            } else {
-                "latest"
-            };
-            Mock::given(method("GET"))
-                .and(path("/api/v1/channels.history"))
-                .and(query_param(failing, RAW))
-                .respond_with(ResponseTemplate::new(500))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/channels.history"))
-                .and(query_param(other, RAW))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_raw(history_body(28..=32), "application/json"),
-                )
-                .mount(&server)
-                .await;
-            let error = load_context(&server, "m30").await.expect_err("fails");
-            assert_eq!(error, ApiError::Server(500), "{failing}");
+            let server = room_server(500, Some(failing), false).await;
+            assert_eq!(
+                context(&server, 30).await.expect_err("fails"),
+                ApiError::Server(500),
+                "{failing}"
+            );
         }
     }
 
@@ -1545,7 +1727,8 @@ mod tests {
                 send: SendState::Sent,
             }],
             selected: 0,
-            newer_missing: false,
+            newest_raw: Some("secret-raw".to_string()),
+            reaches_newest: false,
             oldest_raw: Some("secret-raw".to_string()),
         };
         let text = format!("{window:?} {:?}", SearchHits::from(window.messages.clone()));
