@@ -29,6 +29,11 @@ pub const COMMANDS: &[CommandDef] = &[
         run: cmd_reconnect,
     },
     CommandDef {
+        names: &["reload"],
+        desc: "reload the open room's newest messages",
+        run: cmd_reload,
+    },
+    CommandDef {
         names: &["search"],
         desc: "search the open room on the server (:search <text>)",
         run: cmd_search,
@@ -39,6 +44,11 @@ pub const COMMANDS: &[CommandDef] = &[
         run: cmd_help,
     },
 ];
+
+/// `:reload`: reload the open room's newest messages (see `history::reload`).
+pub fn cmd_reload(app: &mut App, _args: &[&str], _rest: &str) -> Result<(), String> {
+    history::reload(app)
+}
 
 /// `:search <text>`: search the open room on the server. The text is passed on exactly as typed.
 pub fn cmd_search(app: &mut App, _args: &[&str], rest: &str) -> Result<(), String> {
@@ -505,5 +515,178 @@ mod tests {
         );
         assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Failed));
         assert!(app.effects.is_empty(), "{:?}", app.effects);
+    }
+
+    // ---- :reload ----
+
+    fn msg_in(room: &str, id: &str, ts: i64, send: SendState) -> Message {
+        Message {
+            edited: false,
+            plain_text: true,
+            id: id.to_string(),
+            room_id: rid(room),
+            author: "alice".to_string(),
+            ts,
+            body: format!("body {id}"),
+            kind: MessageKind::Normal,
+            send,
+        }
+    }
+
+    fn loaded() -> HistoryState {
+        HistoryState::Loaded {
+            oldest_ts: Some("raw-oldest".to_string()),
+            exhausted: false,
+            loading_older: false,
+        }
+    }
+
+    /// An app with room r-a open and loaded with m1, m2 (and `extra` pending ones).
+    fn reload_app(extra: &[(&str, SendState)]) -> App {
+        let mut app = App::new(Size::new(80, 24));
+        app.rooms = vec![room("r-a"), room("r-b")];
+        app.current_room = Some(rid("r-a"));
+        let mut held = vec![
+            msg_in("r-a", "m1", 10, SendState::Sent),
+            msg_in("r-a", "m2", 20, SendState::Sent),
+        ];
+        for (i, (id, send)) in extra.iter().enumerate() {
+            held.push(msg_in("r-a", id, 100 + i as i64, *send));
+        }
+        app.messages.insert(rid("r-a"), held);
+        app.history.insert(rid("r-a"), loaded());
+        app
+    }
+
+    #[test]
+    fn reload_without_a_room_or_in_an_encrypted_room_changes_nothing() {
+        let mut app = App::new(Size::new(80, 24));
+        press(&mut app, ":reload<CR>");
+        assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
+        assert!(app.effects.is_empty());
+
+        let mut app = reload_app(&[]);
+        app.rooms[0].encrypted = true;
+        press(&mut app, ":reload<CR>");
+        assert!(status_text(&app).contains("Encrypted"));
+        assert!(app.effects.is_empty());
+        assert_eq!(app.history.get(&rid("r-a")), Some(&loaded()));
+    }
+
+    #[test]
+    fn reload_while_loading_sends_no_second_request() {
+        let mut app = reload_app(&[]);
+        app.history.insert(rid("r-a"), HistoryState::Loading);
+        press(&mut app, ":reload<CR>");
+        assert!(app.effects.is_empty());
+        assert!(status_text(&app).contains("Already loading"));
+        assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Loading));
+    }
+
+    #[test]
+    fn reload_retries_a_failed_room() {
+        let mut app = reload_app(&[]);
+        app.history.insert(rid("r-a"), HistoryState::Failed);
+        press(&mut app, ":reload<CR>");
+        assert_eq!(app.effects, [history_effect("r-a")]);
+        assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Loading));
+        assert!(status_text(&app).contains("Reloading"));
+    }
+
+    #[test]
+    fn reload_refetches_a_loaded_room_and_keeps_everything() {
+        let mut app = reload_app(&[
+            ("local-1", SendState::Failed),
+            ("local-2", SendState::Sending),
+        ]);
+        let before = app.messages[&rid("r-a")].clone();
+        press(&mut app, ":reload<CR>");
+        // One request for the newest page; the room keeps its state and its messages.
+        assert_eq!(app.effects, [history_effect("r-a")]);
+        assert_eq!(app.history.get(&rid("r-a")), Some(&loaded()));
+        assert_eq!(app.messages[&rid("r-a")], before);
+        assert!(status_text(&app).contains("Reloading"));
+        // The answer adds the message the room lacked and leaves the unsent ones alone.
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: rid("r-a"),
+                messages: vec![
+                    msg_in("r-a", "m2", 20, SendState::Sent),
+                    msg_in("r-a", "m3", 30, SendState::Sent),
+                ],
+                oldest_ts: Some("raw-new".to_string()),
+                older: false,
+            },
+        );
+        let ids: Vec<&str> = app.messages[&rid("r-a")]
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["m1", "m2", "m3", "local-1", "local-2"]);
+        let local = &app.messages[&rid("r-a")][3];
+        assert_eq!(local.send, SendState::Failed);
+        assert_eq!(
+            app.history.get(&rid("r-a")),
+            Some(&loaded()),
+            "older pages stay reachable"
+        );
+    }
+
+    #[test]
+    fn reload_ends_the_detached_state() {
+        let mut app = reload_app(&[]);
+        app.detached.insert(rid("r-a"));
+        app.search = Some(crate::app::search::Search {
+            query: "body".to_string(),
+            seeking: false,
+        });
+        press(&mut app, ":reload<CR>");
+        assert!(!app.detached.contains(&rid("r-a")));
+        assert!(
+            app.search.is_none(),
+            "find matches pointed into the old window"
+        );
+        assert!(!app.messages.contains_key(&rid("r-a")));
+        assert_eq!(app.history.get(&rid("r-a")), Some(&HistoryState::Loading));
+        assert_eq!(app.effects, [history_effect("r-a")]);
+        // The newest page arrives as the room's first page, cursor on the newest.
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: rid("r-a"),
+                messages: vec![
+                    msg_in("r-a", "m8", 80, SendState::Sent),
+                    msg_in("r-a", "m9", 90, SendState::Sent),
+                ],
+                oldest_ts: Some("raw-8".to_string()),
+                older: false,
+            },
+        );
+        let held = &app.messages[&rid("r-a")];
+        assert_eq!(held.len(), 2);
+        assert_eq!(crate::app::messages::view(&app, &rid("r-a")).cursor, 1);
+    }
+
+    #[test]
+    fn reload_runs_over_an_open_results_list_and_is_listed_in_help() {
+        let mut app = reload_app(&[]);
+        app.results = Some(crate::app::results::ResultsState {
+            id: 1,
+            room: rid("r-a"),
+            query: "x".to_string(),
+            messages: vec![msg_in("r-a", "s1", 5, SendState::Sent)],
+            raw_ts: vec![None],
+            selected: 0,
+            top_row: 0,
+            exhausted: true,
+            loading_more: false,
+            context: None,
+            pending_context: None,
+        });
+        press(&mut app, ":reload<CR>");
+        assert_eq!(app.effects, [history_effect("r-a")]);
+        assert!(app.results.is_some(), "the list is left alone");
+        assert!(super::COMMANDS.iter().any(|c| c.names == ["reload"]));
     }
 }

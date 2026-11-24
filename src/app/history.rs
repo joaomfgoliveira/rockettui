@@ -91,6 +91,43 @@ pub fn refetch_newest(app: &mut App, id: &RoomId) {
     app.effects.push(effect);
 }
 
+/// `:reload`: get the open room to "newest messages shown", whatever state it is in. The path
+/// depends on the state and reuses the code that already exists for it:
+/// - no room, or an encrypted one: an error, nothing changes;
+/// - Loading: nothing changes (one request in flight per room), and the status line says so;
+/// - detached (`app::jump`): the window is dropped and the newest page is loaded as a first page;
+///   the find state goes too, because its matches pointed into the old window;
+/// - Failed or no state: the state is dropped and the room is opened again;
+/// - Loaded: the newest page is fetched again and merged by id, which keeps the cursor, the older
+///   pages and every unsent message.
+///
+/// A detached room cannot hold unsent messages (the jump and writing refuse), and no other path
+/// removes a message, so nothing unsent is ever lost.
+pub fn reload(app: &mut App) -> Result<(), String> {
+    const NO_ROOM: &str = "Open a room to reload it";
+    let id = app.current_room.clone().ok_or(NO_ROOM)?;
+    let room = app.rooms.iter().find(|r| r.id == id).ok_or(NO_ROOM)?;
+    if room.encrypted {
+        return Err("Encrypted rooms cannot be reloaded".to_string());
+    }
+    if matches!(app.history.get(&id), Some(HistoryState::Loading)) {
+        app.status_msg = Some(StatusMsg::Info("Already loading this room".to_string()));
+        return Ok(());
+    }
+    if app.detached.contains(&id) {
+        crate::app::jump::reset(app, &id);
+        crate::app::search::clear(app);
+        on_open(app, &id);
+    } else if matches!(app.history.get(&id), Some(HistoryState::Loaded { .. })) {
+        refetch_newest(app, &id);
+    } else {
+        app.history.remove(&id);
+        on_open(app, &id);
+    }
+    app.status_msg = Some(StatusMsg::Info("Reloading the newest messages".to_string()));
+    Ok(())
+}
+
 /// `:reconnect` (D-16): forget every room whose first page failed, and fetch the open room again
 /// now if its page was one of them. A closed room that failed is fetched when it is next opened.
 /// Loading and Loaded rooms are untouched (D-13).

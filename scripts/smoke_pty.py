@@ -1431,6 +1431,22 @@ def scenario_docker_search(binary):
     if not read_until(fd, buf, history_settled, 10):
         raise SmokeFail("the room did not reload its newest messages")
 
+    # The same jump again, left with :reload instead of G.
+    type_keys(fd, buf, b":search seed message\r")
+    if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("the results list did not open for the :reload check")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("the context view did not open for the :reload check")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: "older messages" in screen_of(b).rows()[22], 10):
+        raise SmokeFail("the second jump did not detach the room")
+    type_keys(fd, buf, b":reload\r")
+    if not read_until(fd, buf, lambda b: "older messages" not in screen_of(b).rows()[22], 10):
+        raise SmokeFail(":reload did not leave the detached state")
+    if not read_until(fd, buf, lambda b: screen_of(b).contains("seed message 129"), 10):
+        raise SmokeFail("the room does not show its newest message after :reload")
+
     type_keys(fd, buf, b":search zzzqqqxxxnomatch\r")
     if not read_until(fd, buf, lambda b: "No results" in screen_of(b).rows()[22], 10):
         raise SmokeFail("a search with no hit did not say so")
