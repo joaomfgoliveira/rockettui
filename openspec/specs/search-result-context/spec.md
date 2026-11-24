@@ -10,7 +10,7 @@ Lets the user read the conversation around a server search result: a read-only w
 The context view SHALL show the selected result, up to 25 messages before it and up to 25 messages after it, oldest first, in the same row format as the results list. It SHALL fetch them from the server when opened and SHALL NOT change the room's loaded messages, history state or cursor.
 
 #### Scenario: Result in the middle
-- **WHEN** a result has more than 25 messages before it and more than 25 after it, all reachable
+- **WHEN** a result has more than 25 messages before it and more than 25 after it
 - **THEN** the view shows 25 before, the result and 25 after, in time order
 
 #### Scenario: Result near the start of the room
@@ -21,8 +21,8 @@ The context view SHALL show the selected result, up to 25 messages before it and
 - **WHEN** the user opens and closes a context view
 - **THEN** the room's loaded messages and its message cursor are as before
 
-### Requirement: Newer messages only when reachable
-The view SHALL include the messages after the result only when the server lets the client reach the ones next to it, which is when at most 100 messages exist after the result. Otherwise the view SHALL end at the result and the status line SHALL say that newer messages are not shown.
+### Requirement: Newer messages in the window
+The view SHALL include the up to 25 messages written immediately after the result, however many newer messages the room holds.
 
 #### Scenario: Few newer messages
 - **WHEN** 10 messages exist after the result
@@ -30,7 +30,7 @@ The view SHALL include the messages after the result only when the server lets t
 
 #### Scenario: Many newer messages
 - **WHEN** more than 100 messages exist after the result
-- **THEN** the view ends at the result and the status line says newer messages are not shown
+- **THEN** the view shows the 25 that follow the result directly
 
 ### Requirement: Selection and scrolling
 The result SHALL be selected when the view opens and in view. The move down and up, go to top and bottom, and half-page actions SHALL move the selection by the same rules as the messages pane. The view SHALL be a state of the app and not a mode, and SHALL NOT load more history when scrolled to either end.
@@ -94,17 +94,17 @@ The text, authors and timestamps of the window SHALL never be written to a log, 
 - **WHEN** a context request fails
 - **THEN** the error shown and any log line contain no part of a message
 
-### Requirement: Jumping to the chat
-The select action (`Enter` by default) in the context view SHALL close the context view and the results list and make the window's messages the room's loaded messages, with the messages pane focused and its cursor on the result. The room SHALL be detached from the newest messages (see `message-history`), and when newer messages were not shown the status line SHALL say that the view ends before the newest.
+### Requirement: Entering the chat
+The select action (`Enter` by default) in the context view SHALL close the context view and the results list and make the window's messages the room's loaded messages, with the messages pane focused and its cursor on the result. The room SHALL be detached from the newest messages (see `message-history`), unless the window already ends at the newest message.
 
 #### Scenario: Jump
 - **WHEN** the context view of a result is open and the user presses `Enter`
 - **THEN** the list and the view are closed, the room shows the window's messages and the cursor is on the result
 
-#### Scenario: Newest not reached
-- **WHEN** more than 100 messages exist after the result and the user jumps
-- **THEN** the status line says the room ends before the newest messages and `G` loads them
-
 #### Scenario: Jump keeps the result visible
 - **WHEN** the user jumps
 - **THEN** the result's row is inside the messages pane
+
+#### Scenario: Window ends at the newest
+- **WHEN** the window already holds the newest message of the room and the user jumps
+- **THEN** the room is not detached and receives live messages
