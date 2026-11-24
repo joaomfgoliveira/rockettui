@@ -1,0 +1,11 @@
+---
+source: src/ui/results.rs
+expression: small
+---
+┌ Rooms ───────────────────┐┌ Context (┐
+│  Unread                  ││19:13   co│
+│> * #general              │└──────────┘
+│  * &dev-team             │┌ Input ───┐
+│  * @alice                ││press i to│
+└──────────────────────────┘└──────────┘
+ NORMAL  general

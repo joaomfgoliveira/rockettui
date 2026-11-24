@@ -5,7 +5,7 @@ use crate::config::settings::TimeFormat;
 use crate::data::{Message, MessageKind, SendState};
 use crate::ui::palette::author_color;
 use crate::ui::sanitize::{sanitize, sanitize_line};
-use crate::ui::timefmt::{Zone, format_ts};
+use crate::ui::timefmt::{Zone, day_of, format_ts};
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
@@ -327,6 +327,35 @@ fn send_look(msg: &Message, ctx: &RowCtx) -> (String, Option<ratatui::style::Sty
 /// Number of rows `render_rows` produces for this message.
 pub fn message_rows(msg: &Message, width: u16, ctx: &RowCtx) -> usize {
     render_rows(msg, width, ctx).len()
+}
+
+/// The day divider drawn above `msg`, or `None` when it falls on the same day as `prev` (the message
+/// above it in the list). The first message of a list (`prev` is `None`) gets one, so the list
+/// always says what day it starts on. A message whose time cannot be represented gets none. The
+/// divider is one row of `width` columns: `── YYYY-MM-DD ───…` in `theme.messages_notice`.
+pub fn divider_row(
+    msg: &Message,
+    prev: Option<&Message>,
+    width: u16,
+    ctx: &RowCtx,
+) -> Option<Line<'static>> {
+    let day = day_of(msg.ts, ctx.zone)?;
+    if prev.and_then(|p| day_of(p.ts, ctx.zone)) == Some(day) {
+        return None;
+    }
+    let mut text = format!("── {} ", day.format("%Y-%m-%d"));
+    let width = usize::from(width);
+    let fill = width.saturating_sub(text.chars().count());
+    text.extend(std::iter::repeat_n('─', fill));
+    // Chars are all one column wide here; a width narrower than the label clips it.
+    let text: String = text.chars().take(width).collect();
+    Some(Line::from(Span::styled(text, ctx.theme.messages_notice)))
+}
+
+/// Rows `msg` takes in a list: its divider (0 or 1) plus `message_rows`. The reducer's row model
+/// uses this, so scrolling agrees with what `divider_row` and `render_rows` draw.
+pub fn block_rows(msg: &Message, prev: Option<&Message>, width: u16, ctx: &RowCtx) -> usize {
+    usize::from(divider_row(msg, prev, width, ctx).is_some()) + message_rows(msg, width, ctx)
 }
 
 #[cfg(test)]
@@ -1125,5 +1154,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn msg_at(ts: i64) -> Message {
+        Message {
+            edited: false,
+            plain_text: true,
+            id: format!("m{ts}"),
+            room_id: RoomId("r".to_string()),
+            author: "a".to_string(),
+            ts,
+            body: "x".to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        }
+    }
+
+    fn divider_text(msg: &Message, prev: Option<&Message>, width: u16) -> Option<String> {
+        let theme = Theme::default();
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 1,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+        };
+        divider_row(msg, prev, width, &ctx)
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+    }
+
+    #[test]
+    fn divider_on_the_first_message_and_on_each_new_day() {
+        let (a, b, c) = (msg_at(100), msg_at(200), msg_at(86_400 + 5));
+        let first = divider_text(&a, None, 30).expect("first");
+        assert_eq!(first, "── 1970-01-01 ────────────────");
+        assert_eq!(divider_text(&b, Some(&a), 30), None, "same day");
+        let next = divider_text(&c, Some(&b), 30).expect("new day");
+        assert!(next.starts_with("── 1970-01-02 "), "{next}");
+        // Newest first lists change day going down, too.
+        assert!(divider_text(&b, Some(&c), 30).is_some());
+    }
+
+    #[test]
+    fn divider_clips_at_narrow_widths_and_skips_bad_times() {
+        assert_eq!(divider_text(&msg_at(0), None, 6).as_deref(), Some("── 197"));
+        assert_eq!(divider_text(&msg_at(i64::MAX), None, 30), None);
+        let ok = msg_at(0);
+        assert_eq!(divider_text(&msg_at(i64::MAX), Some(&ok), 30), None);
     }
 }

@@ -55,6 +55,19 @@ pub enum Effect {
         offset: u32,
         count: u16,
     },
+    /// The history around message `id` of `room` (`Client::load_context`): `before` messages
+    /// before it and `after` after it, `raw_ts` being its raw server timestamp. Answers
+    /// `Action::ContextLoaded` or `Action::ContextFailed`, addressed by `room` and `context_id`.
+    LoadContext {
+        room: RoomId,
+        kind: RoomKind,
+        private: bool,
+        id: String,
+        raw_ts: String,
+        context_id: u64,
+        before: u16,
+        after: u16,
+    },
     /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
     /// `id` as the message `_id` (D-07, D-15). With `reconcile` (a retry of an `Unconfirmed`
     /// message) the server is asked first with `GET chat.getMessage`: a 200 is the answer and no
@@ -105,6 +118,13 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     search_id,
                     offset,
                     result: Err(error),
+                },
+                Effect::LoadContext {
+                    room, context_id, ..
+                } => Action::ContextFailed {
+                    room,
+                    context_id,
+                    error,
                 },
                 Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
                 Effect::EditMessage { room, id, .. } => Action::EditFailed { room, id, error },
@@ -161,6 +181,32 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 offset,
                 result,
             }]
+        }
+        Effect::LoadContext {
+            room,
+            kind,
+            private,
+            id,
+            raw_ts,
+            context_id,
+            before,
+            after,
+        } => {
+            match client
+                .load_context(&room, kind, private, &id, &raw_ts, before, after)
+                .await
+            {
+                Ok(window) => vec![Action::ContextLoaded {
+                    room,
+                    context_id,
+                    window,
+                }],
+                Err(error) => vec![Action::ContextFailed {
+                    room,
+                    context_id,
+                    error,
+                }],
+            }
         }
         Effect::SendMessage {
             room,

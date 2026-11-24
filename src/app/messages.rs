@@ -8,7 +8,7 @@
 use crate::action::Action;
 use crate::app::App;
 use crate::data::{Message, MessageKind, RoomId, SendState};
-use crate::ui::wrap;
+use crate::ui::wrap::{self, RowCtx};
 
 /// Where a room's message pane is looking: the selected message and the first visible row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,11 +27,8 @@ pub fn viewport(app: &App) -> (u16, u16) {
 /// last element (so a room of `n` messages yields `n + 1` entries; no room data yields `[0]`).
 pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let (width, _) = viewport(app);
-    row_starts_of(
-        app,
-        app.messages.get(room).map_or(&[][..], Vec::as_slice),
-        width,
-    )
+    let msgs = app.messages.get(room).map_or(&[][..], Vec::as_slice);
+    row_starts_of(msgs, width, &app.row_ctx(msgs))
 }
 
 /// The new `top_row` that brings message `cursor` into the window.
@@ -85,12 +82,12 @@ pub fn view(app: &App, room: &RoomId) -> MsgView {
 }
 
 /// First row of every message of `msgs` at `width` columns, with the total row count last.
-pub fn row_starts_of(app: &App, msgs: &[Message], width: u16) -> Vec<usize> {
-    let ctx = app.row_ctx(msgs);
+pub fn row_starts_of(msgs: &[Message], width: u16, ctx: &RowCtx) -> Vec<usize> {
     let mut starts = vec![0];
     let mut total = 0;
-    for msg in msgs {
-        total += wrap::message_rows(msg, width, &ctx);
+    for (i, msg) in msgs.iter().enumerate() {
+        let prev = i.checked_sub(1).map(|p| &msgs[p]);
+        total += wrap::block_rows(msg, prev, width, ctx);
         starts.push(total);
     }
     starts
@@ -393,7 +390,8 @@ mod tests {
         let ctx = app.row_ctx(msgs);
         let expected: usize = msgs
             .iter()
-            .map(|m| wrap::render_rows(m, width, &ctx).len())
+            .enumerate()
+            .map(|(i, m)| wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), width, &ctx))
             .sum();
         let starts = row_starts(&app, &general());
         assert_eq!(starts.last().copied(), Some(expected));
@@ -628,7 +626,8 @@ mod tests {
             let ctx = app.row_ctx(msgs);
             let expected: usize = msgs
                 .iter()
-                .map(|m| wrap::render_rows(m, width, &ctx).len())
+                .enumerate()
+                .map(|(i, m)| wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), width, &ctx))
                 .sum();
             let starts = row_starts(&app, &general());
             assert_eq!(starts.last().copied(), Some(expected), "{w}x{h}");

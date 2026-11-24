@@ -3,10 +3,10 @@ source: src/app/edit.rs
 expression: "render_to_string(&app, 40, 12)"
 ---
 ┌ Rooms ───────────────────┐┏ general ━┓
-│  Unread                  │┃00:01   ol┃
-│> * #general              │┃00:01   my┃
-│  * &dev-team             │┃00:01   ne┃
-│  * @alice                │┃          ┃
+│  Unread                  │┃── 1970-01┃
+│> * #general              │┃00:01   ol┃
+│  * &dev-team             │┃00:01   my┃
+│  * @alice                │┃00:01   ne┃
 │  Folders                 │┃          ┃
 │  ▾ Work (1)              │┗━━━━━━━━━━┛
 │      ~design-review      │┌ Input ───┐

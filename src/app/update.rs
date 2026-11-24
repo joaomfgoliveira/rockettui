@@ -5,8 +5,8 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, realtime,
-    results, search, send, sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, jump,
+    realtime, results, search, send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -113,6 +113,16 @@ pub fn update(app: &mut App, action: Action) {
             offset,
             result,
         } => results::on_page(app, room, search_id, offset, result),
+        Action::ContextLoaded {
+            room,
+            context_id,
+            window,
+        } => jump::on_loaded(app, &room, context_id, window),
+        Action::ContextFailed {
+            room,
+            context_id,
+            error,
+        } => jump::on_failed(app, &room, context_id, error),
         Action::HistoryFailed { room, older, error } => {
             history::on_failed(app, room, older, error);
         }
@@ -223,12 +233,17 @@ pub fn update(app: &mut App, action: Action) {
         Action::SubmitInput => {
             if app.editing.is_some() {
                 edit::save(app);
-            } else {
+            } else if !(app.mode == Mode::Insert
+                && !app.input.text().trim().is_empty()
+                && jump::refuse_if_detached(app))
+            {
                 send::submit(app);
             }
         }
         Action::RetrySend => send::retry(app),
         Action::DiscardSend => send::discard(app),
+        Action::EditMessage if jump::refuse_if_detached(app) => {}
+        Action::DeleteMessage if jump::refuse_if_detached(app) => {}
         Action::EditMessage => edit::start(app),
         Action::DeleteMessage => edit::delete(app),
         Action::ShowHelp => app.help = Some(0),
@@ -372,6 +387,9 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     match app.focus {
         Focus::Sidebar => sidebar::apply_motion(app, motion, count),
         Focus::Messages => {
+            if jump::return_if_at_end(app, motion, count) {
+                return;
+            }
             crate::app::messages::apply_motion(app, motion, count);
             history::maybe_load_older(app);
         }

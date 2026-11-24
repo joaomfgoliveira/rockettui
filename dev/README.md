@@ -319,6 +319,19 @@ End to end: `python3 -I scripts/smoke_pty.py target/debug/rockettui docker_searc
 seeded `rt-public` (130 messages, three pages), closes the list, and checks the no-results and
 encrypted-room refusals. Passed on 8.9.1; on 9.0.0 only the probe above was run.
 
+### Context of a result (`jump-to-search-result`)
+
+The probe's P7 lines check how a result's neighbours can be fetched (8.9.1 and 9.0.0, 2026-11-24, identical
+results):
+
+- `channels.history?latest=<raw ts>&inclusive=true&count=26` returns the message and the 25
+  before it, contiguous, ending at the message. The raw `ts` string must be sent verbatim.
+- `channels.history?oldest=<raw ts>&count=100` returns the **newest** 100 messages after that time
+  (the target excluded), not the ones next to it. The neighbours are therefore reachable only when
+  fewer than 100 newer messages exist; with 100 or more the nearest ones cannot be fetched.
+- The same smoke scenario also opens a result (`Enter`), returns (`q`), jumps into the room
+  (`Enter` twice) and leaves the detached state with `G`. Passed on 8.9.1 and 9.0.0.
+
 ## Security
 
 - Everything binds to 127.0.0.1 only; nothing is reachable from the network.

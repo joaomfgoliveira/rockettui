@@ -18,6 +18,10 @@ pub enum Kind {
     UnsentMessage,
     OtherMessage,
     Input,
+    /// The `:search` results list.
+    SearchResults,
+    /// The context view of one search result.
+    SearchContext,
     Nothing,
 }
 
@@ -32,6 +36,8 @@ impl Kind {
             Kind::UnsentMessage => "Your unsent message",
             Kind::OtherMessage => "Message",
             Kind::Input => "Input bar",
+            Kind::SearchResults => "Search results",
+            Kind::SearchContext => "Search result in context",
             Kind::Nothing => "Nothing selected",
         }
     }
@@ -78,7 +84,35 @@ impl Kind {
                 ("move_up", "move up in the draft"),
                 ("move_down", "move down in the draft"),
             ],
+            Kind::SearchResults => &[
+                ("select", "open the result in context"),
+                ("move_down", "next result"),
+                ("move_up", "previous result"),
+                ("goto_top", "newest result"),
+                ("goto_bottom", "oldest result (loads more)"),
+                ("half_page_down", "half a page down"),
+                ("half_page_up", "half a page up"),
+            ],
+            Kind::SearchContext => &[
+                ("select", "open in the chat"),
+                ("move_down", "next message"),
+                ("move_up", "previous message"),
+                ("goto_top", "first message"),
+                ("goto_bottom", "last message"),
+                ("half_page_down", "half a page down"),
+                ("half_page_up", "half a page up"),
+            ],
             Kind::Header | Kind::Nothing => &[],
+        }
+    }
+
+    /// Fixed keys that are not keymap actions (`app::results::key` handles them before the
+    /// keymap), shown after the action rows.
+    fn fixed_rows(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Kind::SearchResults => &[("q Esc", "close the list")],
+            Kind::SearchContext => &[("q Esc", "back to the results")],
+            _ => &[],
         }
     }
 }
@@ -101,6 +135,14 @@ pub struct Context {
 /// The kind of the selected object. Follows `App.focus` only, as the motions do. An unsent row is
 /// classified before an own server message, mirroring `delete_message`.
 pub fn classify(app: &App) -> Kind {
+    // An open results list or context view takes the keys whatever pane is focused.
+    if let Some(list) = app.results.as_ref() {
+        return if list.context.is_some() {
+            Kind::SearchContext
+        } else {
+            Kind::SearchResults
+        };
+    }
     match app.focus {
         Focus::Sidebar => match sidebar::selected_row(app) {
             Some(sidebar::SidebarRow::Room { .. }) => Kind::Room,
@@ -167,6 +209,10 @@ pub fn lines(app: &App) -> Context {
             });
         }
     }
+    rows.extend(kind.fixed_rows().iter().map(|(keys, desc)| ContextLine {
+        keys: (*keys).to_string(),
+        desc: (*desc).to_string(),
+    }));
     let keys = keys_for(app, "show_context")
         .or_else(|| keys_for(app, "show_help"))
         .unwrap_or_else(|| ":help".to_string());

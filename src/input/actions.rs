@@ -163,6 +163,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::HistoryLoaded { .. }
         | Action::HistoryFailed { .. }
         | Action::SearchPage { .. }
+        | Action::ContextLoaded { .. }
+        | Action::ContextFailed { .. }
         | Action::MessageSent { .. }
         | Action::SendFailed { .. }
         | Action::EditDone { .. }

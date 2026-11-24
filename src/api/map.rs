@@ -3,8 +3,8 @@
 //! `subscriptions.get` says which rooms the user joined and how they show; `rooms.get` adds what
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
-use crate::api::HistoryPage;
 use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
+use crate::api::{HistoryPage, SearchHits};
 use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
 use std::collections::{HashMap, HashSet};
 
@@ -259,9 +259,14 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
 }
 
 /// A page of `chat.search` results mapped one by one, keeping the server's order (newest first):
-/// unlike history, the list is not re-sorted.
-pub fn search_page(room: &RoomId, msgs: Vec<WireMsg>) -> Vec<Message> {
-    msgs.into_iter().map(|msg| message(room, msg)).collect()
+/// unlike history, the list is not re-sorted. Each result keeps the raw server timestamp string
+/// beside it (verbatim, never recomputed), the `latest` value of its context request.
+pub fn search_page(room: &RoomId, msgs: Vec<WireMsg>) -> SearchHits {
+    let raw_ts = msgs.iter().map(|m| m.ts.raw_iso()).collect();
+    SearchHits {
+        messages: msgs.into_iter().map(|msg| message(room, msg)).collect(),
+        raw_ts,
+    }
 }
 
 #[cfg(test)]

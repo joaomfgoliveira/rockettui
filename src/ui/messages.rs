@@ -61,6 +61,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let mut cursor_rows = 0..0;
     let ctx = app.row_ctx(msgs);
     for (i, msg) in msgs.iter().enumerate() {
+        // The divider belongs to the message below it but is not part of its highlight.
+        let prev = i.checked_sub(1).map(|p| &msgs[p]);
+        lines.extend(wrap::divider_row(msg, prev, inner.width, &ctx));
         let rows = wrap::render_rows(msg, inner.width, &ctx);
         if i == v.cursor {
             cursor_rows = lines.len()..lines.len() + rows.len();
@@ -417,21 +420,21 @@ mod tests {
         press(&mut app, "gg");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        let name: String = (7..=11u16).map(|x| buffer[(x, 1)].symbol()).collect();
+        let name: String = (7..=11u16).map(|x| buffer[(x, 2)].symbol()).collect();
         let name = name.trim().to_string();
         assert_eq!(
-            buffer[(7, 1)].fg,
+            buffer[(7, 2)].fg,
             author_color(&name, &DEFAULT_AUTHOR_PALETTE)
         );
-        assert!(buffer[(7, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(buffer[(7, 2)].modifier.contains(Modifier::REVERSED));
         press(&mut app, "<C-w>h");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
         assert_eq!(
-            buffer[(7, 1)].fg,
+            buffer[(7, 2)].fg,
             author_color(&name, &DEFAULT_AUTHOR_PALETTE)
         );
-        assert_eq!(buffer[(7, 1)].bg, Color::DarkGray);
+        assert_eq!(buffer[(7, 2)].bg, Color::DarkGray);
     }
 
     #[test]
@@ -442,8 +445,8 @@ mod tests {
         press(&mut app, "<C-w>h");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        assert!(!buffer[(2, 1)].modifier.contains(Modifier::REVERSED));
-        assert_eq!(buffer[(2, 1)].bg, ratatui::style::Color::DarkGray);
+        assert!(!buffer[(2, 2)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(buffer[(2, 2)].bg, ratatui::style::Color::DarkGray);
     }
 
     #[test]
@@ -456,15 +459,15 @@ mod tests {
         press(&mut app, "gg");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        // Row 1 is the first row of the cursor message; its whole width carries the highlight.
+        // Row 1 is the day divider, row 2 the first row of the cursor message; its whole width carries the highlight.
         for x in [2u16, 20, 40] {
-            assert_eq!(buffer[(x, 1)].bg, Color::Indexed(6), "focused x {x}");
+            assert_eq!(buffer[(x, 2)].bg, Color::Indexed(6), "focused x {x}");
         }
         press(&mut app, "<C-w>h");
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
         for x in [2u16, 20, 40] {
-            assert_eq!(buffer[(x, 1)].bg, Color::Indexed(2), "unfocused x {x}");
+            assert_eq!(buffer[(x, 2)].bg, Color::Indexed(2), "unfocused x {x}");
         }
     }
 
@@ -488,9 +491,16 @@ mod tests {
             assert_eq!((pane.width, pane.height), (52, 19));
             let v = view(&app, &general());
             let ctx = app.row_ctx(&app.messages[&general()]);
-            let expected: Vec<String> = app.messages[&general()]
+            let msgs = &app.messages[&general()];
+            let expected: Vec<String> = msgs
                 .iter()
-                .flat_map(|m| wrap::render_rows(m, 50, &ctx))
+                .enumerate()
+                .flat_map(|(i, m)| {
+                    let prev = i.checked_sub(1).map(|p| &msgs[p]);
+                    wrap::divider_row(m, prev, 50, &ctx)
+                        .into_iter()
+                        .chain(wrap::render_rows(m, 50, &ctx))
+                })
                 .map(|line| {
                     line.spans
                         .iter()
@@ -562,6 +572,9 @@ mod tests {
         );
         let buffer = terminal.backend().buffer();
         for y in 1..=17u16 {
+            if buffer[(1, y)].symbol() == "\u{2500}" {
+                continue; // a day divider spans the whole width
+            }
             assert_eq!(buffer[(39, y)].symbol(), " ", "row {y} x=39");
             assert_eq!(buffer[(40, y)].symbol(), " ", "row {y} x=40");
             assert_ne!(buffer[(41, y)].symbol().trim(), "", "row {y} x=41");
@@ -777,16 +790,16 @@ mod tests {
     fn assert_state_styles(terminal: &Terminal<TestBackend>, body_x: u16) {
         let buffer = terminal.backend().buffer();
         let dim = |x: u16, y: u16| buffer[(x, y)].modifier.contains(Modifier::DIM);
-        for (y, name) in [(2u16, "Sending"), (3, "Queued")] {
+        for (y, name) in [(3u16, "Sending"), (4, "Queued")] {
             assert!(dim(body_x, y), "{name} body not dim");
             assert_ne!(buffer[(body_x, y)].fg, Color::Red, "{name}");
         }
-        for (y, name) in [(4u16, "Failed"), (5, "Unconfirmed")] {
+        for (y, name) in [(5u16, "Failed"), (6, "Unconfirmed")] {
             assert_eq!(buffer[(body_x, y)].fg, Color::Red, "{name} body not red");
             assert!(!dim(body_x, y), "{name}");
         }
-        assert!(!dim(body_x, 1), "Sent body is not dim");
-        assert_eq!(buffer[(body_x, 1)].fg, Color::Reset);
+        assert!(!dim(body_x, 2), "Sent body is not dim");
+        assert_eq!(buffer[(body_x, 2)].fg, Color::Reset);
     }
 
     #[test]
@@ -806,23 +819,23 @@ mod tests {
         let app = app_with_every_state(wrap::MessageLayout::TwoLine);
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        // Header rows are y 1, 3, 5, 7, 9; each body sits at x 3 on the row below.
+        // Header rows are y 2, 4, 6, 8, 10 (y 1 is the day divider); each body sits at x 3 on the row below.
         let marker_at = |y: u16| row_text(&terminal, y).contains(['\u{2026}', '!', '?']);
-        assert!(!marker_at(1), "a Sent header has a time, not a marker");
-        for y in [3u16, 5, 7, 9] {
+        assert!(!marker_at(2), "a Sent header has a time, not a marker");
+        for y in [4u16, 6, 8, 10] {
             assert!(marker_at(y), "row {y} {}", row_text(&terminal, y));
         }
-        assert_eq!(buffer[(3, 2)].fg, Color::Reset, "Sent body");
+        assert_eq!(buffer[(3, 3)].fg, Color::Reset, "Sent body");
         assert!(
-            buffer[(3, 4)].modifier.contains(Modifier::DIM),
+            buffer[(3, 5)].modifier.contains(Modifier::DIM),
             "Sending body"
         );
         assert!(
-            buffer[(3, 6)].modifier.contains(Modifier::DIM),
+            buffer[(3, 7)].modifier.contains(Modifier::DIM),
             "Queued body"
         );
-        assert_eq!(buffer[(3, 8)].fg, Color::Red, "Failed body");
-        assert_eq!(buffer[(3, 10)].fg, Color::Red, "Unconfirmed body");
+        assert_eq!(buffer[(3, 9)].fg, Color::Red, "Failed body");
+        assert_eq!(buffer[(3, 11)].fg, Color::Red, "Unconfirmed body");
         insta::assert_snapshot!(terminal.backend());
     }
 
@@ -833,19 +846,19 @@ mod tests {
         assert_eq!(view(&app, &RoomId("quiet".to_string())).cursor, 3);
         let terminal = render_pane(&app);
         let buffer = terminal.backend().buffer();
-        // Row 4 is the Failed message on the cursor: the highlight covers it, the red stays.
+        // Row 5 is the Failed message on the cursor: the highlight covers it, the red stays.
         for x in [1u16, 14, 30] {
             assert!(
-                buffer[(x, 4)].modifier.contains(Modifier::REVERSED),
+                buffer[(x, 5)].modifier.contains(Modifier::REVERSED),
                 "x {x} not highlighted"
             );
         }
         assert_eq!(
-            buffer[(14, 4)].fg,
+            buffer[(14, 5)].fg,
             Color::Red,
             "failed style under the cursor"
         );
-        assert!(!buffer[(14, 5)].modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[(14, 6)].modifier.contains(Modifier::REVERSED));
     }
 
     // ---- search highlighting ----

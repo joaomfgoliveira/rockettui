@@ -1402,6 +1402,35 @@ def scenario_docker_search(binary):
     if not read_until(fd, buf, lambda b: not any("Search:" in r for r in screen_of(b).rows()), 5):
         raise SmokeFail("q did not close the list")
 
+    # Opening a result: Enter shows the history around it, q returns to the list, Enter twice
+    # jumps into the room, which is then detached until G returns to the newest.
+    type_keys(fd, buf, b":search seed message\r")
+    if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("the results list did not reopen")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("Enter on a result did not open its context view")
+    if not (screen_of(buf).contains("seed message 129") and screen_of(buf).contains("seed message 128")):
+        raise SmokeFail("the context view does not show the result and the message before it")
+    type_keys(fd, buf, b"q")
+    if not read_until(fd, buf, lambda b: not any("Context" in r for r in screen_of(b).rows()) and any("Search: seed message" in r for r in screen_of(b).rows()), 5):
+        raise SmokeFail("q in the context view did not return to the list")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: any("Context" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("the context view did not reopen")
+    type_keys(fd, buf, b"\r")
+    if not read_until(fd, buf, lambda b: "older messages" in screen_of(b).rows()[22], 10):
+        raise SmokeFail("Enter in the context view did not jump into the room")
+    if any("Search:" in r or "Context" in r for r in screen_of(buf).rows()):
+        raise SmokeFail("the list or the view is still open after the jump")
+    if not screen_of(buf).contains("seed message 129"):
+        raise SmokeFail("the room does not show the result after the jump")
+    type_keys(fd, buf, b"G")
+    if not read_until(fd, buf, lambda b: "older messages" not in screen_of(b).rows()[22], 10):
+        raise SmokeFail("G on the last message did not leave the detached state")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("the room did not reload its newest messages")
+
     type_keys(fd, buf, b":search zzzqqqxxxnomatch\r")
     if not read_until(fd, buf, lambda b: "No results" in screen_of(b).rows()[22], 10):
         raise SmokeFail("a search with no hit did not say so")

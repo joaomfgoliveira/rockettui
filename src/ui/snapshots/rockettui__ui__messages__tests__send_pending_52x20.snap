@@ -3,7 +3,6 @@ source: src/ui/messages.rs
 expression: terminal.backend()
 ---
 "┌ general ─────────────────────────────────────────┐"
-"│09:34 dave   I'll take a look after the meeting   │"
 "│09:36 alice  nice catch, thanks!                  │"
 "│09:38 bob    the deploy finished without errors   │"
 "│09:40 carol  heads up: maintenance window tonight │"
@@ -20,5 +19,6 @@ expression: terminal.backend()
 "│09:56 carol  これはラップの確認に使う日本語のテス │" Hidden by multi-width symbols: [(15, " "), (17, " "), (19, " "), (21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " "), (33, " "), (35, " "), (37, " "), (39, " "), (41, " "), (43, " "), (45, " "), (47, " "), (49, " ")]
 "│             トメッセージです。                   │" Hidden by multi-width symbols: [(15, " "), (17, " "), (19, " "), (21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " ")]
 "│09:58 dave   I'll take a look after the meeting   │"
+"│── 1970-01-01 ────────────────────────────────────│"
 "│…     me     hello pending                        │"
 "└──────────────────────────────────────────────────┘"

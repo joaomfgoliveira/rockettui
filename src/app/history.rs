@@ -78,7 +78,7 @@ pub fn refetch_newest(app: &mut App, id: &RoomId) {
     let Some(room) = app.rooms.iter().find(|r| &r.id == id) else {
         return;
     };
-    if room.encrypted {
+    if room.encrypted || app.detached.contains(id) {
         return;
     }
     let effect = Effect::LoadHistory {

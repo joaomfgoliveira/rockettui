@@ -1,0 +1,27 @@
+---
+source: src/ui/results.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ Context (Enter: open in chat, ?: keys, q: back) ─┐
+│  Unread                  ││── 2023-11-14 ────────────────────────────────────│
+│> * #general              ││18:13 bob  context line 0                         │
+│  * &dev-team             ││19:13 bob  context line 1                         │
+│  * @alice                ││20:13 bob  context line 2                         │
+│  Folders                 ││21:13 bob  context line 3                         │
+│  ▾ Work (1)              ││                                                  │
+│      ~design-review      ││                                                  │
+│      +platform           ││                                                  │
+│  ▾ People (1)            ││                                                  │
+│  Recent                  │┌ ? ───────────────────────────────────────────────┐
+│    #random               ││Search result in context                          │
+│    &secrets [e2e]        ││<CR>   open in the chat                           │
+│    #quiet                ││j      next message                               │
+│                          ││k      previous message                           │
+│                          ││gg     first message                              │
+│                          ││G      last message                               │
+│                          ││<C-d>  half a page down                           │
+│                          ││<C-u>  half a page up                             │
+│                          ││q Esc  back to the results                        │
+│                          ││?      all keys (full help)                       │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  general

@@ -239,6 +239,60 @@ impl fmt::Debug for HistoryPage {
     }
 }
 
+/// One page of search results, newest first, with the raw server timestamp of each result (`None`
+/// when it could not be read). The raw value is what a context request sends as `latest`: the
+/// whole seconds of `Message.ts` are not enough to cut history exactly at the result.
+#[derive(Clone, PartialEq)]
+pub struct SearchHits {
+    pub messages: Vec<Message>,
+    pub raw_ts: Vec<Option<String>>,
+}
+
+impl From<Vec<Message>> for SearchHits {
+    /// Results with no raw timestamps, which can be listed but not opened.
+    fn from(messages: Vec<Message>) -> Self {
+        let raw_ts = vec![None; messages.len()];
+        SearchHits { messages, raw_ts }
+    }
+}
+
+/// Redacting `Debug`: the number of results only, never their text.
+impl fmt::Debug for SearchHits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SearchHits(<{} messages>)", self.messages.len())
+    }
+}
+
+/// The room's history around one message, oldest first. `selected` is the index of that message;
+/// `newer_missing` is true when more than `CONTEXT_NEWER_CAP` newer messages exist, so none of the
+/// ones next to the message could be reached; `oldest_raw` is the raw timestamp of the oldest
+/// message held, the `latest` value of the next older page.
+#[derive(Clone, PartialEq)]
+pub struct ContextWindow {
+    pub messages: Vec<Message>,
+    pub selected: usize,
+    pub newer_missing: bool,
+    pub oldest_raw: Option<String>,
+}
+
+/// Redacting `Debug`: counts and flags only.
+impl fmt::Debug for ContextWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ContextWindow(<{} messages>, selected={}, newer_missing={})",
+            self.messages.len(),
+            self.selected,
+            self.newer_missing
+        )
+    }
+}
+
+/// The most the history endpoint returns for one request. `oldest` returns the newest messages
+/// after a time, not the ones next to it (measured on 8.9.1), so the newer neighbours of a message
+/// are reachable only when fewer than this many exist.
+pub const CONTEXT_NEWER_CAP: u16 = 100;
+
 /// The history endpoint of a room. It follows the server room type, never the name: a direct
 /// message is `im.history`, a room whose server type is `p` (private groups, and private
 /// discussions and teams) is `groups.history`, every other room is `channels.history`.
@@ -391,7 +445,7 @@ impl Client {
         query: &str,
         offset: u32,
         count: u16,
-    ) -> Result<Vec<Message>, ApiError> {
+    ) -> Result<SearchHits, ApiError> {
         let params = [
             ("roomId", room.0.clone()),
             ("searchText", query.to_string()),
@@ -401,6 +455,64 @@ impl Client {
         let request = self.http.get(self.endpoint("chat.search")).query(&params);
         let resp: wire::HistoryResp = read_json(request, ApiError::Rejected).await?;
         Ok(map::search_page(room, resp.messages))
+    }
+
+    /// The history around message `id` of `room`, whose raw server timestamp is `raw_ts`: the
+    /// message with up to `before` messages before it (`latest=raw_ts&inclusive=true`) and, when
+    /// at most `CONTEXT_NEWER_CAP` newer messages exist, up to `after` after it (`oldest=raw_ts`).
+    /// The two requests run together. The message must be in the older answer, else it is gone
+    /// (`ApiError::NotFound`); a failure of either request fails the whole load.
+    #[allow(clippy::too_many_arguments)] // one request: where, which message, how much
+    pub async fn load_context(
+        &self,
+        room: &RoomId,
+        kind: RoomKind,
+        private: bool,
+        id: &str,
+        raw_ts: &str,
+        before: u16,
+        after: u16,
+    ) -> Result<ContextWindow, ApiError> {
+        let method = history_method(kind, private);
+        let older_query = [
+            ("roomId", room.0.clone()),
+            ("latest", raw_ts.to_string()),
+            ("inclusive", "true".to_string()),
+            ("count", (u32::from(before) + 1).to_string()),
+        ];
+        let newer_query = [
+            ("roomId", room.0.clone()),
+            ("oldest", raw_ts.to_string()),
+            ("count", CONTEXT_NEWER_CAP.to_string()),
+        ];
+        let (older, newer) = tokio::join!(
+            self.get_json::<wire::HistoryResp>(method, &older_query),
+            self.get_json::<wire::HistoryResp>(method, &newer_query),
+        );
+        let older = map::history(room, older?.messages);
+        let newer = map::history(room, newer?.messages);
+        let mut messages = older.messages;
+        let Some(at) = messages.iter().position(|m| m.id == id) else {
+            return Err(ApiError::NotFound);
+        };
+        // The answer is `latest`-bounded, so nothing should follow the message; cut anyway.
+        messages.truncate(at + 1);
+        let newer_missing = newer.messages.len() >= usize::from(CONTEXT_NEWER_CAP);
+        if !newer_missing {
+            messages.extend(
+                newer
+                    .messages
+                    .into_iter()
+                    .filter(|m| m.id != id)
+                    .take(usize::from(after)),
+            );
+        }
+        Ok(ContextWindow {
+            messages,
+            selected: at,
+            newer_missing,
+            oldest_raw: older.oldest_ts,
+        })
     }
 
     /// Send `text` to `room` with `POST chat.sendMessage`, the client-chosen `id` as the message
@@ -1250,8 +1362,13 @@ mod tests {
             .search_room(&room, "from:bob  two", 50, 50)
             .await
             .expect("search loads");
-        let ids: Vec<&str> = found.iter().map(|m| m.id.as_str()).collect();
+        let ids: Vec<&str> = found.messages.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["m4", "m3", "m2", "m1"], "server order, newest first");
+        assert_eq!(found.raw_ts.len(), 4);
+        assert!(
+            found.raw_ts.iter().all(Option::is_some),
+            "raw timestamps kept"
+        );
 
         let requests = server.received_requests().await.expect("recorded");
         assert_eq!(requests.len(), 1);
@@ -1268,6 +1385,173 @@ mod tests {
         assert_eq!(requests[0].headers.get("x-auth-token").unwrap(), TOKEN);
     }
 
+    /// A `*.history` body of messages `m<a>..=m<b>`, newest first, one second apart.
+    fn history_body(range: std::ops::RangeInclusive<u32>) -> String {
+        let msgs: Vec<String> = range
+            .rev()
+            .map(|n| {
+                let (m, sec) = (n / 60, n % 60);
+                format!(
+                    r#"{{"_id":"m{n}","rid":"r","msg":"t{n}","ts":"2026-01-01T00:{m:02}:{sec:02}.000Z","u":{{"_id":"u","username":"bob"}}}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"messages":[{}],"success":true}}"#, msgs.join(","))
+    }
+
+    const RAW: &str = "2026-01-01T00:00:30.000Z";
+
+    /// Mount the two answers of a context load: the `latest` request and the `oldest` one.
+    async fn mount_context(server: &MockServer, older: &str, newer: &str) {
+        use wiremock::matchers::query_param;
+        for (key, body) in [("latest", older), ("oldest", newer)] {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/channels.history"))
+                .and(query_param(key, RAW))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_raw(body.to_string(), "application/json"),
+                )
+                .mount(server)
+                .await;
+        }
+    }
+
+    async fn load_context(server: &MockServer, id: &str) -> Result<ContextWindow, ApiError> {
+        client_for(server)
+            .load_context(
+                &RoomId("r".to_string()),
+                RoomKind::Channel,
+                false,
+                id,
+                RAW,
+                25,
+                25,
+            )
+            .await
+    }
+
+    fn ids_of(window: &ContextWindow) -> Vec<&str> {
+        window.messages.iter().map(|m| m.id.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn context_has_both_sides() {
+        let server = MockServer::start().await;
+        // The result is m30; 26 older answers (25 before + itself), 10 newer.
+        mount_context(&server, &history_body(5..=30), &history_body(31..=40)).await;
+        let window = load_context(&server, "m30").await.expect("window");
+        assert_eq!(window.messages.len(), 36);
+        assert_eq!(ids_of(&window)[0], "m5");
+        assert_eq!(ids_of(&window)[25], "m30");
+        assert_eq!(ids_of(&window)[35], "m40");
+        assert_eq!(window.selected, 25);
+        assert!(!window.newer_missing);
+        assert_eq!(
+            window.oldest_raw.as_deref(),
+            Some("2026-01-01T00:00:05.000Z")
+        );
+
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 2);
+        let older = requests
+            .iter()
+            .map(query_of)
+            .find(|q| q.iter().any(|(k, _)| k == "latest"))
+            .expect("older request");
+        assert!(older.contains(&("inclusive".to_string(), "true".to_string())));
+        assert!(older.contains(&("count".to_string(), "26".to_string())));
+        let newer = requests
+            .iter()
+            .map(query_of)
+            .find(|q| q.iter().any(|(k, _)| k == "oldest"))
+            .expect("newer request");
+        assert!(newer.contains(&("count".to_string(), "100".to_string())));
+    }
+
+    #[tokio::test]
+    async fn context_takes_only_the_nearest_newer_messages() {
+        let server = MockServer::start().await;
+        mount_context(&server, &history_body(30..=30), &history_body(31..=90)).await;
+        let window = load_context(&server, "m30").await.expect("window");
+        // 60 newer exist (fewer than 100): the 25 nearest, oldest first.
+        assert_eq!(window.messages.len(), 26);
+        assert_eq!(ids_of(&window)[1], "m31");
+        assert_eq!(*ids_of(&window).last().expect("last"), "m55");
+        assert!(!window.newer_missing);
+    }
+
+    #[tokio::test]
+    async fn context_with_exactly_100_newer_hides_them() {
+        let server = MockServer::start().await;
+        mount_context(&server, &history_body(28..=30), &history_body(31..=130)).await;
+        let window = load_context(&server, "m30").await.expect("window");
+        assert_eq!(ids_of(&window), ["m28", "m29", "m30"]);
+        assert!(window.newer_missing);
+        assert_eq!(window.selected, 2);
+    }
+
+    #[tokio::test]
+    async fn context_result_missing_is_not_found() {
+        let server = MockServer::start().await;
+        mount_context(&server, &history_body(10..=20), &history_body(31..=35)).await;
+        assert_eq!(
+            load_context(&server, "m30").await.expect_err("gone"),
+            ApiError::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn context_error_from_either_request_fails_the_load() {
+        use wiremock::matchers::query_param;
+        for failing in ["latest", "oldest"] {
+            let server = MockServer::start().await;
+            let other = if failing == "latest" {
+                "oldest"
+            } else {
+                "latest"
+            };
+            Mock::given(method("GET"))
+                .and(path("/api/v1/channels.history"))
+                .and(query_param(failing, RAW))
+                .respond_with(ResponseTemplate::new(500))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/channels.history"))
+                .and(query_param(other, RAW))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(history_body(28..=32), "application/json"),
+                )
+                .mount(&server)
+                .await;
+            let error = load_context(&server, "m30").await.expect_err("fails");
+            assert_eq!(error, ApiError::Server(500), "{failing}");
+        }
+    }
+
+    #[test]
+    fn context_debug_prints_no_text() {
+        let window = ContextWindow {
+            messages: vec![Message {
+                edited: false,
+                plain_text: true,
+                id: "m1".to_string(),
+                room_id: RoomId("r".to_string()),
+                author: "secret-author".to_string(),
+                ts: 0,
+                body: "secret-body".to_string(),
+                kind: MessageKind::Normal,
+                send: SendState::Sent,
+            }],
+            selected: 0,
+            newer_missing: false,
+            oldest_raw: Some("secret-raw".to_string()),
+        };
+        let text = format!("{window:?} {:?}", SearchHits::from(window.messages.clone()));
+        assert!(!text.contains("secret"), "{text}");
+    }
+
     #[tokio::test]
     async fn search_room_empty_and_errors() {
         let server = MockServer::start().await;
@@ -1277,7 +1561,7 @@ mod tests {
             .search_room(&room, "zzz", 0, 50)
             .await
             .expect("empty is fine");
-        assert!(found.is_empty());
+        assert!(found.messages.is_empty());
 
         let refused = MockServer::start().await;
         Mock::given(method("GET"))

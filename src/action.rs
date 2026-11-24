@@ -104,7 +104,20 @@ pub enum Action {
         room: RoomId,
         search_id: u64,
         offset: u32,
-        result: Result<Vec<Message>, crate::api::ApiError>,
+        result: Result<crate::api::SearchHits, crate::api::ApiError>,
+    },
+    /// The history around a search result arrived. `context_id` tells which open request asked
+    /// for it; a stale one is dropped.
+    ContextLoaded {
+        room: RoomId,
+        context_id: u64,
+        window: crate::api::ContextWindow,
+    },
+    /// A context request failed; the error is a fixed kind with no payload text.
+    ContextFailed {
+        room: RoomId,
+        context_id: u64,
+        error: crate::api::ApiError,
     },
     /// A history request failed; the error is a fixed kind with no payload text.
     HistoryFailed {
@@ -282,13 +295,23 @@ impl std::fmt::Debug for Action {
                 Ok(found) => write!(
                     f,
                     "SearchPage({room:?}, #{search_id}, offset={offset}, <{} messages>)",
-                    found.len()
+                    found.messages.len()
                 ),
                 Err(error) => write!(
                     f,
                     "SearchPage({room:?}, #{search_id}, offset={offset}, {error:?})"
                 ),
             },
+            Action::ContextLoaded {
+                room,
+                context_id,
+                window,
+            } => write!(f, "ContextLoaded({room:?}, #{context_id}, {window:?})"),
+            Action::ContextFailed {
+                room,
+                context_id,
+                error,
+            } => write!(f, "ContextFailed({room:?}, #{context_id}, {error:?})"),
             Action::HistoryFailed { room, older, error } => {
                 write!(f, "HistoryFailed({room:?}, older={older}, {error:?})")
             }

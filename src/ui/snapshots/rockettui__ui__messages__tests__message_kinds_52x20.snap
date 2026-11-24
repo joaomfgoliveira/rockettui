@@ -3,11 +3,11 @@ source: src/ui/messages.rs
 expression: terminal.backend()
 ---
 "┏ quiet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┃── 1970-01-01 ────────────────────────────────────┃"
 "┃09:34 alice  hello there                          ┃"
 "┃09:35 carol  * joined the room                    ┃"
 "┃09:36 bob    see attached [attachment: report.pdf]┃"
 "┃09:37 bob    [encrypted message]                  ┃"
-"┃                                                  ┃"
 "┃                                                  ┃"
 "┃                                                  ┃"
 "┃                                                  ┃"

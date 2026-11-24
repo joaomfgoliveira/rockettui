@@ -6,7 +6,8 @@
 //! and message text.
 
 use crate::action::Action;
-use crate::api::ApiError;
+use crate::api::{ApiError, SearchHits};
+use crate::app::jump;
 use crate::app::messages::{self, MsgView};
 use crate::app::{App, Mode, StatusMsg};
 use crate::data::{Message, RoomId};
@@ -31,12 +32,18 @@ pub struct ResultsState {
     pub query: String,
     /// Newest first, as the server sent them.
     pub messages: Vec<Message>,
+    /// The raw server timestamp of each result, parallel to `messages` (`None`: not openable).
+    pub raw_ts: Vec<Option<String>>,
     pub selected: usize,
     pub top_row: usize,
     /// A page came back shorter than `PAGE`: the server has no more.
     pub exhausted: bool,
     /// A next-page request is in flight.
     pub loading_more: bool,
+    /// The open context view of one result (`app::jump`), drawn over the list.
+    pub context: Option<jump::ContextView>,
+    /// The context request in flight, by `App.context_seq`; an answer with another id is dropped.
+    pub pending_context: Option<u64>,
 }
 
 fn error(app: &mut App, text: &str) {
@@ -74,7 +81,7 @@ pub fn on_page(
     room: RoomId,
     search_id: u64,
     offset: u32,
-    result: Result<Vec<Message>, ApiError>,
+    result: Result<SearchHits, ApiError>,
 ) {
     if offset == 0 {
         if app.current_room.as_ref() != Some(&room)
@@ -87,20 +94,23 @@ pub fn on_page(
         };
         match result {
             Err(e) => fail(app, e),
-            Ok(found) if found.is_empty() => {
+            Ok(found) if found.messages.is_empty() => {
                 app.status_msg = Some(StatusMsg::Info(NO_RESULTS.to_string()));
             }
             Ok(found) => {
-                let exhausted = found.len() < usize::from(PAGE);
+                let exhausted = found.messages.len() < usize::from(PAGE);
                 app.results = Some(ResultsState {
                     id: search_id,
                     room,
                     query,
-                    messages: found,
+                    messages: found.messages,
+                    raw_ts: found.raw_ts,
                     selected: 0,
                     top_row: 0,
                     exhausted,
                     loading_more: false,
+                    context: None,
+                    pending_context: None,
                 });
             }
         }
@@ -116,8 +126,9 @@ pub fn on_page(
     match result {
         Err(e) => fail(app, e),
         Ok(found) => {
-            list.exhausted = found.len() < usize::from(PAGE);
-            list.messages.extend(found);
+            list.exhausted = found.messages.len() < usize::from(PAGE);
+            list.messages.extend(found.messages);
+            list.raw_ts.extend(found.raw_ts);
         }
     }
 }
@@ -148,7 +159,8 @@ pub fn view(app: &App) -> MsgView {
         return MsgView::default();
     };
     let (width, height) = viewport(app);
-    let starts = messages::row_starts_of(app, &list.messages, width);
+    let ctx = app.row_ctx(&list.messages);
+    let starts = messages::row_starts_of(&list.messages, width, &ctx);
     let selected = list.selected.min(list.messages.len().saturating_sub(1));
     MsgView {
         cursor: selected,
@@ -165,7 +177,11 @@ pub fn key(app: &mut App, chord: Chord) {
     let ctrl_c = chord.code == KeyCode::Char('c') && chord.mods == KeyModifiers::CONTROL;
     if plain_q || esc || ctrl_c {
         app.matcher.reset();
-        app.results = None;
+        // `q` in a context view goes back to the list; a second `q` closes the list.
+        match app.results.as_mut() {
+            Some(list) if list.context.is_some() => list.context = None,
+            _ => app.results = None,
+        }
         return;
     }
     let outcome = app
@@ -184,11 +200,24 @@ pub fn dispatch(app: &mut App, outcome: Outcome) {
         app.cmdline.clear();
         return;
     }
+    if action == Action::ShowContext {
+        app.context = true;
+        return;
+    }
+    if app.results.as_ref().is_some_and(|l| l.context.is_some()) {
+        jump::dispatch(app, &action, count);
+        return;
+    }
+    if action == Action::Select {
+        jump::open_selected(app);
+        return;
+    }
     let Some(list) = app.results.as_ref() else {
         return;
     };
     let (width, height) = viewport(app);
-    let starts = messages::row_starts_of(app, &list.messages, width);
+    let ctx = app.row_ctx(&list.messages);
+    let starts = messages::row_starts_of(&list.messages, width, &ctx);
     let current = view(app);
     if let Some(next) = messages::step(&starts, current, usize::from(height), &action, count)
         && let Some(list) = app.results.as_mut()
@@ -274,7 +303,7 @@ mod tests {
                 room: room.clone(),
                 search_id: id,
                 offset: 0,
-                result: Ok(found(n, room)),
+                result: Ok(found(n, room).into()),
             },
         );
     }
@@ -380,7 +409,7 @@ mod tests {
             room: room.clone(),
             search_id: id,
             offset: 0,
-            result: Ok(found(2, &room)),
+            result: Ok(found(2, &room).into()),
         };
         crate::app::update::update(&mut app, page(old));
         assert!(app.results.is_none(), "an older search is ignored");
@@ -488,7 +517,7 @@ mod tests {
                 room: room.clone(),
                 search_id: id,
                 offset: u32::from(PAGE),
-                result: Ok(found(4, &room)),
+                result: Ok(found(4, &room).into()),
             },
         );
         let list = app.results.as_ref().expect("list");
@@ -554,7 +583,7 @@ mod tests {
             room,
             search_id: 1,
             offset: 0,
-            result: Ok(msgs),
+            result: Ok(msgs.into()),
         };
         assert!(!format!("{action:?}").contains("SECRETBODY"));
     }

@@ -46,6 +46,15 @@ pub fn format_ts(format: &TimeFormat, ts: i64, zone: Zone) -> String {
     sanitize_line(&text).into_owned()
 }
 
+/// The calendar day of `ts` in `zone`, or `None` when `ts` is out of range.
+pub fn day_of(ts: i64, zone: Zone) -> Option<chrono::NaiveDate> {
+    let utc = Utc.timestamp_opt(ts, 0).single()?;
+    Some(match zone {
+        Zone::Utc => utc.date_naive(),
+        Zone::Local => utc.with_timezone(&Local).date_naive(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +95,14 @@ mod tests {
         assert!(chars[0].is_ascii_digit() && chars[1].is_ascii_digit());
         assert_eq!(chars[2], ':');
         assert!(chars[3].is_ascii_digit() && chars[4].is_ascii_digit());
+    }
+
+    #[test]
+    fn day_of_follows_the_zone_day() {
+        let day = |ts| day_of(ts, Zone::Utc).expect("day").to_string();
+        assert_eq!(day(0), "1970-01-01");
+        assert_eq!(day(86_399), "1970-01-01");
+        assert_eq!(day(86_400), "1970-01-02");
+        assert_eq!(day_of(i64::MAX, Zone::Utc), None);
     }
 }

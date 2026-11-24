@@ -26,6 +26,10 @@ pub fn on_message(app: &mut App, message: Message) {
         messages::replace_edited(app, &room, message);
         return;
     }
+    // A detached room shows older history: a new message would sit after a gap (`app::jump`).
+    if super::jump::is_detached(app, &room) {
+        return;
+    }
     let at_bottom = messages::is_at_bottom(app, &room);
     if messages::merge_incoming(app, &room, message) == messages::Merge::Appended && at_bottom {
         messages::follow_newest(app, &room);

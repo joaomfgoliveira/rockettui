@@ -172,6 +172,42 @@ def main():
             [m.get("_id") for m in (after or {}).get("messages", [])]))
         status, one = get("/api/v1/chat.getMessage", msgId=target.get("_id"))
         out("P6 getMessage status=%s keys=%s" % (status, keys((one or {}).get("message"))))
+
+    # P7: the context window of a result (jump-to-search-result). Page the whole room, pick a
+    # message in the middle, then check what `latest`+`inclusive` and `oldest` return around it.
+    everything = []
+    latest = None
+    for _ in range(10):
+        extra = {"latest": latest} if latest else {}
+        status, page = get("/api/v1/channels.history", roomId=room, count=100, **extra)
+        batch = (page or {}).get("messages", [])
+        if not batch:
+            break
+        everything.extend(batch)
+        latest = batch[-1].get("ts")
+        if len(batch) < 100:
+            break
+    everything.sort(key=lambda m: m.get("ts"))
+    ids_all = [m.get("_id") for m in everything]
+    out("P7 room_messages=%d" % len(ids_all))
+    if len(ids_all) >= 130:
+        at = len(ids_all) - 61  # 60 newer messages exist, so fewer than the 100 cap
+        target = everything[at]
+        ts = target.get("ts")
+        status, older = get("/api/v1/channels.history", roomId=room, latest=ts, inclusive="true", count=26)
+        got = [m.get("_id") for m in (older or {}).get("messages", [])][::-1]
+        out("P7 older status=%s returned=%d contiguous=%s ends_at_target=%s" % (
+            status, len(got), got == ids_all[at - 25: at + 1], bool(got) and got[-1] == target.get("_id")))
+        status, newer = get("/api/v1/channels.history", roomId=room, oldest=ts, count=100)
+        got = [m.get("_id") for m in (newer or {}).get("messages", [])][::-1]
+        out("P7 newer(60 exist) status=%s returned=%d all_after_target=%s excludes_target=%s" % (
+            status, len(got), got == ids_all[at + 1:], target.get("_id") not in got))
+        # The cap: from an older message, more than 100 newer ones exist.
+        early = everything[10]
+        status, capped = get("/api/v1/channels.history", roomId=room, oldest=early.get("ts"), count=100)
+        got = [m.get("_id") for m in (capped or {}).get("messages", [])][::-1]
+        out("P7 newer(>100 exist) status=%s returned=%d newest_100=%s adjacent_to_target=%s" % (
+            status, len(got), got == ids_all[-100:], got[:1] == ids_all[11:12]))
     out("PROBE DONE")
     return 0
 

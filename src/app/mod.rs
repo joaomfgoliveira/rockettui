@@ -9,6 +9,7 @@ pub mod edit;
 pub mod help;
 pub mod history;
 pub mod input_buf;
+pub mod jump;
 pub mod messages;
 pub mod realtime;
 pub mod results;
@@ -154,6 +155,10 @@ pub struct App {
     pub search_prompt: Option<String>,
     /// The server search results list (`app::results`), when open. A state, not a mode.
     pub results: Option<results::ResultsState>,
+    /// The last context request's id (`app::jump`).
+    pub context_seq: u64,
+    /// Rooms showing a window of older history after a jump from a search result (`app::jump`).
+    pub detached: std::collections::HashSet<RoomId>,
     /// Counter behind the ids of server searches; an answer carrying an older id is dropped.
     pub search_seq: u64,
     /// The first page of a server search in flight: its id and query text.
@@ -224,6 +229,8 @@ impl App {
             search: None,
             search_prompt: None,
             results: None,
+            context_seq: 0,
+            detached: std::collections::HashSet::new(),
             search_seq: 0,
             pending_search: None,
             keymap: config.keymap,
@@ -330,6 +337,9 @@ impl App {
             self.confirm = None;
             search::clear(self);
             results::close_all(self);
+            if let Some(old) = self.current_room.clone() {
+                jump::reset(self, &old);
+            }
             match self.current_room.clone() {
                 Some(old) => {
                     let live = std::mem::take(&mut self.input);
