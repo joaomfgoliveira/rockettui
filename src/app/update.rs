@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, realtime,
-    search, send, sidebar,
+    results, search, send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -38,6 +38,12 @@ pub fn update(app: &mut App, action: Action) {
                 edit::on_confirm_key(app, confirm, chord);
                 return;
             }
+            // An open results list takes the Normal-mode keys (see `app::results`); the command
+            // line, once opened with `:`, takes its own keys as usual.
+            if app.results.is_some() && app.mode == Mode::Normal {
+                results::key(app, chord);
+                return;
+            }
             let outcome = app.matcher.feed(app.keymap.trie(app.mode), app.mode, chord);
             dispatch(app, outcome);
         }
@@ -48,6 +54,11 @@ pub fn update(app: &mut App, action: Action) {
             if app.help.is_some() {
                 let outcome = app.matcher.timeout(app.keymap.trie(Mode::Normal));
                 help_dispatch(app, outcome);
+                return;
+            }
+            if app.results.is_some() && app.mode == Mode::Normal {
+                let outcome = app.matcher.timeout(app.keymap.trie(Mode::Normal));
+                results::dispatch(app, outcome);
                 return;
             }
             let outcome = app.matcher.timeout(app.keymap.trie(app.mode));
@@ -96,6 +107,12 @@ pub fn update(app: &mut App, action: Action) {
             oldest_ts,
             older,
         } => history::on_loaded(app, room, messages, oldest_ts, older),
+        Action::SearchPage {
+            room,
+            search_id,
+            offset,
+            result,
+        } => results::on_page(app, room, search_id, offset, result),
         Action::HistoryFailed { room, older, error } => {
             history::on_failed(app, room, older, error);
         }

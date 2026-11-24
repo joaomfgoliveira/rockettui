@@ -45,6 +45,16 @@ pub enum Effect {
         count: u16,
         before: Option<String>,
     },
+    /// One page of the server search of `room`: `GET chat.search`, `count` results from `offset`.
+    /// Answers `Action::SearchPage`, addressed by `room` and `search_id`. The query is a
+    /// `SendText`, so `Debug` never prints it.
+    SearchRoom {
+        room: RoomId,
+        query: SendText,
+        search_id: u64,
+        offset: u32,
+        count: u16,
+    },
     /// One attempt to send one pending message to `room`: `POST chat.sendMessage` with the client
     /// `id` as the message `_id` (D-07, D-15). With `reconcile` (a retry of an `Unconfirmed`
     /// message) the server is asked first with `GET chat.getMessage`: a 200 is the answer and no
@@ -85,6 +95,17 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     older: before.is_some(),
                     error,
                 },
+                Effect::SearchRoom {
+                    room,
+                    search_id,
+                    offset,
+                    ..
+                } => Action::SearchPage {
+                    room,
+                    search_id,
+                    offset,
+                    result: Err(error),
+                },
                 Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
                 Effect::EditMessage { room, id, .. } => Action::EditFailed { room, id, error },
                 Effect::DeleteMessage { room, id } => Action::DeleteFailed { room, id, error },
@@ -123,6 +144,23 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 }],
                 Err(error) => vec![Action::HistoryFailed { room, older, error }],
             }
+        }
+        Effect::SearchRoom {
+            room,
+            query,
+            search_id,
+            offset,
+            count,
+        } => {
+            let result = client
+                .search_room(&room, query.as_str(), offset, count)
+                .await;
+            vec![Action::SearchPage {
+                room,
+                search_id,
+                offset,
+                result,
+            }]
         }
         Effect::SendMessage {
             room,

@@ -98,6 +98,14 @@ pub enum Action {
         oldest_ts: Option<String>,
         older: bool,
     },
+    /// A page of server search results arrived, newest first. `offset` is where the page started
+    /// (0 for the first page); `search_id` tells which `:search` asked for it.
+    SearchPage {
+        room: RoomId,
+        search_id: u64,
+        offset: u32,
+        result: Result<Vec<Message>, crate::api::ApiError>,
+    },
     /// A history request failed; the error is a fixed kind with no payload text.
     HistoryFailed {
         room: RoomId,
@@ -265,6 +273,22 @@ impl std::fmt::Debug for Action {
                 room,
                 messages.len()
             ),
+            Action::SearchPage {
+                room,
+                search_id,
+                offset,
+                result,
+            } => match result {
+                Ok(found) => write!(
+                    f,
+                    "SearchPage({room:?}, #{search_id}, offset={offset}, <{} messages>)",
+                    found.len()
+                ),
+                Err(error) => write!(
+                    f,
+                    "SearchPage({room:?}, #{search_id}, offset={offset}, {error:?})"
+                ),
+            },
             Action::HistoryFailed { room, older, error } => {
                 write!(f, "HistoryFailed({room:?}, older={older}, {error:?})")
             }

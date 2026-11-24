@@ -1,0 +1,13 @@
+---
+source: src/ui/results.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ Search: deploy (q to close) ─────────────────────┐
+│  Unread                  ││13:13 alice  hit number 9                         │
+│> * #general              ││12:13 alice  hit number 10                        │
+│  * &dev-team             ││11:13 alice  hit number 11                        │
+│  * @alice                │└──────────────────────────────────────────────────┘
+│  Folders                 │┌ Input ───────────────────────────────────────────┐
+│  ▾ Work (1)              ││press i to write                                  │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  general

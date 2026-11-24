@@ -381,6 +381,28 @@ impl Client {
         Ok(map::history(room, resp.messages))
     }
 
+    /// One page of the server-side search of `room`: `GET chat.search` with `roomId`, `searchText`,
+    /// `count` and `offset`. The results keep the server's order, newest first. Measured on 8.9.1
+    /// and 9.0.0: an empty text or a room the user cannot search is an HTTP 400, which is
+    /// `ApiError::Rejected`. The query is never part of an error.
+    pub async fn search_room(
+        &self,
+        room: &RoomId,
+        query: &str,
+        offset: u32,
+        count: u16,
+    ) -> Result<Vec<Message>, ApiError> {
+        let params = [
+            ("roomId", room.0.clone()),
+            ("searchText", query.to_string()),
+            ("count", count.to_string()),
+            ("offset", offset.to_string()),
+        ];
+        let request = self.http.get(self.endpoint("chat.search")).query(&params);
+        let resp: wire::HistoryResp = read_json(request, ApiError::Rejected).await?;
+        Ok(map::search_page(room, resp.messages))
+    }
+
     /// Send `text` to `room` with `POST chat.sendMessage`, the client-chosen `id` as the message
     /// `_id` (D-07, D-15): the server stores the message under that id, so the answer and every
     /// later copy of the message carry it. The body is the exact text, no trim and no change
@@ -1217,6 +1239,57 @@ mod tests {
         );
         assert_eq!(request.headers.get("x-user-id").unwrap(), USER);
         assert_eq!(request.headers.get("x-auth-token").unwrap(), TOKEN);
+    }
+
+    #[tokio::test]
+    async fn search_room_query_and_order() {
+        let server = MockServer::start().await;
+        mount_ok(&server, "chat.search", HISTORY).await;
+        let room = RoomId("r-devteam".to_string());
+        let found = client_for(&server)
+            .search_room(&room, "from:bob  two", 50, 50)
+            .await
+            .expect("search loads");
+        let ids: Vec<&str> = found.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["m4", "m3", "m2", "m1"], "server order, newest first");
+
+        let requests = server.received_requests().await.expect("recorded");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.path(), "/api/v1/chat.search");
+        assert_eq!(
+            query_of(&requests[0]),
+            [
+                ("roomId".to_string(), "r-devteam".to_string()),
+                ("searchText".to_string(), "from:bob  two".to_string()),
+                ("count".to_string(), "50".to_string()),
+                ("offset".to_string(), "50".to_string()),
+            ]
+        );
+        assert_eq!(requests[0].headers.get("x-auth-token").unwrap(), TOKEN);
+    }
+
+    #[tokio::test]
+    async fn search_room_empty_and_errors() {
+        let server = MockServer::start().await;
+        mount_ok(&server, "chat.search", "{\"messages\":[],\"success\":true}").await;
+        let room = RoomId("r-devteam".to_string());
+        let found = client_for(&server)
+            .search_room(&room, "zzz", 0, 50)
+            .await
+            .expect("empty is fine");
+        assert!(found.is_empty());
+
+        let refused = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/chat.search"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("{\"success\":false}"))
+            .mount(&refused)
+            .await;
+        let error = client_for(&refused)
+            .search_room(&room, "x", 0, 50)
+            .await
+            .expect_err("400");
+        assert_eq!(error, ApiError::Rejected);
     }
 
     #[tokio::test]

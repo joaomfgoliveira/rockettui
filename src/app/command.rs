@@ -7,7 +7,9 @@ pub struct CommandDef {
     pub names: &'static [&'static str],
     /// One short line for the help overlay.
     pub desc: &'static str,
-    pub run: fn(&mut App, &[&str]) -> Result<(), String>,
+    /// Gets the whitespace-split arguments and the raw text after the name (trimmed, inner
+    /// spacing kept).
+    pub run: fn(&mut App, &[&str], &str) -> Result<(), String>,
 }
 
 pub const COMMANDS: &[CommandDef] = &[
@@ -27,16 +29,26 @@ pub const COMMANDS: &[CommandDef] = &[
         run: cmd_reconnect,
     },
     CommandDef {
+        names: &["search"],
+        desc: "search the open room on the server (:search <text>)",
+        run: cmd_search,
+    },
+    CommandDef {
         names: &["help"],
         desc: "show this help",
         run: cmd_help,
     },
 ];
 
+/// `:search <text>`: search the open room on the server. The text is passed on exactly as typed.
+pub fn cmd_search(app: &mut App, _args: &[&str], rest: &str) -> Result<(), String> {
+    crate::app::results::start(app, rest)
+}
+
 /// `:q` / `:quit` — leaves the app, but warns once while messages are undelivered (D-20): the
 /// first `:q` only shows how many there are, the next one quits. The text is built from the count
 /// alone, so it never holds a message, an author or a room name (D-14).
-pub fn cmd_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
+pub fn cmd_quit(app: &mut App, _args: &[&str], _rest: &str) -> Result<(), String> {
     let count = app.undelivered_count();
     if count == 0 || app.quit_warned {
         app.should_quit = true;
@@ -50,7 +62,7 @@ pub fn cmd_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
 }
 
 /// `:q!` / `:quit!` (D-20): leave at once. Undelivered messages live in memory only and are lost.
-pub fn cmd_force_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
+pub fn cmd_force_quit(app: &mut App, _args: &[&str], _rest: &str) -> Result<(), String> {
     app.should_quit = true;
     Ok(())
 }
@@ -60,7 +72,7 @@ pub fn cmd_force_quit(app: &mut App, _args: &[&str]) -> Result<(), String> {
 /// reducer never retries by itself, so a broken token cannot hammer the server. It never touches a
 /// pending, failed or unconfirmed send and sends nothing (D-08, as clarified by D-20). It also
 /// restarts the realtime connection (`App.restart_realtime`).
-pub fn cmd_reconnect(app: &mut App, _args: &[&str]) -> Result<(), String> {
+pub fn cmd_reconnect(app: &mut App, _args: &[&str], _rest: &str) -> Result<(), String> {
     app.conn = ConnState::Connecting;
     app.effects.push(Effect::LoadRooms);
     app.effects.push(Effect::LoadMe);
@@ -74,7 +86,7 @@ pub fn cmd_reconnect(app: &mut App, _args: &[&str]) -> Result<(), String> {
 }
 
 /// `:help`: open the help overlay (the app is already back in Normal mode).
-pub fn cmd_help(app: &mut App, _args: &[&str]) -> Result<(), String> {
+pub fn cmd_help(app: &mut App, _args: &[&str], _rest: &str) -> Result<(), String> {
     app.help = Some(0);
     Ok(())
 }
@@ -86,6 +98,7 @@ pub fn execute(app: &mut App, line: &str) {
         return;
     };
     let args: Vec<&str> = tokens.collect();
+    let rest = line.trim_start()[name.len()..].trim();
     // Only a `:q` straight after the warning quits through it (D-20): any other command disarms
     // it. `q!` and `quit!` quit anyway, and an empty line (returned above) leaves the arm alone.
     if !matches!(name, "q" | "quit") {
@@ -93,7 +106,7 @@ pub fn execute(app: &mut App, line: &str) {
     }
     match COMMANDS.iter().find(|def| def.names.contains(&name)) {
         Some(def) => {
-            if let Err(msg) = (def.run)(app, &args) {
+            if let Err(msg) = (def.run)(app, &args, rest) {
                 app.status_msg = Some(StatusMsg::Error(msg));
             }
         }

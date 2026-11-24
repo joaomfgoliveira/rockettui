@@ -299,6 +299,26 @@ Known differences and limits:
 - Long lines wrap in the 50-column message pane, so the attachment tag `[attachment: report.pdf]`
   can be split over two rows; the scenario checks both halves.
 
+## Room search (`chat.search`)
+
+`dev/probe_search.py` is the spike behind `search-room`. Read-only, same output rule as the other
+probes. Checked on 2026-11-24 on 8.9.1 and 9.0.0 with identical results:
+
+```sh
+python3 -I dev/probe_search.py                                # 8.9.1
+RT_PROJECT=rockettui-dev9 python3 -I dev/probe_search.py      # 9.0.0
+```
+
+- `GET chat.search?roomId&searchText&count&offset` answers `{messages, success}` with the history
+  message shape, newest first. There is no total; the end is a page shorter than `count`.
+- Default page 50, maximum 100 (`count=500` returns 100). The client asks for 50.
+- Case-insensitive. An empty `searchText` and an unknown room id are both HTTP 400.
+- `from:`, `has:`, `is:`, `on:` and `/regex/` queries are accepted (status 200).
+
+End to end: `python3 -I scripts/smoke_pty.py target/debug/rockettui docker_search` searches the
+seeded `rt-public` (130 messages, three pages), closes the list, and checks the no-results and
+encrypted-room refusals. Passed on 8.9.1; on 9.0.0 only the probe above was run.
+
 ## Security
 
 - Everything binds to 127.0.0.1 only; nothing is reachable from the network.

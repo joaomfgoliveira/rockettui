@@ -1366,6 +1366,63 @@ def history_settled(b):
     return not screen.contains("Loading") and not screen.contains("Could not load")
 
 
+def scenario_docker_search(binary):
+    """`:search` against a real local Rocket.Chat: rt-public holds 130 seeded `seed message N`
+    messages, so one search spans three server pages. The first page is the newest (129), `G`
+    loads the next pages until the oldest result shows, `q` closes the list, a text with no hit
+    says so on the status row, and an encrypted room refuses before any request.
+    """
+    project = os.environ.get("RT_PROJECT", "rockettui-dev")
+    env = docker_env(project)
+    token = env["ROCKETTUI_TOKEN"].encode()
+    pid, fd = spawn(binary, extra_env=env)
+    buf = bytearray()
+    wait_ready(fd, buf, room=b"rt-public", timeout=20)
+    open_room_named(fd, buf, "rt-public")
+    if not read_until(fd, buf, history_settled, 10):
+        raise SmokeFail("rt-public history never settled")
+
+    type_keys(fd, buf, b":search seed message\r")
+    if not read_until(fd, buf, lambda b: any("Search: seed message" in r for r in screen_of(b).rows()), 10):
+        raise SmokeFail("the results list never opened")
+    if not screen_of(buf).contains("seed message 129"):
+        raise SmokeFail("the newest result (seed message 129) is not at the top")
+    if "NORMAL" not in screen_of(buf).rows()[22]:
+        raise SmokeFail("the mode badge changed while the list is open")
+
+    oldest = re.compile(r"seed message 0[0-1][0-9]\b")
+    for _ in range(6):
+        type_keys(fd, buf, b"G")
+        if read_until(fd, buf, lambda b: any(oldest.search(r) for r in screen_of(b).rows()), 3):
+            break
+    else:
+        raise SmokeFail("paging never reached the oldest results: " + " / ".join(r.strip() for r in screen_of(buf).rows()[:6]) + " ... " + screen_of(buf).rows()[22].strip())
+
+    type_keys(fd, buf, b"q")
+    if not read_until(fd, buf, lambda b: not any("Search:" in r for r in screen_of(b).rows()), 5):
+        raise SmokeFail("q did not close the list")
+
+    type_keys(fd, buf, b":search zzzqqqxxxnomatch\r")
+    if not read_until(fd, buf, lambda b: "No results" in screen_of(b).rows()[22], 10):
+        raise SmokeFail("a search with no hit did not say so")
+    if any("Search:" in r for r in screen_of(buf).rows()):
+        raise SmokeFail("a list opened for a search with no hit")
+
+    open_room_named(fd, buf, "secrets")
+    type_keys(fd, buf, b":search anything\r")
+    if not read_until(fd, buf, lambda b: "cannot be searched" in screen_of(b).rows()[22], 5):
+        raise SmokeFail("the encrypted room was not refused")
+
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    type_keys(fd, buf, b":q\r")
+    code = wait_exit(pid, fd, buf, 10)
+    if code != 0:
+        raise SmokeFail(f"exit code {code}, expected 0")
+    if token in bytes(buf):
+        raise SmokeFail("the token appears in the terminal output")
+
+
 def scenario_docker_send(binary):
     """MSG-02 against a real local Rocket.Chat (T-04-22, T-04-23): the binary opens the throwaway
     rt-private room, sends a fresh text from Insert mode and the row turns into the server's copy
@@ -2169,6 +2226,7 @@ SCENARIOS = {
     "unauthorized": scenario_unauthorized,
     "docker_read": scenario_docker_read,
     "docker_send": scenario_docker_send,
+    "docker_search": scenario_docker_search,
     "docker_realtime": scenario_docker_realtime,
     "docker_reconnect": scenario_docker_reconnect,
     "docker_edits": scenario_docker_edits,

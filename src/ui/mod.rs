@@ -7,6 +7,7 @@ pub mod input;
 pub mod layout;
 pub mod messages;
 pub mod palette;
+pub mod results;
 pub mod sanitize;
 pub mod sidebar;
 pub mod status;
@@ -36,6 +37,7 @@ pub fn view(frame: &mut Frame, app: &App) {
     sidebar::render(frame, areas.sidebar, app);
     messages::render(frame, areas.messages, app);
     input::render(frame, areas.input, app);
+    results::render(frame, areas.messages, app);
     help::render(frame, areas.messages, app);
     context::render(frame, &areas, app);
     status::render_status(frame, areas.status, app);

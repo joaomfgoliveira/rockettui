@@ -1,24 +1,25 @@
 ---
 source: src/ui/help.rs
+assertion_line: 91
 expression: out
 ---
 ┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q to close) ───────────────────────────────┐
-┃  Unread                  ┃│<C-w>              delete the word before the curs│
-┃> * #general              ┃│<C-u>              delete to the start of the line│
-┃  * &dev-team             ┃│<A-CR>             insert a newline               │
-┃  * @alice                ┃│<C-j>              insert a newline               │
-┃  Folders                 ┃│<CR>               send the message (or save the e│
-┃  ▾ Work (1)              ┃│                                                  │
-┃      ~design-review      ┃│Command mode                                      │
-┃      +platform           ┃│<C-c>              cancel, or leave the mode      │
-┃  ▾ People (1)            ┃│<Esc>              cancel, or leave the mode      │
-┃  Recent                  ┃│<BS>               delete the character before the│
-┃    #random               ┃│<CR>               run the command line           │
-┃    &secrets [e2e]        ┃│                                                  │
-┃    #quiet                ┃│Commands                                          │
-┃                          ┃│:q :quit           quit (warns once if messages ar│
+┃  Unread                  ┃│<C-u>              delete to the start of the line│
+┃> * #general              ┃│<A-CR>             insert a newline               │
+┃  * &dev-team             ┃│<C-j>              insert a newline               │
+┃  * @alice                ┃│<CR>               send the message (or save the e│
+┃  Folders                 ┃│                                                  │
+┃  ▾ Work (1)              ┃│Command mode                                      │
+┃      ~design-review      ┃│<C-c>              cancel, or leave the mode      │
+┃      +platform           ┃│<Esc>              cancel, or leave the mode      │
+┃  ▾ People (1)            ┃│<BS>               delete the character before the│
+┃  Recent                  ┃│<CR>               run the command line           │
+┃    #random               ┃│                                                  │
+┃    &secrets [e2e]        ┃│Commands                                          │
+┃    #quiet                ┃│:q :quit           quit (warns once if messages ar│
 ┃                          ┃│:q! :quit!         quit at once                   │
 ┃                          ┃│:reconnect :retry  reload rooms and restart the li│
+┃                          ┃│:search            search the open room on the ser│
 ┃                          ┃│:help              show this help                 │
 ┃                          ┃└──────────────────────────────────────────────────┘
 ┃                          ┃┌ Input ───────────────────────────────────────────┐

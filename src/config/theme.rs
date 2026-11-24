@@ -55,6 +55,9 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "context.key",
     "context.desc",
     "search.match",
+    "results.border",
+    "results.title",
+    "results.selected",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -239,6 +242,10 @@ pub struct Theme {
     pub context_desc: Style,
     /// The matched text of an active search in the messages pane (`/`, `n`, `N`).
     pub search_match: Style,
+    /// The server search results list (`:search`): its border, its title and the selected row.
+    pub results_border: Style,
+    pub results_title: Style,
+    pub results_selected: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -288,6 +295,9 @@ impl Default for Theme {
             context_key: plain.add_modifier(Modifier::BOLD),
             context_desc: plain,
             search_match: plain.fg(Color::Black).bg(Color::Yellow),
+            results_border: plain,
+            results_title: plain.add_modifier(Modifier::BOLD),
+            results_selected: plain.add_modifier(Modifier::REVERSED),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -336,6 +346,9 @@ impl Theme {
             ("context", "key") => Some(&mut self.context_key),
             ("context", "desc") => Some(&mut self.context_desc),
             ("search", "match") => Some(&mut self.search_match),
+            ("results", "border") => Some(&mut self.results_border),
+            ("results", "title") => Some(&mut self.results_title),
+            ("results", "selected") => Some(&mut self.results_selected),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -812,6 +825,24 @@ mod tests {
     }
 
     #[test]
+    fn results_defaults_and_override() {
+        let (theme, problems) = parse_str("");
+        assert!(problems.is_empty());
+        assert!(
+            theme
+                .results_selected
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        let (theme, problems) = parse_str("[results.selected]\nbg = \"#334455\"\n");
+        assert!(problems.is_empty());
+        assert_eq!(
+            theme.results_selected.bg,
+            Some(Color::Rgb(0x33, 0x44, 0x55))
+        );
+    }
+
+    #[test]
     fn unknown_theme_keys_warn() {
         for alone in [
             "[status.mode]\nunderline = true\n",
@@ -849,8 +880,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            36,
-            "16 chrome and border paths, the ten messages elements, the five help elements, the four context elements and the search match"
+            39,
+            "16 chrome and border paths, the ten messages elements, the five help elements, the four context elements the search match and the three results elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {

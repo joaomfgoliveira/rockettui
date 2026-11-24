@@ -1,0 +1,27 @@
+---
+source: src/ui/results.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ Search: deploy (q to close) ─────────────────────┐
+│  Unread                  ││22:13 alice  hit number 0                         │
+│> * #general              ││21:13 alice  hit number 1                         │
+│  * &dev-team             ││20:13 alice  hit number 2                         │
+│  * @alice                ││19:13 alice  hit number 3                         │
+│  Folders                 ││18:13 alice  hit number 4                         │
+│  ▾ Work (1)              ││                                                  │
+│      ~design-review      ││                                                  │
+│      +platform           ││                                                  │
+│  ▾ People (1)            ││                                                  │
+│  Recent                  ││                                                  │
+│    #random               ││                                                  │
+│    &secrets [e2e]        ││                                                  │
+│    #quiet                ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          │└──────────────────────────────────────────────────┘
+│                          │┌ Input ───────────────────────────────────────────┐
+│                          ││press i to write                                  │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  general

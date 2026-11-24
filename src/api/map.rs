@@ -258,6 +258,12 @@ pub fn history(room: &RoomId, msgs: Vec<WireMsg>) -> HistoryPage {
     }
 }
 
+/// A page of `chat.search` results mapped one by one, keeping the server's order (newest first):
+/// unlike history, the list is not re-sorted.
+pub fn search_page(room: &RoomId, msgs: Vec<WireMsg>) -> Vec<Message> {
+    msgs.into_iter().map(|msg| message(room, msg)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

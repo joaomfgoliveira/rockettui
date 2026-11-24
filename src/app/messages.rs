@@ -27,23 +27,23 @@ pub fn viewport(app: &App) -> (u16, u16) {
 /// last element (so a room of `n` messages yields `n + 1` entries; no room data yields `[0]`).
 pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let (width, _) = viewport(app);
-    let mut starts = vec![0];
-    let mut total = 0;
-    if let Some(msgs) = app.messages.get(room) {
-        let ctx = app.row_ctx(msgs);
-        for msg in msgs {
-            total += wrap::message_rows(msg, width, &ctx);
-            starts.push(total);
-        }
-    }
-    starts
+    row_starts_of(
+        app,
+        app.messages.get(room).map_or(&[][..], Vec::as_slice),
+        width,
+    )
 }
 
 /// The new `top_row` that brings message `cursor` into the window.
 ///
 /// `starts` is `row_starts`: message `i` occupies rows `starts[i]..starts[i + 1]`. A message
 /// taller than the window is aligned to its first row. A zero-height window only clamps.
-fn scroll_into_view(starts: &[usize], cursor: usize, top_row: usize, viewport_h: usize) -> usize {
+pub fn scroll_into_view(
+    starts: &[usize],
+    cursor: usize,
+    top_row: usize,
+    viewport_h: usize,
+) -> usize {
     let total = starts.last().copied().unwrap_or(0);
     let max_top = total.saturating_sub(viewport_h);
     if viewport_h == 0 || cursor + 1 >= starts.len() {
@@ -84,14 +84,28 @@ pub fn view(app: &App, room: &RoomId) -> MsgView {
     }
 }
 
-/// Apply a Normal-mode motion to the messages pane of the current room.
-///
-/// h and l (and Select and za) are intentional no-ops in this pane (D-19): they return before
-/// anything is stored. An empty room or no room is a no-op too.
-pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
-    let Some(room) = app.current_room.clone() else {
-        return;
-    };
+/// First row of every message of `msgs` at `width` columns, with the total row count last.
+pub fn row_starts_of(app: &App, msgs: &[Message], width: u16) -> Vec<usize> {
+    let ctx = app.row_ctx(msgs);
+    let mut starts = vec![0];
+    let mut total = 0;
+    for msg in msgs {
+        total += wrap::message_rows(msg, width, &ctx);
+        starts.push(total);
+    }
+    starts
+}
+
+/// The cursor and scroll position a motion leads to, or `None` when `motion` is not one of the
+/// six list motions or the list is empty. `starts` is `row_starts`; `current` is the effective
+/// view. Pure, so the messages pane and the search results list move by the same rules.
+pub fn step(
+    starts: &[usize],
+    current: MsgView,
+    viewport_h: usize,
+    motion: &Action,
+    count: Option<u32>,
+) -> Option<MsgView> {
     if !matches!(
         motion,
         Action::MoveDown
@@ -101,18 +115,15 @@ pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
             | Action::HalfPageDown
             | Action::HalfPageUp
     ) {
-        return;
+        return None;
     }
-    let starts = row_starts(app, &room);
     let messages = starts.len() - 1;
     if messages == 0 {
-        return;
+        return None;
     }
     let last = messages - 1;
     let total = starts[messages];
-    let viewport_h = usize::from(viewport(app).1);
     let max_top = total.saturating_sub(viewport_h);
-    let current = view(app, &room);
     let n = count.map(|c| c as usize);
     let step = n.unwrap_or(1);
     // A half page is max(1, rows / 2); the cursor moves by the same number of rows.
@@ -147,8 +158,26 @@ pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
             (message_at(row), current.top_row.saturating_sub(delta))
         }
     };
-    let top_row = scroll_into_view(&starts, cursor, top_row, viewport_h);
-    app.msg_views.insert(room, MsgView { cursor, top_row });
+    Some(MsgView {
+        cursor,
+        top_row: scroll_into_view(starts, cursor, top_row, viewport_h),
+    })
+}
+
+/// Apply a Normal-mode motion to the messages pane of the current room.
+///
+/// h and l (and Select and za) are intentional no-ops in this pane (D-19): they return before
+/// anything is stored. An empty room or no room is a no-op too.
+pub fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
+    let Some(room) = app.current_room.clone() else {
+        return;
+    };
+    let starts = row_starts(app, &room);
+    let viewport_h = usize::from(viewport(app).1);
+    let current = view(app, &room);
+    if let Some(next) = step(&starts, current, viewport_h, motion, count) {
+        app.msg_views.insert(room, next);
+    }
 }
 
 /// True when the last row of `room` is visible in the effective view. Call it before a new row is

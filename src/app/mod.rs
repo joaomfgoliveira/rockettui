@@ -11,6 +11,7 @@ pub mod history;
 pub mod input_buf;
 pub mod messages;
 pub mod realtime;
+pub mod results;
 pub mod search;
 pub mod send;
 pub mod sidebar;
@@ -151,6 +152,12 @@ pub struct App {
     pub search: Option<search::Search>,
     /// The text of the open search prompt (`/`), when open. Like `help` it is a state, not a mode.
     pub search_prompt: Option<String>,
+    /// The server search results list (`app::results`), when open. A state, not a mode.
+    pub results: Option<results::ResultsState>,
+    /// Counter behind the ids of server searches; an answer carrying an older id is dropped.
+    pub search_seq: u64,
+    /// The first page of a server search in flight: its id and query text.
+    pub pending_search: Option<(u64, String)>,
     pub keymap: Keymap,
     /// The styles, border types and markers of theme.toml (D-08, D-09, D-11).
     pub theme: crate::config::Theme,
@@ -216,6 +223,9 @@ impl App {
             context: false,
             search: None,
             search_prompt: None,
+            results: None,
+            search_seq: 0,
+            pending_search: None,
             keymap: config.keymap,
             theme: config.theme,
             matcher: Matcher::default(),
@@ -319,6 +329,7 @@ impl App {
             edit::cancel(self);
             self.confirm = None;
             search::clear(self);
+            results::close_all(self);
             match self.current_room.clone() {
                 Some(old) => {
                     let live = std::mem::take(&mut self.input);
