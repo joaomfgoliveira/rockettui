@@ -1,2 +1,5 @@
 /target
 /dev/state/
+
+# Python bytecode from the dev and smoke scripts
+__pycache__/
