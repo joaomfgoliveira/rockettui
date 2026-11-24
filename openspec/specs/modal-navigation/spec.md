@@ -54,7 +54,7 @@ Multi-key bindings SHALL be matched with a timeout. Pending keys SHALL be shown 
 - **THEN** `g` is shown as pending, and after the timeout the pending sequence is cleared
 
 ### Requirement: Command mode
-Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL quit (with undelivered messages the first one warns, see `message-sending`; `:q!` and `:quit!` always quit), `:reconnect` and `:retry` SHALL reload rooms, `:help` SHALL open the help overlay (see `help`), `:search <text>` SHALL search the open room on the server (see `room-search-results`), and an unknown command SHALL show an error in the status bar without quitting.
+Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL quit (with undelivered messages the first one warns, see `message-sending`; `:q!` and `:quit!` always quit), `:reconnect` and `:retry` SHALL reload rooms, `:reload` SHALL reload the open room's newest messages (see `message-history`), `:help` SHALL open the help overlay (see `help`), `:search <text>` SHALL search the open room on the server (see `room-search-results`), and an unknown command SHALL show an error in the status bar without quitting.
 
 #### Scenario: Quit
 - **WHEN** the user runs `:q` with nothing undelivered
@@ -71,6 +71,10 @@ Command mode SHALL dispatch from a table of commands. `:q` and `:quit` SHALL qui
 #### Scenario: Search command
 - **WHEN** the user runs `:search deploy` with a room open
 - **THEN** the app returns to Normal mode and the results of the server search are shown
+
+#### Scenario: Reload command
+- **WHEN** the user runs `:reload` with a room open
+- **THEN** the app returns to Normal mode and the room's newest messages are requested
 
 ### Requirement: Multiline input
 The input bar SHALL grow with its content up to a maximum height, support the usual editing keys, and treat pasted text safely.
