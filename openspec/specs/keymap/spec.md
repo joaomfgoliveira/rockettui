@@ -32,7 +32,7 @@ Keys SHALL be written in Vim notation such as `<C-d>`, `<Esc>`, `<CR>` and `gg`.
 - **THEN** `Ctrl-d` does nothing
 
 ### Requirement: Action vocabulary
-Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message` and `?` to `show_context` in Normal mode; `show_help` has no default key.
+Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_reactions`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message`, `gr` to `show_reactions` and `?` to `show_context` in Normal mode; `show_help` has no default key.
 
 #### Scenario: Command binding
 - **WHEN** the user binds `"<C-q>" = "cmd:quit"`
@@ -49,6 +49,18 @@ Bindable actions SHALL be a fixed set of snake_case names (including `retry_send
 #### Scenario: Restore the old help key
 - **WHEN** the user binds `"?" = "show_help"` in `[normal]`
 - **THEN** `?` opens the help overlay directly and the context popup has no default key
+
+#### Scenario: Default reactions key
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `gr` opens the reactions popup in Normal mode, and `gg` still jumps to the oldest message
+
+#### Scenario: Rebind reactions
+- **WHEN** the user binds `"R" = "show_reactions"` in `[normal]`
+- **THEN** `R` opens the reactions popup
+
+#### Scenario: Unbind reactions
+- **WHEN** the user sets `"gr" = "none"` in `[normal]`
+- **THEN** `gr` does nothing
 
 ### Requirement: Safe overrides
 The app SHALL reject overrides that bind the same keys twice in one mode table of `keymap.toml`, make one binding a prefix of another, remove all ways to leave a mode or quit (lockout), or bind a multi-key sequence starting with a plain character (no Ctrl or Alt) in Insert or Command mode. A user binding replaces a preset binding of the same keys.
@@ -71,3 +83,22 @@ The bindable action names SHALL include `search_start`, `search_next` and `searc
 #### Scenario: Unbind search jumps
 - **WHEN** the user sets `"n" = "none"` in `[normal]`
 - **THEN** `n` does nothing in Normal mode
+
+### Requirement: React action
+The bindable action names SHALL include `react_message`. In Normal mode `+` SHALL be bound to `react_message` by default, in every preset. It SHALL be rebindable and removable like any other action.
+
+#### Scenario: Default react key
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `+` opens the reaction picker in Normal mode
+
+#### Scenario: Rebind react
+- **WHEN** the user binds `"R" = "react_message"` in `[normal]`
+- **THEN** `R` opens the reaction picker
+
+#### Scenario: Unbind react
+- **WHEN** the user sets `"+" = "none"` in `[normal]`
+- **THEN** `+` does nothing
+
+#### Scenario: Unknown spelling
+- **WHEN** `keymap.toml` binds a key to `react_msg`
+- **THEN** the config error screen reports the unknown action name
