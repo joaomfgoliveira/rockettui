@@ -129,3 +129,45 @@ The bindable action names SHALL include `switch_room`. In Normal mode `<C-k>` SH
 #### Scenario: Unknown spelling
 - **WHEN** `keymap.toml` binds a key to `switch_rooms`
 - **THEN** the config error screen reports the unknown action name
+
+### Requirement: Thread view actions
+The bindable action names SHALL include `open_thread` and `close_thread`. In Normal mode `gt` SHALL be bound to `open_thread` by default, in every preset, and `gg` and `gr` SHALL keep working. `close_thread` SHALL have no default key, because `Esc` closes the pane already. Both SHALL be rebindable and removable like any other action.
+
+#### Scenario: Default open key
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `gt` opens the thread of the message under the cursor
+
+#### Scenario: Existing g keys
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `gg` still jumps to the oldest message and `gr` still opens the reactions popup
+
+#### Scenario: Rebind open
+- **WHEN** the user binds `"T" = "open_thread"` in `[normal]`
+- **THEN** `T` opens the thread
+
+#### Scenario: Bind close
+- **WHEN** the user binds `"q" = "close_thread"` in `[normal]` and a thread is open
+- **THEN** `q` closes the pane
+
+#### Scenario: Unknown spelling
+- **WHEN** `keymap.toml` binds a key to `open_threads`
+- **THEN** the config error screen reports the unknown action name
+
+### Requirement: Thread reply actions
+The bindable action names SHALL include `reply_in_thread` and `toggle_reply_to_channel`. In Normal mode `gR` SHALL be bound to `reply_in_thread` by default and in Insert mode `<C-b>` SHALL be bound to `toggle_reply_to_channel`, in every preset. Both SHALL be rebindable and removable like any other action.
+
+#### Scenario: Default keys
+- **WHEN** no `keymap.toml` overrides them
+- **THEN** `gR` starts a thread reply in Normal mode and `<C-b>` toggles also-send-to-channel in Insert mode
+
+#### Scenario: Rebind
+- **WHEN** the user binds `"<C-r>" = "reply_in_thread"` in `[normal]`
+- **THEN** `Ctrl-r` starts a thread reply
+
+#### Scenario: Unbind
+- **WHEN** the user sets `"<C-b>" = "none"` in `[insert]`
+- **THEN** `Ctrl-b` does nothing in Insert mode
+
+#### Scenario: Unknown spelling
+- **WHEN** `keymap.toml` binds a key to `reply_thread`
+- **THEN** the config error screen reports the unknown action name
