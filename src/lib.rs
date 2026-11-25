@@ -7,8 +7,10 @@ pub mod app;
 pub mod config;
 pub mod data;
 pub mod effect;
+pub mod emoji_image;
 pub mod event;
 pub mod input;
+pub mod kitty;
 pub mod realtime;
 pub mod tui;
 pub mod ui;
@@ -17,6 +19,10 @@ use crate::action::Action;
 use crate::app::update::update;
 use crate::app::{App, ConnState};
 use crate::effect::Effect;
+
+/// How often the screen is redrawn while an animated emoji is on screen. Frame delays are at least
+/// 20 ms; only the two cells of an emoji change, so the terminal sees very little.
+const ANIMATION_TICK: std::time::Duration = std::time::Duration::from_millis(40);
 
 /// Capacity of the one bounded Action channel.
 pub const CHANNEL_CAPACITY: usize = 256;
@@ -91,6 +97,9 @@ pub async fn run(
     // The one channel. `tx` stays alive for the whole run: effect tasks need a sender, and the
     // input task ends the loop with `Action::Quit` when its event stream ends.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Action>(CHANNEL_CAPACITY);
+    // Whether the terminal can show images is asked once, before the input task starts reading
+    // the same input (the answer arrives there). It never blocks for long and never fails.
+    let graphics = tui::detect_graphics();
     event::spawn_input_task(tx.clone());
 
     // The client is built before `App::with_config` consumes the config, so the token reaches
@@ -112,6 +121,7 @@ pub async fn run(
     // The binary shows local time (RESEARCH A2, confirmed by the author on 2026-11-16). `App::new`
     // and the tests stay on UTC, and the reducer still never reads a clock or a zone.
     app.zone = ui::timefmt::Zone::Local;
+    app.graphics = graphics;
     // One prefix per process, so a restarted client never reuses a message id (D-07).
     app.id_prefix = session_id_prefix();
     app.conn = ConnState::Connecting;
@@ -119,6 +129,7 @@ pub async fn run(
     // The own username, once per connection (D-17); `:reconnect` asks again, a send never does.
     app.effects.push(Effect::LoadMe);
     let mut batch: Vec<Action> = Vec::new();
+    let started = tokio::time::Instant::now();
     // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.
     let mut key_deadline: Option<tokio::time::Instant> = None;
     loop {
@@ -145,6 +156,9 @@ pub async fn run(
                 .keys_pending()
                 .then(|| tokio::time::Instant::now() + app.key_timeout());
         }
+        // An image that arrived is in the terminal before the frame that draws it.
+        tui::upload_images(&mut app);
+        app.anim_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         terminal.draw(|f| ui::view(f, &app))?;
         // Debug-only hook so the pty smoke harness and the manual UAT can prove that a panic
         // restores the terminal. Compiled out of release builds (A17).
@@ -158,6 +172,10 @@ pub async fn run(
                 None => break,
             },
             () = sleep_until_opt(key_deadline) => batch.push(Action::KeyTimeout),
+            // An animated emoji is on screen: draw again for its next frame.
+            () = sleep_until_opt(
+                app.images.has_animation().then(|| tokio::time::Instant::now() + ANIMATION_TICK)
+            ) => {}
         }
         while let Ok(action) = rx.try_recv() {
             batch.push(action);

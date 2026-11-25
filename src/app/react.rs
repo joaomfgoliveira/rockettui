@@ -6,8 +6,8 @@
 //! Pure: no I/O and no `Frame`.
 
 use crate::api::ApiError;
-use crate::app::{App, Focus, MAX_CMDLINE, Mode, StatusMsg, jump, messages, send};
-use crate::data::{CustomEmoji, Message, MessageKind, RoomId, SendState};
+use crate::app::{App, Focus, MAX_CMDLINE, Mode, StatusMsg, emoji, jump, messages, send};
+use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, EmojiName};
 use crate::input::key::Chord;
 use crate::ui::emoji::resolve;
@@ -206,26 +206,6 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
         .collect()
 }
 
-/// The server's custom emojis as the picker knows them. Fetched once per session, on the first
-/// opening; a failed fetch goes back to `NotLoaded` so the next opening asks again.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum CustomEmojis {
-    #[default]
-    NotLoaded,
-    Loading,
-    Loaded(Vec<CustomEmoji>),
-}
-
-impl CustomEmojis {
-    /// The emojis to search, none until they have arrived.
-    pub fn list(&self) -> &[CustomEmoji] {
-        match self {
-            CustomEmojis::Loaded(list) => list,
-            _ => &[],
-        }
-    }
-}
-
 /// True when the messages pane is focused on a message the picker could react to: what the context
 /// popup checks before it lists the react action. Does not look at the detached state or the own
 /// username, which `open` refuses with a status line of their own.
@@ -338,10 +318,8 @@ pub fn open(app: &mut App) {
         return;
     }
     app.matcher.reset();
-    if app.custom_emojis == CustomEmojis::NotLoaded {
-        app.custom_emojis = CustomEmojis::Loading;
-        app.effects.push(Effect::LoadCustomEmojis);
-    }
+    // The list is the session's (`app::emoji`): a failed load is tried again here as well.
+    emoji::ensure_loaded(app);
     app.react_picker = Some(ReactPicker {
         room,
         id,
@@ -523,17 +501,6 @@ pub fn close_if_stale(app: &mut App) {
     }
 }
 
-/// The custom emojis arrived.
-pub fn on_custom_emojis_loaded(app: &mut App, list: Vec<CustomEmoji>) {
-    app.custom_emojis = CustomEmojis::Loaded(list);
-}
-
-/// The custom emojis could not be fetched: the picker goes on with unicode emoji and aliases, and
-/// the next opening asks again. Nothing is shown; the picker still works.
-pub fn on_custom_emojis_failed(app: &mut App) {
-    app.custom_emojis = CustomEmojis::NotLoaded;
-}
-
 /// A reaction was not sent: one fixed status line naming the failure class, never the server's
 /// text, the shortcode or the search text. The message is left as it was.
 pub fn on_react_failed(app: &mut App, error: ApiError) {
@@ -560,7 +527,9 @@ fn failure_text(error: ApiError) -> String {
 mod tests {
     use super::*;
     use crate::action::Action;
+    use crate::app::emoji::CustomEmojis;
     use crate::app::update::update;
+    use crate::data::CustomEmoji;
     use crate::test_util::app_80x24;
 
     fn status(app: &App) -> String {
@@ -672,6 +641,7 @@ mod tests {
         CustomEmoji {
             name: name.to_string(),
             aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
         }
     }
 
@@ -1132,28 +1102,20 @@ mod tests {
     }
 
     #[test]
-    fn the_custom_emojis_are_fetched_on_the_first_opening_only_and_again_after_a_failure() {
+    fn the_picker_uses_the_session_list_and_asks_again_only_after_a_failure() {
+        // The list the session loaded: the first opening makes no request.
         let (mut app, _) = picker_app("alice", Vec::new());
-        press(&mut app, "+");
-        assert_eq!(pending(&app), [Effect::LoadCustomEmojis]);
-        assert_eq!(app.custom_emojis, CustomEmojis::Loading);
-        // Closed and opened while the fetch is out: no second request.
-        press(&mut app, "<Esc>");
-        press(&mut app, "+");
-        assert_eq!(pending(&app), [Effect::LoadCustomEmojis]);
-        press(&mut app, "<Esc>");
-
-        // The list arrives; later openings do not ask again.
-        update(
-            &mut app,
-            Action::CustomEmojisLoaded(vec![custom("ship_it", &[])]),
-        );
+        app.custom_emojis = CustomEmojis::Loaded(vec![custom("ship_it", &[])]);
         app.effects.clear();
         press(&mut app, "+");
         assert!(app.effects.is_empty());
+        search_for(&mut app, "ship_it");
+        assert_eq!(names(&view(&app).unwrap().candidates), ["ship_it"]);
         press(&mut app, "<Esc>");
+        press(&mut app, "<Esc>");
+        assert!(app.react_picker.is_none());
 
-        // A failed fetch: the next opening asks again, and the picker works meanwhile.
+        // A failed load: the picker works from unicode meanwhile and asks again on opening.
         app.custom_emojis = CustomEmojis::Loading;
         update(&mut app, Action::CustomEmojisFailed);
         press(&mut app, "+");
@@ -1655,32 +1617,5 @@ mod tests {
         let shown = format!("{:?} {:#?}", app.react_picker, app.react_picker);
         assert!(!shown.contains("sentinelquery"), "{shown}");
         assert!(shown.contains("query_len"), "{shown}");
-    }
-
-    #[test]
-    fn the_custom_emoji_cache_follows_its_answers() {
-        let mut app = app_80x24();
-        assert_eq!(app.custom_emojis, CustomEmojis::NotLoaded);
-        assert!(app.custom_emojis.list().is_empty());
-
-        app.custom_emojis = CustomEmojis::Loading;
-        assert!(
-            app.custom_emojis.list().is_empty(),
-            "nothing to search while loading"
-        );
-
-        let list = vec![CustomEmoji {
-            name: "ship_it".to_string(),
-            aliases: vec!["ship".to_string()],
-        }];
-        update(&mut app, Action::CustomEmojisLoaded(list.clone()));
-        assert_eq!(app.custom_emojis, CustomEmojis::Loaded(list.clone()));
-        assert_eq!(app.custom_emojis.list(), list.as_slice());
-
-        // A failure is a fresh start, so the next opening asks again.
-        app.custom_emojis = CustomEmojis::Loading;
-        update(&mut app, Action::CustomEmojisFailed);
-        assert_eq!(app.custom_emojis, CustomEmojis::NotLoaded);
-        assert!(status(&app).is_empty(), "a failed fetch shows nothing");
     }
 }

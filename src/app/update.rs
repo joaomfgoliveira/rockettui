@@ -5,8 +5,8 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, jump,
-    react, reactions, realtime, results, search, send, sidebar,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, help, history,
+    jump, react, reactions, realtime, results, search, send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -18,6 +18,8 @@ pub fn update(app: &mut App, action: Action) {
     // A live change can leave the reactions popup with nothing to show; it closes at once.
     reactions::close_if_stale(app);
     react::close_if_stale(app);
+    // Whatever the action changed, the room on screen may now name a custom emoji not seen yet.
+    emoji::request_images(app);
 }
 
 fn reduce(app: &mut App, action: Action) {
@@ -104,6 +106,7 @@ fn reduce(app: &mut App, action: Action) {
             app.rooms = rooms;
             app.conn = ConnState::Ready;
             sidebar::on_rows_changed(app);
+            emoji::ensure_loaded(app);
         }
         Action::LoadFailed(err) => app.conn = ConnState::Failed(err),
         Action::MeLoaded(name) => own_username_loaded(app, name),
@@ -165,8 +168,10 @@ fn reduce(app: &mut App, action: Action) {
         Action::DeleteDone { room, id } => edit::on_delete_done(app, &room, &id),
         Action::DeleteFailed { error, .. } => edit::on_delete_failed(app, error),
         Action::ReactFailed { error } => react::on_react_failed(app, error),
-        Action::CustomEmojisLoaded(list) => react::on_custom_emojis_loaded(app, list),
-        Action::CustomEmojisFailed => react::on_custom_emojis_failed(app),
+        Action::CustomEmojisLoaded(list) => emoji::on_loaded(app, list),
+        Action::CustomEmojisFailed => emoji::on_failed(app),
+        Action::EmojiImageReady { emoji, image } => emoji::on_image_ready(app, emoji, image),
+        Action::EmojiImageFailed(emoji) => emoji::on_image_failed(app, emoji),
         Action::RtConnected => realtime::on_connected(app),
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),

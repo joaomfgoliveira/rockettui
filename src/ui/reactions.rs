@@ -67,8 +67,13 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     let width = usize::from(inner.width);
     // A reaction that resolved to nothing is drawn raw: its `:shortcode:` already is the glyph, so
     // the glyph cell stays empty and the glyph column is sized from real glyphs only.
+    let emoji = app.emoji_view();
     let glyph_of = |e: &Entry| -> String {
-        if e.glyph == e.shortcode {
+        if let Some(cells) =
+            crate::ui::emoji::image_glyph(&e.shortcode, &app.settings.emoji_aliases, &emoji)
+        {
+            cells
+        } else if e.glyph == e.shortcode {
             String::new()
         } else {
             e.glyph.clone()
@@ -113,20 +118,29 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
             if width <= prefix {
                 // No room for the users: the left part, cut to the width.
                 let left = format!("{glyph}{gap}{code}");
-                return Line::from(Span::styled(
-                    fit_author(&left, width).into_owned(),
-                    name_style,
+                return Line::from(crate::ui::emoji::expand(
+                    vec![Span::styled(
+                        fit_author(&left, width).into_owned(),
+                        name_style,
+                    )],
+                    theme.messages_custom_emoji,
+                    &mut false,
                 ));
             }
             let users = entry.users.join(", ");
             let users = fit_author(&users, width - prefix).into_owned();
-            Line::from(vec![
-                Span::raw(glyph),
+            let mut spans = crate::ui::emoji::expand(
+                vec![Span::raw(glyph)],
+                theme.messages_custom_emoji,
+                &mut false,
+            );
+            spans.extend([
                 Span::raw(gap),
                 Span::styled(code, name_style),
                 Span::raw("  "),
                 Span::styled(users, users_style),
-            ])
+            ]);
+            Line::from(spans)
         })
         .collect();
     if hidden > 0 {
@@ -220,6 +234,87 @@ mod tests {
         let out = render_to_string(&app, 40, 8);
         assert!(out.contains("Reactions"), "{out}");
         insta::assert_snapshot!(out);
+    }
+
+    /// Custom emoji `rtshipit` loaded, the terminal able to show images and its image on screen.
+    fn with_ready_image(app: &mut crate::app::App) {
+        use crate::app::emoji::{CustomEmojis, Graphics, ImageState};
+        app.graphics = Graphics::Supported;
+        app.custom_emojis = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "rtshipit".to_string(),
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        app.images.set_state(
+            "rtshipit",
+            ImageState::Ready {
+                etag: String::new(),
+                image: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 255].into(),
+                    ..Default::default()
+                },
+                id: 9,
+                uploaded: true,
+            },
+        );
+    }
+
+    /// The placeholder cells of the buffer, as (x, y, foreground, reversed).
+    fn image_cells(
+        buffer: &ratatui::buffer::Buffer,
+    ) -> Vec<(u16, u16, ratatui::style::Color, bool)> {
+        let mut cells = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().starts_with(crate::kitty::PLACEHOLDER) {
+                    cells.push((
+                        x,
+                        y,
+                        cell.fg,
+                        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+                    ));
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn a_custom_emoji_shows_its_image_in_the_popup_with_its_name() {
+        let mut app = on_reactions(app_80x24(), vec![reaction("rtshipit", &["bob", "me"])]);
+        with_ready_image(&mut app);
+        press(&mut app, "gr");
+        let buffer = render_buffer(&app, 80, 24);
+        let cells = image_cells(&buffer);
+        assert_eq!(cells.len(), 2, "{cells:?}");
+        assert!(
+            cells
+                .iter()
+                .all(|(_, _, fg, rev)| *fg == Color::Rgb(0, 0, 9) && !rev)
+        );
+        let out = render_to_string(&app, 80, 24);
+        assert!(
+            out.contains(":rtshipit:") && out.contains("you, bob"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_custom_emoji_shows_as_its_name_in_the_popup() {
+        let mut app = on_reactions(app_80x24(), vec![reaction("rtshipit", &["bob", "me"])]);
+        app.custom_emojis =
+            crate::app::emoji::CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+                name: "rtshipit".to_string(),
+                aliases: Vec::new(),
+                ..Default::default()
+            }]);
+        press(&mut app, "gr");
+        let out = render_to_string(&app, 80, 24);
+        assert!(out.contains(":rtshipit:"), "{out}");
+        assert!(out.contains("you, bob"), "{out}");
     }
 
     #[test]

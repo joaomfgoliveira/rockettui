@@ -105,7 +105,10 @@ pub struct Settings {
     /// after every send; `"if_at_bottom"` follows only when the newest row was already visible.
     pub follow_on_send: FollowOnSend,
     /// config.toml table `[emoji_aliases]`: the text drawn for a reaction by shortcode name
-    /// (without colons), so a custom server emoji can show as a lookalike. Empty by default.
+    /// (without colons), so a custom server emoji can show as a lookalike. Empty by default. An
+    /// alias wins over the unicode table and over the server's custom emojis, which are drawn as
+    /// their `:name:` in the theme's `[messages.custom_emoji]` style (their image where the
+    /// terminal can show it).
     pub emoji_aliases: HashMap<String, String>,
 }
 

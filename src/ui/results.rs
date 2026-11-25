@@ -69,10 +69,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .min(view.top_row + usize::from(inner.height));
     for row in first..end {
         let y = inner.y + u16::try_from(row - view.top_row).unwrap_or(u16::MAX);
-        frame.buffer_mut().set_style(
-            Rect::new(inner.x, y, inner.width, 1),
-            theme.results_selected,
-        );
+        let row_area = Rect::new(inner.x, y, inner.width, 1);
+        frame
+            .buffer_mut()
+            .set_style(row_area, theme.results_selected);
+        crate::ui::emoji::keep_image_ids(frame.buffer_mut(), row_area);
     }
 }
 
@@ -122,6 +123,63 @@ mod tests {
             },
         );
         assert!(!matches!(app.status_msg, Some(StatusMsg::Error(_))));
+    }
+
+    #[test]
+    fn a_custom_emoji_in_a_result_shows_its_image_and_the_list_asks_for_it() {
+        use crate::app::emoji::{CustomEmojis, Graphics, ImageState};
+        let mut app = app_80x24();
+        app.graphics = Graphics::Supported;
+        app.custom_emojis = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "rtshipit".to_string(),
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        open(&mut app, 3);
+        app.results.as_mut().expect("results").messages[0].body = "ship :rtshipit: it".to_string();
+        app.effects.clear();
+        // A search result is not in the open room: the list itself makes the image be asked for.
+        update(&mut app, Action::Clock(0));
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, crate::effect::Effect::FetchEmojiImage(_))),
+            "{:?}",
+            app.effects
+        );
+        app.images.set_state(
+            "rtshipit",
+            ImageState::Ready {
+                etag: String::new(),
+                image: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 255].into(),
+                    ..Default::default()
+                },
+                id: 9,
+                uploaded: true,
+            },
+        );
+        let buffer = crate::test_util::render_buffer(&app, 80, 24);
+        let mut cells = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().starts_with(crate::kitty::PLACEHOLDER) {
+                    cells.push((
+                        cell.fg,
+                        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+                    ));
+                }
+            }
+        }
+        assert_eq!(cells.len(), 2, "{cells:?}");
+        assert!(
+            cells
+                .iter()
+                .all(|(fg, rev)| *fg == ratatui::style::Color::Rgb(0, 0, 9) && !rev)
+        );
     }
 
     #[test]

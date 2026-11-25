@@ -513,6 +513,7 @@ mod tests {
         for action in crate::data::fake::seed() {
             update(&mut app, action);
         }
+        app.effects.clear();
         app.open_room(general());
         app.own_username = Some(OWN.to_string());
         app.messages

@@ -37,8 +37,13 @@ pub const MIN_BODY: usize = 10;
 /// Wrap `text` to `width` display columns. Sanitized first, so width math matches what is drawn.
 /// Always returns at least one row.
 pub fn wrap_body(text: &str, width: usize) -> Vec<String> {
-    let clean = sanitize(text);
-    let mut rows: Vec<String> = textwrap::wrap(&clean, width.max(1))
+    wrap_clean(&sanitize(text), width)
+}
+
+/// `wrap_body` for text that is already sanitized, and so may hold the client's own emoji cells
+/// (`ui::emoji`), which sanitising would remove.
+fn wrap_clean(clean: &str, width: usize) -> Vec<String> {
+    let mut rows: Vec<String> = textwrap::wrap(clean, width.max(1))
         .into_iter()
         .map(Cow::into_owned)
         .collect();
@@ -101,6 +106,9 @@ pub struct RowCtx<'a> {
     pub search: Option<&'a str>,
     /// The `[emoji_aliases]` of config.toml: the text drawn for a reaction by shortcode name.
     pub aliases: &'a std::collections::HashMap<String, String>,
+    /// The server's custom emojis and how they are drawn now (`app::emoji`): asked after the
+    /// aliases and the unicode table.
+    pub emoji: crate::app::emoji::EmojiView<'a>,
     /// The user's own username, to tell their reactions from the others (`None` until known).
     pub own_user: Option<&'a str>,
 }
@@ -260,14 +268,21 @@ fn body_rows(
     // The emoji shortcodes of an ordinary message are drawn as emoji before the text is wrapped, so
     // widths are measured on what is on screen and the row model agrees with the pane. The stored
     // text is not changed. A system message is fixed text the client wrote itself.
+    // Sanitising comes first: the emoji cells the next step writes are the client's own, and server
+    // text must never be able to hold one.
+    let clean = sanitize(&msg.body);
     let drawn = if msg.kind == MessageKind::Normal {
-        crate::ui::emoji::draw_shortcodes(&msg.body, ctx.aliases)
+        crate::ui::emoji::draw_shortcodes(&clean, ctx.aliases, &ctx.emoji)
     } else {
-        std::borrow::Cow::Borrowed(msg.body.as_str())
+        clean
     };
-    let mut rows: Vec<Vec<Span<'static>>> = wrap_body(&drawn, width)
+    let mut inside = false;
+    let mut rows: Vec<Vec<Span<'static>>> = wrap_clean(&drawn, width)
         .into_iter()
-        .map(|row| highlight_row(row, body_style, query, ctx.theme.search_match))
+        .map(|row| {
+            let spans = highlight_row(row, body_style, query, ctx.theme.search_match);
+            crate::ui::emoji::expand(spans, ctx.theme.messages_custom_emoji, &mut inside)
+        })
         .collect();
     if msg.edited {
         let last_width: usize = rows
@@ -301,7 +316,16 @@ fn reaction_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'sta
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut used = 0;
     for reaction in &msg.reactions {
-        let label = crate::ui::emoji::resolve(&reaction.name, ctx.aliases);
+        // A custom emoji is written as the client's own cells (its image, a stand-in or its name,
+        // see `ui::emoji`) and expanded into spans below; anything else is `resolve`.
+        let label =
+            match crate::ui::emoji::lookup_found(&reaction.name, ctx.aliases, ctx.emoji.custom) {
+                Some(crate::ui::emoji::Found::Glyph(glyph)) => glyph,
+                Some(crate::ui::emoji::Found::Custom(own)) => {
+                    crate::ui::emoji::custom_cells(&own, ctx.emoji.look(&own))
+                }
+                None => crate::ui::emoji::resolve(&reaction.name, ctx.aliases),
+            };
         let text = format!("{label} {}", reaction.users.len());
         let text = fit_author(&text, width).into_owned();
         let own = ctx
@@ -312,15 +336,22 @@ fn reaction_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'sta
         } else {
             ctx.theme.messages_reactions
         };
+        // Every cell measures one column, like what it is drawn as, so the width is the same
+        // before and after the expansion.
         let item = text.width();
+        let spans = crate::ui::emoji::expand(
+            vec![Span::styled(text, style)],
+            ctx.theme.messages_custom_emoji,
+            &mut false,
+        );
         match rows.last_mut() {
             Some(row) if used + REACTION_GAP.width() + item <= width => {
                 row.push(Span::raw(REACTION_GAP));
-                row.push(Span::styled(text, style));
+                row.extend(spans);
                 used += REACTION_GAP.width() + item;
             }
             _ => {
-                rows.push(vec![Span::styled(text, style)]);
+                rows.push(spans);
                 used = item;
             }
         }
@@ -454,6 +485,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         render_rows(m, width, &ctx)
@@ -476,6 +508,7 @@ mod tests {
             theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         render_rows(m, width, &ctx)
@@ -535,6 +568,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         let bodies: Vec<usize> = msgs
@@ -565,6 +599,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         let rows = render_rows(&m, 60, &ctx);
@@ -967,6 +1002,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
@@ -1006,6 +1042,7 @@ mod tests {
                 theme: &theme,
                 search: None,
                 aliases: &crate::ui::emoji::NO_ALIASES,
+                emoji: crate::app::emoji::EmojiView::none(),
                 own_user: None,
             };
             for state in [
@@ -1041,6 +1078,7 @@ mod tests {
                     theme: &theme,
                     search: None,
                     aliases: &crate::ui::emoji::NO_ALIASES,
+                    emoji: crate::app::emoji::EmojiView::none(),
                     own_user: None,
                 };
                 let m = with_state(state, "alice", "hello there");
@@ -1156,6 +1194,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
@@ -1256,6 +1295,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         divider_row(msg, prev, width, &ctx)
@@ -1320,9 +1360,57 @@ mod tests {
             theme: &theme,
             search: None,
             aliases,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: own,
         };
         render_rows(m, width, &ctx)
+    }
+
+    /// `rows_with` with the server's custom emojis loaded.
+    fn rows_custom(
+        m: &Message,
+        width: u16,
+        layout: MessageLayout,
+        custom: &crate::app::emoji::CustomEmojis,
+    ) -> Vec<Line<'static>> {
+        let format = TimeFormat::default();
+        let theme = Theme::default();
+        let ctx = RowCtx {
+            layout,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView {
+                custom,
+                ..crate::app::emoji::EmojiView::none()
+            },
+            own_user: Some("me"),
+        };
+        render_rows(m, width, &ctx)
+    }
+
+    fn customs(list: &[(&str, &[&str])]) -> crate::app::emoji::CustomEmojis {
+        crate::app::emoji::CustomEmojis::Loaded(
+            list.iter()
+                .map(|(n, a)| crate::data::CustomEmoji {
+                    name: n.to_string(),
+                    aliases: a.iter().map(|x| x.to_string()).collect(),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+    }
+
+    /// The span styles that cover `needle` in a row, to check what is drawn in the custom style.
+    fn style_of(row: &Line<'_>, needle: &str) -> Option<ratatui::style::Style> {
+        row.spans
+            .iter()
+            .find(|sp| sp.content.contains(needle))
+            .map(|sp| sp.style)
     }
 
     fn alias_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -1469,6 +1557,416 @@ mod tests {
         }
     }
 
+    // ---- custom emojis (text fallback)
+
+    #[test]
+    fn a_custom_emoji_in_a_body_is_its_name_in_the_custom_style() {
+        let list = customs(&[("rtshipit", &["rtship"])]);
+        let custom_style = Theme::default().messages_custom_emoji;
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_custom(
+                &msg("alice", "go :rtshipit: now :rtship:"),
+                60,
+                layout,
+                &list,
+            );
+            let all = texts(&rows).join("\n");
+            // The alias is drawn exactly as the emoji's own name is.
+            assert!(
+                all.contains("go :rtshipit: now :rtshipit:"),
+                "{layout:?}: {all}"
+            );
+            let body = rows.iter().find(|r| text(r).contains("go ")).unwrap();
+            assert_ne!(custom_style, Theme::default().messages_body);
+            assert_eq!(
+                style_of(body, ":rtshipit:").map(|s| s.add_modifier),
+                Some(custom_style.add_modifier)
+            );
+            assert_eq!(
+                style_of(body, "go ").map(|s| s.add_modifier),
+                Some(Theme::default().messages_body.add_modifier),
+                "the text around it keeps the body style"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_name_and_a_name_in_code_stay_as_written_and_unstyled() {
+        let list = customs(&[("rtshipit", &[])]);
+        let rows = rows_custom(
+            &msg("alice", "use `:rtshipit:` or :rt_unknown:"),
+            60,
+            MessageLayout::TwoLine,
+            &list,
+        );
+        let all = texts(&rows).join("\n");
+        assert!(all.contains("use `:rtshipit:` or :rt_unknown:"), "{all}");
+        let body = &rows[1];
+        assert_eq!(
+            body.spans.len(),
+            2,
+            "indent and one plain span: {:?}",
+            body.spans
+        );
+    }
+
+    #[test]
+    fn unicode_wins_over_a_custom_emoji_of_the_same_name() {
+        let list = customs(&[("tada", &[])]);
+        let rows = rows_custom(
+            &msg("alice", "yay :tada:"),
+            60,
+            MessageLayout::TwoLine,
+            &list,
+        );
+        assert!(texts(&rows).join("\n").contains("yay 🎉"));
+    }
+
+    #[test]
+    fn a_custom_name_wider_than_the_pane_is_cut_across_rows_and_stays_styled() {
+        let list = customs(&[("rt_a_very_long_custom_emoji_name", &[])]);
+        let rows = rows_custom(
+            &msg("alice", ":rt_a_very_long_custom_emoji_name:"),
+            12,
+            MessageLayout::TwoLine,
+            &list,
+        );
+        let custom_style = Theme::default().messages_custom_emoji;
+        let body: Vec<&Line> = rows.iter().skip(1).collect();
+        assert!(body.len() >= 3);
+        for row in body {
+            assert!(
+                row.spans
+                    .iter()
+                    .filter(|sp| !sp.content.trim().is_empty())
+                    .all(|sp| sp.style.add_modifier == custom_style.add_modifier),
+                "{:?}",
+                row.spans
+            );
+            assert!(!text(row).chars().any(|c| c as u32 >= 0x10_8000));
+        }
+    }
+
+    #[test]
+    fn a_custom_reaction_is_its_name_in_the_custom_style_followed_by_the_count() {
+        let list = customs(&[("rtshipit", &[])]);
+        let m = reacted(
+            "x",
+            vec![reaction("rtshipit", &["a", "b"]), reaction("+1", &["a"])],
+        );
+        let rows = rows_custom(&m, 80, MessageLayout::TwoLine, &list);
+        let shown = text(&rows[2]);
+        assert!(shown.contains(":rtshipit: 2"), "{shown}");
+        assert!(shown.contains("👍 1"), "{shown}");
+        let custom = Theme::default().messages_custom_emoji;
+        assert_eq!(
+            style_of(&rows[2], ":rtshipit:").map(|s| s.add_modifier.contains(custom.add_modifier)),
+            Some(true)
+        );
+        // Not loaded: the same name is just a raw name, unstyled.
+        let rows = rows_custom(
+            &m,
+            80,
+            MessageLayout::TwoLine,
+            &crate::app::emoji::NO_CUSTOM,
+        );
+        assert!(text(&rows[2]).contains(":rtshipit: 2"));
+        assert_ne!(
+            style_of(&rows[2], ":rtshipit:").map(|s| s.add_modifier.contains(custom.add_modifier)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn server_text_cannot_carry_the_clients_emoji_cells() {
+        let m = msg(
+            "alice",
+            "a\u{10FFF0}rtshipit\u{10FFF1}b \u{10EEEE}\u{305}\u{305}",
+        );
+        let list = customs(&[("rtshipit", &[])]);
+        let rows = rows_custom(&m, 60, MessageLayout::TwoLine, &list);
+        let all = texts(&rows[1..]).join("\n");
+        assert!(all.contains("artshipitb"), "{all:?}");
+        assert!(
+            !all.contains(':'),
+            "no colon was made from a smuggled cell: {all:?}"
+        );
+        assert!(!all.contains('\u{10EEEE}'));
+    }
+
+    // ---- custom emojis (images)
+
+    use crate::app::emoji::{EmojiView, Graphics, ImageState, Images, Look, image_cell};
+    use crate::emoji_image::Rgba;
+
+    fn rows_in(
+        m: &Message,
+        width: u16,
+        layout: MessageLayout,
+        view: EmojiView<'_>,
+    ) -> Vec<Line<'static>> {
+        let format = TimeFormat::default();
+        let theme = Theme::default();
+        let ctx = RowCtx {
+            layout,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: view,
+            own_user: Some("me"),
+        };
+        render_rows(m, width, &ctx)
+    }
+
+    fn pixel() -> Rgba {
+        Rgba {
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 255].into(),
+            ..Default::default()
+        }
+    }
+
+    /// The image states an emoji goes through, as `Images` of a session.
+    fn images_in(state: Option<ImageState>) -> Images {
+        let mut images = Images::default();
+        if let Some(state) = state {
+            images.set_state("rtshipit", state);
+        }
+        images
+    }
+
+    fn ready(uploaded: bool) -> ImageState {
+        ImageState::Ready {
+            etag: String::new(),
+            image: pixel(),
+            id: 7,
+            uploaded,
+        }
+    }
+
+    fn failed() -> ImageState {
+        ImageState::Failed {
+            etag: String::new(),
+        }
+    }
+
+    const IMAGE_BODY: &str = "ship it :rtshipit: and then :rtshipit: again, the quick brown fox \
+                              jumps :rtshipit::rtshipit: over the lazy dog :rtshipit: ok";
+
+    #[test]
+    fn rows_do_not_change_when_the_image_arrives() {
+        let list = customs(&[("rtshipit", &[])]);
+        let m = reacted(
+            IMAGE_BODY,
+            vec![reaction("rtshipit", &["a", "b"]), reaction("tada", &["c"])],
+        );
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            for width in 12..=70u16 {
+                let mut shapes = Vec::new();
+                for state in [None, Some(ready(false)), Some(ready(true))] {
+                    let images = images_in(state);
+                    let view = EmojiView {
+                        custom: &list,
+                        images: &images,
+                        graphics: Graphics::Supported,
+                        now_ms: 0,
+                    };
+                    let rows = rows_in(&m, width, layout, view);
+                    let widths: Vec<usize> = rows.iter().map(|r| r.width()).collect();
+                    // Below this the Compact prefix and `MIN_BODY` alone are wider than the pane.
+                    if width >= 30 {
+                        assert!(
+                            widths.iter().all(|w| *w <= usize::from(width)),
+                            "{widths:?}"
+                        );
+                    }
+                    shapes.push(widths);
+                }
+                assert_eq!(
+                    shapes[0], shapes[1],
+                    "{layout:?} at {width}: stand-in vs not uploaded"
+                );
+                assert_eq!(
+                    shapes[0], shapes[2],
+                    "{layout:?} at {width}: stand-in vs image"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ready_image_is_drawn_as_placeholder_cells_with_its_id_as_foreground() {
+        let list = customs(&[("rtshipit", &[])]);
+        let images = images_in(Some(ready(true)));
+        let view = EmojiView {
+            custom: &list,
+            images: &images,
+            graphics: Graphics::Supported,
+            now_ms: 0,
+        };
+        let rows = rows_in(
+            &msg("alice", "go :rtshipit: now"),
+            60,
+            MessageLayout::TwoLine,
+            view,
+        );
+        let row = &rows[1];
+        let run = row
+            .spans
+            .iter()
+            .find(|sp| sp.content.starts_with(crate::kitty::PLACEHOLDER))
+            .expect("a placeholder span");
+        assert_eq!(
+            run.content,
+            format!("{}{}", crate::kitty::cell(0), crate::kitty::cell(1))
+        );
+        assert_eq!(run.style.fg, Some(Color::Rgb(0, 0, 7)));
+        // The words around it are plain body text.
+        let before = row
+            .spans
+            .iter()
+            .find(|sp| sp.content.contains("go "))
+            .unwrap();
+        assert_ne!(before.style.fg, Some(Color::Rgb(0, 0, 7)));
+        assert!(!text(row).contains(":rtshipit:"));
+        // Two columns wide, like the stand-in it replaces.
+        assert_eq!(run.content.width(), 2);
+    }
+
+    #[test]
+    fn the_stand_in_is_two_blank_columns_in_the_custom_style() {
+        let list = customs(&[("rtshipit", &[])]);
+        let images = images_in(None);
+        let view = EmojiView {
+            custom: &list,
+            images: &images,
+            graphics: Graphics::Supported,
+            now_ms: 0,
+        };
+        let rows = rows_in(
+            &msg("alice", "go :rtshipit: now"),
+            60,
+            MessageLayout::TwoLine,
+            view,
+        );
+        let shown = text(&rows[1]);
+        assert!(shown.contains("go \u{a0}\u{a0} now"), "{shown:?}");
+        assert!(!shown.contains(":rtshipit:"));
+        assert!(!shown.chars().any(|c| (c as u32) >= 0x10_8000));
+    }
+
+    #[test]
+    fn a_failed_image_shows_its_name_and_the_message_is_measured_again_once() {
+        let list = customs(&[("rtshipit", &[])]);
+        let m = msg("alice", "aaaa bbbb :rtshipit: cccc dddd eeee ffff");
+        let count = |state: Option<ImageState>| {
+            let images = images_in(state);
+            let view = EmojiView {
+                custom: &list,
+                images: &images,
+                graphics: Graphics::Supported,
+                now_ms: 0,
+            };
+            rows_in(&m, 20, MessageLayout::TwoLine, view)
+        };
+        let waiting = count(None);
+        let ok = count(Some(ready(true)));
+        let bad = count(Some(failed()));
+        assert_eq!(waiting.len(), ok.len());
+        assert!(texts(&bad).join("\n").contains(":rtshipit:"));
+        assert!(
+            bad.len() >= ok.len(),
+            "the full name is wider than two columns"
+        );
+        // And it stays what it was: asking again gives the same rows.
+        assert_eq!(texts(&count(Some(failed()))), texts(&bad));
+    }
+
+    #[test]
+    fn a_terminal_without_images_draws_the_name_whatever_the_images_do() {
+        let list = customs(&[("rtshipit", &[])]);
+        let m = reacted(IMAGE_BODY, vec![reaction("rtshipit", &["a"])]);
+        let mut all = Vec::new();
+        for state in [None, Some(ready(true)), Some(failed())] {
+            let images = images_in(state);
+            let view = EmojiView {
+                custom: &list,
+                images: &images,
+                graphics: Graphics::Unsupported,
+                now_ms: 0,
+            };
+            let rows = rows_in(&m, 40, MessageLayout::TwoLine, view);
+            assert!(texts(&rows).join("\n").contains(":rtshipit:"));
+            assert!(
+                !texts(&rows)
+                    .join("\n")
+                    .chars()
+                    .any(|c| (c as u32) >= 0x10_8000 || c == crate::kitty::PLACEHOLDER)
+            );
+            all.push(texts(&rows));
+        }
+        assert_eq!(all[0], all[1]);
+        assert_eq!(all[0], all[2]);
+    }
+
+    #[test]
+    fn a_reaction_with_an_image_keeps_its_width_and_count() {
+        let list = customs(&[("rtshipit", &[])]);
+        let m = reacted("x", vec![reaction("rtshipit", &["a", "b"])]);
+        let widths = |state: Option<ImageState>| {
+            let images = images_in(state);
+            let view = EmojiView {
+                custom: &list,
+                images: &images,
+                graphics: Graphics::Supported,
+                now_ms: 0,
+            };
+            rows_in(&m, 40, MessageLayout::TwoLine, view)
+        };
+        let waiting = widths(None);
+        let ok = widths(Some(ready(true)));
+        assert_eq!(waiting[2].width(), ok[2].width());
+        assert!(text(&ok[2]).ends_with(" 2"), "{:?}", text(&ok[2]));
+        let run = ok[2]
+            .spans
+            .iter()
+            .find(|sp| sp.content.starts_with(crate::kitty::PLACEHOLDER))
+            .expect("the image");
+        assert_eq!(run.style.fg, Some(Color::Rgb(0, 0, 7)));
+    }
+
+    #[test]
+    fn two_runs_of_the_same_image_side_by_side_are_two_runs() {
+        let list = customs(&[("rtshipit", &[])]);
+        let images = images_in(Some(ready(true)));
+        let view = EmojiView {
+            custom: &list,
+            images: &images,
+            graphics: Graphics::Supported,
+            now_ms: 0,
+        };
+        let rows = rows_in(
+            &msg("alice", ":rtshipit::rtshipit:"),
+            60,
+            MessageLayout::TwoLine,
+            view,
+        );
+        let cells: String = rows[1]
+            .spans
+            .iter()
+            .filter(|sp| sp.content.starts_with(crate::kitty::PLACEHOLDER))
+            .map(|sp| sp.content.to_string())
+            .collect();
+        let one = format!("{}{}", crate::kitty::cell(0), crate::kitty::cell(1));
+        assert_eq!(cells, format!("{one}{one}"), "columns 0,1 then 0,1 again");
+        let _ = (Look::Text, image_cell(1));
+    }
+
     // ---- emoji shortcodes in the body
 
     #[test]
@@ -1561,6 +2059,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         let m = msg("alice", &vec![":tada:"; 40].join(" "));
@@ -1578,6 +2077,23 @@ mod tests {
         let all = texts(&rows).join("\n");
         assert!(all.contains('🎉'));
         assert!(!all.chars().any(|c| c.is_control() && c != '\n'), "{all:?}");
+    }
+
+    #[test]
+    fn placement_characters_in_a_username_or_a_reaction_name_are_removed() {
+        let cell = "\u{10EEEE}\u{305}\u{30d}\u{10FFF0}\u{108000}";
+        let mut m = reacted("x", vec![reaction(&format!("na{cell}me"), &["a"])]);
+        m.author = format!("al{cell}ice");
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_with(&m, 60, layout, &HashMap::new(), None);
+            let all = texts(&rows).join("\n");
+            assert!(
+                !all.chars().any(|c| (c as u32) >= 0x10_8000),
+                "{layout:?}: {all:?}"
+            );
+            assert!(all.contains("alice"), "{layout:?}: {all:?}");
+            assert!(all.contains(":name:"), "{layout:?}: {all:?}");
+        }
     }
 
     #[test]
@@ -1611,6 +2127,7 @@ mod tests {
             theme: &theme,
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
         };
         let plain = msg("alice", "hello");

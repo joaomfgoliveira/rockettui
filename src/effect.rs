@@ -49,6 +49,22 @@ impl std::fmt::Debug for EmojiName {
     }
 }
 
+/// Which custom emoji image to fetch: its name, the `etag` the server lists for it and the file
+/// extension. All three are server text, so like `EmojiName` its `Debug` prints only lengths and
+/// the derived `Debug` of `Effect` and `Action` can never print them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct EmojiRef {
+    pub name: String,
+    pub etag: String,
+    pub ext: String,
+}
+
+impl std::fmt::Debug for EmojiRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EmojiRef(<{}> bytes)", self.name.len())
+    }
+}
+
 /// One IO intent: a fetch, or one send attempt.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -134,6 +150,10 @@ pub enum Effect {
     /// Fetch the server's custom emojis with `GET emoji-custom.list`. Answers
     /// `Action::CustomEmojisLoaded` or `Action::CustomEmojisFailed`.
     LoadCustomEmojis,
+    /// Get the image of one custom emoji: from the disk cache when it holds this `etag`, else with
+    /// `GET <server>/emoji-custom/<name>.<ext>`, then decode it. Answers
+    /// `Action::EmojiImageReady` or `Action::EmojiImageFailed`.
+    FetchEmojiImage(EmojiRef),
 }
 
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
@@ -179,6 +199,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::DeleteMessage { room, id } => Action::DeleteFailed { room, id, error },
                 Effect::React { .. } => Action::ReactFailed { error },
                 Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
+                Effect::FetchEmojiImage(emoji) => Action::EmojiImageFailed(emoji),
             }];
         }
     };
@@ -319,6 +340,53 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             Ok(list) => vec![Action::CustomEmojisLoaded(list)],
             Err(_) => vec![Action::CustomEmojisFailed],
         },
+        Effect::FetchEmojiImage(emoji) => {
+            vec![fetch_emoji_image(&client, cache_dir_from_env().as_deref(), emoji).await]
+        }
+    }
+}
+
+/// The emoji cache directory from the environment, `None` when there is no usable one.
+fn cache_dir_from_env() -> Option<std::path::PathBuf> {
+    crate::emoji_image::cache_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+/// Get and decode the image `emoji` names: from `cache` when it holds this etag, else from the
+/// server (and then into the cache, if it can be written). A failure of any step, including a
+/// cached file that no longer decodes, is `EmojiImageFailed`; the cause is not kept.
+pub async fn fetch_emoji_image(
+    client: &Client,
+    cache: Option<&std::path::Path>,
+    emoji: EmojiRef,
+) -> Action {
+    use crate::api::MAX_EMOJI_BYTES;
+    use crate::emoji_image::{decode, read_cached, write_cached};
+    let cached = cache
+        .and_then(|dir| read_cached(dir, &emoji.name, &emoji.etag, &emoji.ext, MAX_EMOJI_BYTES));
+    let (bytes, from_cache) = match cached {
+        Some(bytes) => (bytes, true),
+        None => match client
+            .emoji_image(&emoji.name, &emoji.ext, &emoji.etag)
+            .await
+        {
+            Ok(bytes) => (bytes, false),
+            Err(_) => return Action::EmojiImageFailed(emoji),
+        },
+    };
+    // Decoding is CPU work on bytes from the server: off the async threads.
+    let decoded = tokio::task::spawn_blocking(move || decode(&bytes).map(|image| (image, bytes)))
+        .await
+        .ok()
+        .and_then(Result::ok);
+    match decoded {
+        Some((image, bytes)) => {
+            if !from_cache && let Some(dir) = cache {
+                // Only bytes that decoded are kept. A cache that cannot be written is not an error.
+                write_cached(dir, &emoji.name, &emoji.etag, &emoji.ext, &bytes);
+            }
+            Action::EmojiImageReady { emoji, image }
+        }
+        None => Action::EmojiImageFailed(emoji),
     }
 }
 
@@ -964,5 +1032,114 @@ mod tests {
         };
         assert!(text.starts_with("message not sent: "), "{text}");
         assert!(!text.contains(SENTINEL), "{text}");
+    }
+
+    // ---- custom emoji images
+
+    fn png_bytes() -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(&[9, 8, 7, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        out
+    }
+
+    fn emoji_ref() -> EmojiRef {
+        EmojiRef {
+            name: "rtshipit".to_string(),
+            etag: "46961c".to_string(),
+            ext: "png".to_string(),
+        }
+    }
+
+    fn cache_tmp(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("rockettui-test-fx-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    async fn serve_image(server: &MockServer, bytes: Vec<u8>) {
+        Mock::given(method("GET"))
+            .and(path("/emoji-custom/rtshipit.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_image_is_fetched_decoded_and_then_cached() {
+        let server = MockServer::start().await;
+        serve_image(&server, png_bytes()).await;
+        let dir = cache_tmp("fetch");
+        let action = fetch_emoji_image(&client_for(&server), Some(&dir), emoji_ref()).await;
+        match action {
+            Action::EmojiImageReady { emoji, image } => {
+                assert_eq!(emoji, emoji_ref());
+                assert_eq!((image.width, image.height), (1, 1));
+                assert_eq!(&image.pixels[..], &[9, 8, 7, 255]);
+            }
+            other => panic!("expected the image, got {other:?}"),
+        }
+        // The next time (a later session) it is read from disk and the server is not asked.
+        let second = MockServer::start().await;
+        let action = fetch_emoji_image(&client_for(&second), Some(&dir), emoji_ref()).await;
+        assert!(
+            matches!(action, Action::EmojiImageReady { .. }),
+            "{action:?}"
+        );
+        assert!(second.received_requests().await.unwrap().is_empty());
+        // A changed etag is not a hit: the server is asked.
+        serve_image(&second, png_bytes()).await;
+        let mut newer = emoji_ref();
+        newer.etag = "other".to_string();
+        let action = fetch_emoji_image(&client_for(&second), Some(&dir), newer).await;
+        assert!(matches!(action, Action::EmojiImageReady { .. }));
+        assert_eq!(second.received_requests().await.unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn without_a_usable_cache_the_image_still_loads() {
+        let server = MockServer::start().await;
+        serve_image(&server, png_bytes()).await;
+        let action = fetch_emoji_image(&client_for(&server), None, emoji_ref()).await;
+        assert!(matches!(action, Action::EmojiImageReady { .. }));
+        // A cache directory that cannot be written.
+        let dir = cache_tmp("blocked");
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("emoji");
+        std::fs::write(&blocker, b"x").unwrap();
+        let action = fetch_emoji_image(&client_for(&server), Some(&blocker), emoji_ref()).await;
+        assert!(matches!(action, Action::EmojiImageReady { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_failing_image_reports_the_failure_and_caches_nothing() {
+        let dir = cache_tmp("fail");
+        // Not an image: nothing is cached.
+        let server = MockServer::start().await;
+        serve_image(&server, b"<html>not an image</html>".to_vec()).await;
+        let action = fetch_emoji_image(&client_for(&server), Some(&dir), emoji_ref()).await;
+        assert_eq!(action, Action::EmojiImageFailed(emoji_ref()));
+        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none());
+        // Not found.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            fetch_emoji_image(&client_for(&server), Some(&dir), emoji_ref()).await,
+            Action::EmojiImageFailed(emoji_ref())
+        );
+        // The effect with no client at all.
+        assert_eq!(
+            run(Err(ApiError::Client), Effect::FetchEmojiImage(emoji_ref())).await,
+            [Action::EmojiImageFailed(emoji_ref())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

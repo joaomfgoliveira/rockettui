@@ -124,6 +124,8 @@ mod tests {
             .update;
         let mut app = App::new(Size::new(80, 24));
         update(&mut app, Action::RoomsLoaded(map::rooms(&subs, &records)));
+        // The custom emoji request that the rooms trigger is not what these tests are about.
+        app.effects.clear();
         app
     }
 

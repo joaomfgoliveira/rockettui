@@ -223,6 +223,16 @@ mod tests {
     }
 
     #[test]
+    fn placement_characters_in_a_room_name_are_removed() {
+        let mut app = app_80x24();
+        app.rooms[0].name = "ro\u{10EEEE}\u{305}\u{30d}\u{10FFF0}om".to_string();
+        let terminal = draw(&app);
+        let text = screen_rows(&terminal).join("\n");
+        assert!(text.contains("room"), "{text}");
+        assert!(!text.chars().any(|c| (c as u32) >= 0x10_8000), "{text:?}");
+    }
+
+    #[test]
     fn hostile_room_name_sanitized() {
         let mut app = app_80x24();
         app.rooms[0].name = "\u{1b}]0;x\u{7}evil\u{202e}name".to_string();

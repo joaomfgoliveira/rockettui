@@ -1,0 +1,16 @@
+# Throwaway spike for the custom-emoji-images change (task group 1). Not part of the crate:
+# the empty [workspace] keeps it out of the root package.
+[package]
+name = "emoji-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+crossterm = "0.29"
+ratatui = "0.30"
+textwrap = "0.16"
+unicode-segmentation = "1"
+unicode-width = "0.2"

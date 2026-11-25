@@ -125,10 +125,14 @@ pub struct Reaction {
 
 /// A custom emoji of the server: its name (no colons) and the other names it answers to. Untrusted
 /// text: sanitize before drawing. Never printed: the `Debug` shows only how many aliases it has.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct CustomEmoji {
     pub name: String,
     pub aliases: Vec<String>,
+    /// The file extension of the image as the server lists it (`png`), empty when it lists none.
+    pub ext: String,
+    /// The server's `etag` of the image, empty when it lists none: a changed image has a new one.
+    pub etag: String,
 }
 
 impl std::fmt::Debug for CustomEmoji {

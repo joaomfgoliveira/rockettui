@@ -6,6 +6,7 @@
 pub mod command;
 pub mod context;
 pub mod edit;
+pub mod emoji;
 pub mod help;
 pub mod history;
 pub mod input_buf;
@@ -154,9 +155,16 @@ pub struct App {
     /// The reactions popup (`app::reactions`), when open: the message it was opened on. Like
     /// `context` it is a state, not a mode; its content is recomputed from the app on every draw.
     pub reactions_popup: Option<reactions::ReactionsPopup>,
-    /// The server's custom emojis for the reaction picker (`app::react`): fetched on the first
-    /// opening and kept for the session.
-    pub custom_emojis: react::CustomEmojis,
+    /// The server's custom emojis (`app::emoji`): requested when the rooms have loaded and kept for
+    /// the session. Read by the reaction picker, message text and the reaction row.
+    pub custom_emojis: emoji::CustomEmojis,
+    /// Whether the terminal can show images (decided once at startup).
+    pub graphics: emoji::Graphics,
+    /// Milliseconds since the program started, set by the run loop before each draw: it picks the
+    /// frame of an animated emoji. Nothing else reads it.
+    pub anim_ms: u64,
+    /// The custom emoji images of the session: fetched, failed and in flight (`app::emoji`).
+    pub images: emoji::Images,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub react_picker: Option<react::ReactPicker>,
     /// The active find in the open room (`app::search`), if any. No `Debug`: it holds the query.
@@ -237,7 +245,10 @@ impl App {
             help: None,
             context: false,
             reactions_popup: None,
-            custom_emojis: react::CustomEmojis::default(),
+            custom_emojis: emoji::CustomEmojis::default(),
+            graphics: emoji::Graphics::default(),
+            images: emoji::Images::default(),
+            anim_ms: 0,
             react_picker: None,
             search: None,
             search_prompt: None,
@@ -263,6 +274,8 @@ impl App {
     /// `App::new` followed by every Action of the fake data source, through the reducer.
     pub fn with_fake_data(size: Size) -> Self {
         let mut app = App::new(size);
+        // The fake source has no server, so no custom emojis to ask for.
+        app.custom_emojis = emoji::CustomEmojis::Loaded(Vec::new());
         for action in crate::data::fake::seed() {
             update::update(&mut app, action);
         }
@@ -274,6 +287,16 @@ impl App {
     pub fn areas(&self) -> crate::ui::layout::Areas {
         let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
         crate::ui::layout::areas(area, self.settings.sidebar_width, self.input_rows())
+    }
+
+    /// What the drawing of custom emojis reads: the list, the images and the terminal's support.
+    pub fn emoji_view(&self) -> emoji::EmojiView<'_> {
+        emoji::EmojiView {
+            custom: &self.custom_emojis,
+            images: &self.images,
+            graphics: self.graphics,
+            now_ms: self.anim_ms,
+        }
     }
 
     /// The row context for `msgs`: layout, author and time columns, time format, zone and theme. It is
@@ -294,6 +317,7 @@ impl App {
             theme: &self.theme,
             search: self.search.as_ref().map(|s| s.query.as_str()),
             aliases: &self.settings.emoji_aliases,
+            emoji: self.emoji_view(),
             own_user: self.own_username.as_deref(),
         }
     }
@@ -370,6 +394,7 @@ impl App {
                 }
             }
             self.current_room = Some(id);
+            emoji::ensure_loaded(self);
             let (width, height) = self.input_viewport();
             self.input.settle(width, height);
         }

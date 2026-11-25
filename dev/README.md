@@ -349,3 +349,15 @@ results):
 - The token travels in clear over plain http, which is only acceptable on loopback.
 - This setup must never be pointed at the company server: the company policy on third-party
   clients and PATs is unconfirmed (CLAUDE.md Policy, Phase 6).
+
+## Custom emoji images (change `custom-emoji-images`)
+
+- `dev/emoji-spike/` is the throwaway spike that checked kitty's Unicode placeholders inside wrapped,
+  scrolling text (`cargo run --manifest-path dev/emoji-spike/Cargo.toml`, or `-- --check` for the
+  width measurements). Its own crate, outside the app's workspace.
+- `python3 -I dev/probe_emoji_image.py` asks the server how it serves an emoji image (path, content
+  type, whether the auth headers matter, what a missing name returns). `RT_PROJECT=rockettui-dev9`
+  for the 9.0.0 stack.
+- `python3 -I dev/demo_emoji.py up` creates two custom emojis (`rtshipit`, `rtplain`) and posts
+  messages in `rt-public` that use them (short, wrapping, adjacent, in code, as reactions), to look at
+  in the app; `down` removes them again.

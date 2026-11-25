@@ -47,6 +47,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.deleted",
     "messages.reactions",
     "messages.reactions_own",
+    "messages.custom_emoji",
     "help.border",
     "help.title",
     "help.heading",
@@ -245,6 +246,10 @@ pub struct Theme {
     pub messages_reactions: Style,
     /// The reactions the user gave, in the reaction row.
     pub messages_reactions_own: Style,
+    /// A custom emoji of the server drawn as text rather than as its image: the `:name:` on a
+    /// terminal that cannot show images or when the image failed, and the blank it takes while the
+    /// image is on its way.
+    pub messages_custom_emoji: Style,
     /// The help overlay: its border, its title, the section headings, the key column and the
     /// description column.
     pub help_border: Style,
@@ -321,6 +326,7 @@ impl Default for Theme {
             messages_deleted: plain.add_modifier(Modifier::DIM),
             messages_reactions: plain.add_modifier(Modifier::DIM),
             messages_reactions_own: plain.add_modifier(Modifier::BOLD),
+            messages_custom_emoji: plain.add_modifier(Modifier::ITALIC),
             help_border: plain,
             help_title: plain.add_modifier(Modifier::BOLD),
             help_heading: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -386,6 +392,7 @@ impl Theme {
             ("messages", "deleted") => Some(&mut self.messages_deleted),
             ("messages", "reactions") => Some(&mut self.messages_reactions),
             ("messages", "reactions_own") => Some(&mut self.messages_reactions_own),
+            ("messages", "custom_emoji") => Some(&mut self.messages_custom_emoji),
             ("help", "border") => Some(&mut self.help_border),
             ("help", "title") => Some(&mut self.help_title),
             ("help", "heading") => Some(&mut self.help_heading),
@@ -942,8 +949,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            53,
-            "16 chrome and border paths, the twelve messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            54,
+            "16 chrome and border paths, the thirteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -992,6 +999,20 @@ mod tests {
         // Untouched elements keep their built-in style.
         assert_eq!(theme.reactions_border, t.reactions_border);
         assert_eq!(theme.messages_reactions_own, t.messages_reactions_own);
+    }
+
+    #[test]
+    fn the_custom_emoji_element_has_a_default_and_is_themeable() {
+        let t = Theme::default();
+        assert_ne!(t.messages_custom_emoji, t.messages_body);
+        // A theme file that never heard of the element still loads, with the default.
+        let (theme, out) = parse_str("[messages.body]\nfg = \"green\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_custom_emoji, t.messages_custom_emoji);
+        let (theme, out) = parse_str("[messages.custom_emoji]\nfg = \"magenta\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_custom_emoji.fg, Some(Color::Magenta));
+        assert_eq!(theme.messages_custom_emoji.add_modifier, Modifier::ITALIC);
     }
 
     #[test]

@@ -28,6 +28,9 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Largest response body accepted.
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Largest custom emoji image accepted. Real ones are a few kilobytes; the server's own limit for
+/// an upload is far above what a message-sized image needs.
+pub const MAX_EMOJI_BYTES: usize = 512 * 1024;
 
 /// Why a request failed. A small `Copy` enum with no payload text, so it can sit in `App` and in
 /// an `Action` and can never carry a token, URL or message body.
@@ -158,6 +161,17 @@ async fn read_json<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     client_error: ApiError,
 ) -> Result<T, ApiError> {
+    let body = read_capped(request, client_error, MAX_BODY_BYTES).await?;
+    serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
+}
+
+/// Send `request`, check the status (a redirect is an error, never followed) and read the body,
+/// refusing one over `limit` bytes both by its announced length and while reading.
+async fn read_capped(
+    request: reqwest::RequestBuilder,
+    client_error: ApiError,
+    limit: usize,
+) -> Result<Vec<u8>, ApiError> {
     let mut response = request.send().await.map_err(|e| send_error(&e))?;
     if let Some(error) = status_error(response.status()) {
         return Err(if error == ApiError::BadResponse {
@@ -166,20 +180,17 @@ async fn read_json<T: DeserializeOwned>(
             error
         });
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_BODY_BYTES as u64)
-    {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(ApiError::TooLarge);
     }
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| send_error(&e))? {
-        if body.len() + chunk.len() > MAX_BODY_BYTES {
+        if body.len() + chunk.len() > limit {
             return Err(ApiError::TooLarge);
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
+    Ok(body)
 }
 
 /// The body of `chat.sendMessage`: exactly the client `_id`, the room id and the text. Built from
@@ -697,6 +708,41 @@ impl Client {
     pub async fn custom_emojis(&self) -> Result<Vec<crate::data::CustomEmoji>, ApiError> {
         let resp: wire::CustomEmojiResp = self.get_json("emoji-custom.list", &[]).await?;
         Ok(map::custom_emojis(resp))
+    }
+
+    /// The image of the custom emoji `name`, with `GET <server>/emoji-custom/<name>.<ext>` and the
+    /// same credentials as every other request (this is the path the web client uses; whether it
+    /// needs them is checked in `design.md`). `ext` must be one of the formats the client decodes
+    /// and `name` must be one path segment, so a hostile list entry cannot steer the request
+    /// elsewhere; either way the answer is `BadResponse` without a request. `etag` is only a cache
+    /// key for the server. A redirect is `Redirected` and never followed. The body is read under
+    /// `MAX_EMOJI_BYTES`. Nothing but the emoji's own name and extension is sent, never message
+    /// text, a room or a user.
+    pub async fn emoji_image(
+        &self,
+        name: &str,
+        ext: &str,
+        etag: &str,
+    ) -> Result<Vec<u8>, ApiError> {
+        let safe_name = !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !name.contains(['/', '\\', '?', '#', '%'])
+            && !name.chars().any(char::is_control);
+        if !safe_name || !matches!(ext, "png" | "gif" | "webp") {
+            return Err(ApiError::BadResponse);
+        }
+        let mut url = self.base.clone();
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments
+                .pop_if_empty()
+                .extend(["emoji-custom", &format!("{name}.{ext}")]);
+        }
+        let mut request = self.http.get(url);
+        if !etag.is_empty() {
+            request = request.query(&[("etag", etag)]);
+        }
+        read_capped(request, ApiError::BadResponse, MAX_EMOJI_BYTES).await
     }
 
     /// Add (`add`) or take back the user's reaction `emoji` to message `id` with `POST chat.react`.
@@ -1302,6 +1348,123 @@ mod tests {
                 .expect_err("refused");
             assert_eq!(error, want, "status {status}");
         }
+    }
+
+    /// PNG magic and padding: the client only reads bytes here, decoding is elsewhere.
+    const FAKE_IMAGE: &[u8] = b"\x89PNG\r\n\x1a\nrest-of-the-image";
+
+    #[tokio::test]
+    async fn emoji_image_is_an_authenticated_get_of_the_emoji_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/emoji-custom/rtshipit.png"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::query_param("etag", "46961c"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let bytes = client_for(&server)
+            .emoji_image("rtshipit", "png", "46961c")
+            .await
+            .expect("the image loads");
+        assert_eq!(bytes, FAKE_IMAGE);
+        // Nothing but the path and the etag: no message text, room or user in the request.
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.query(), Some("etag=46961c"));
+        assert_eq!(requests[0].body.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn emoji_image_over_the_limit_is_refused_while_reading() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/emoji-custom/big.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; MAX_EMOJI_BYTES + 1]))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client_for(&server).emoji_image("big", "png", "").await,
+            Err(ApiError::TooLarge)
+        );
+        // Exactly the limit is fine.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; MAX_EMOJI_BYTES]))
+            .mount(&server)
+            .await;
+        let ok = client_for(&server).emoji_image("big", "png", "").await;
+        assert_eq!(ok.map(|b| b.len()), Ok(MAX_EMOJI_BYTES));
+    }
+
+    #[tokio::test]
+    async fn emoji_image_statuses_keep_their_kinds_and_a_redirect_is_not_followed() {
+        for (status, want) in [
+            (404, ApiError::NotFound),
+            (401, ApiError::Unauthorized),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            assert_eq!(
+                client_for(&server).emoji_image("x", "png", "").await,
+                Err(want),
+                "status {status}"
+            );
+        }
+        let server = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/img.png", elsewhere.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .mount(&elsewhere)
+            .await;
+        assert_eq!(
+            client_for(&server).emoji_image("x", "png", "").await,
+            Err(ApiError::Redirected)
+        );
+        assert!(
+            elsewhere.received_requests().await.unwrap().is_empty(),
+            "the credentials never reach the redirect target"
+        );
+    }
+
+    #[tokio::test]
+    async fn emoji_image_refuses_a_name_or_extension_that_could_steer_the_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        for (name, ext) in [
+            ("../x", "png"),
+            ("..", "png"),
+            ("a/b", "png"),
+            ("a?b", "png"),
+            ("", "png"),
+            ("ok", "svg"),
+            ("ok", "png/../x"),
+            ("ok", ""),
+        ] {
+            assert_eq!(
+                client.emoji_image(name, ext, "").await,
+                Err(ApiError::BadResponse),
+                "{name:?}.{ext:?}"
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

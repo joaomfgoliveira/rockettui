@@ -285,10 +285,43 @@ fn sentinel_sweep() {
     let custom = vec![crate::data::CustomEmoji {
         name: BODY.to_string(),
         aliases: vec![BODY.to_string()],
+        ..Default::default()
     }];
     no_sentinel(
         "Action::CustomEmojisLoaded",
         &format!("{:?}", Action::CustomEmojisLoaded(custom)),
+    );
+    let image = crate::effect::EmojiRef {
+        name: BODY.to_string(),
+        etag: BODY.to_string(),
+        ext: BODY.to_string(),
+    };
+    no_sentinel(
+        "Effect::FetchEmojiImage",
+        &format!(
+            "{:?} {:#?}",
+            Effect::FetchEmojiImage(image.clone()),
+            Effect::FetchEmojiImage(image.clone())
+        ),
+    );
+    no_sentinel(
+        "Action::EmojiImageReady",
+        &format!(
+            "{:?}",
+            Action::EmojiImageReady {
+                emoji: image.clone(),
+                image: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 0].into(),
+                    ..Default::default()
+                },
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::EmojiImageFailed",
+        &format!("{:?}", Action::EmojiImageFailed(image)),
     );
     no_sentinel(
         "Action::CustomEmojisFailed",

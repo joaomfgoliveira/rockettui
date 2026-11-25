@@ -9,18 +9,29 @@
 //!    from the crate's (`flag_af`, measured by `dev/probe_react_names.py`);
 //! 3. the same lookup for the name without a `_tone1`..`_tone5` suffix, with that skin tone
 //!    applied (the plain glyph when the emoji has no skin-tone variants);
-//! 4. the raw `:name:`, which is also how a custom server emoji appears: those are images and a
-//!    terminal cannot draw them.
+//! 4. the server's custom emojis, by name and by alias (`CustomEmojis::find`), which are images:
+//!    a message or a reaction row draws one as its image or as a styled fallback (see below);
+//! 5. the raw `:name:`.
 //!
-//! `lookup` is those steps without the last one, for a caller that must tell a known name from an
-//! unknown one (the text of a message); `resolve` adds the raw fallback (a reaction).
+//! `lookup` is steps 1 to 3, `lookup_found` adds step 4, for a caller that must tell a known name
+//! from an unknown one (the text of a message); `resolve` is steps 1 to 3 plus the raw `:name:`,
+//! which is how the popup and the picker draw a custom emoji.
+//!
+//! A custom emoji in message text is not drawn at once: `draw_shortcodes` writes it as cells that
+//! only the client can produce, and `expand` turns them into styled spans after the text has been
+//! wrapped. The cells are private-use characters (`sanitize::INTERNAL_FIRST..=INTERNAL_LAST`,
+//! which sanitising removes from server text) that measure one column each, like the text they
+//! stand for, so wrapping and the row count do not depend on how the emoji is finally drawn.
 //!
 //! Pure: no IO. The result is always safe to draw, because the raw fallback is sanitized and a
 //! glyph or an alias (validated when the config loads) holds no control characters.
 
+use crate::app::emoji::{CustomEmojis, EmojiView, Look, cell_image, image_cell};
 use crate::ui::emoji_names::crate_name_of;
-use crate::ui::sanitize::sanitize_line;
+use crate::ui::sanitize::{INTERNAL_FIRST, INTERNAL_LAST, sanitize_line};
 use emojis::SkinTone;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -86,10 +97,76 @@ pub fn lookup(name: &str, aliases: &HashMap<String, String>) -> Option<String> {
     None
 }
 
+/// What a name stands for once the server's custom emojis are asked too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// A unicode emoji or an alias: the text to draw.
+    Glyph(String),
+    /// A custom emoji of the server: its own name (not the alias it was written as), sanitized.
+    Custom(String),
+}
+
+/// `lookup`, then the custom emojis by name and alias. Unicode and aliases win over custom.
+pub fn lookup_found(
+    name: &str,
+    aliases: &HashMap<String, String>,
+    custom: &CustomEmojis,
+) -> Option<Found> {
+    if let Some(glyph) = lookup(name, aliases) {
+        return Some(Found::Glyph(glyph));
+    }
+    let emoji = custom.find(name)?;
+    let clean = sanitize_line(&emoji.name);
+    // A name the terminal could not draw safely, or the server could not have meant, is not drawn.
+    (clean == emoji.name.as_str() && !clean.is_empty()).then(|| Found::Custom(clean.into_owned()))
+}
+
 /// The text to draw for the reaction `name` (no colons): what `lookup` finds, else the raw
 /// `:name:`, sanitized.
 pub fn resolve(name: &str, aliases: &HashMap<String, String>) -> String {
     lookup(name, aliases).unwrap_or_else(|| format!(":{}:", sanitize_line(name)))
+}
+
+/// The opening colon of a custom emoji drawn as its name: one column, like the `:` it becomes.
+pub const OPEN: char = '\u{10FFF0}';
+/// The closing colon of a custom emoji drawn as its name.
+pub const CLOSE: char = '\u{10FFF1}';
+
+/// A stand-in cell: one column, drawn as a blank in the custom style.
+pub const STANDIN: char = '\u{10FFF2}';
+/// What a stand-in cell is drawn as. A no-break space, so that it is a blank that never wraps.
+const BLANK: char = '\u{a0}';
+
+/// The text that stands for the custom emoji `name` in a drawn string, by how it is drawn now: its
+/// full name between the two colon cells, two stand-in cells, or two cells of its image. Every
+/// variant is as wide in columns as what it will be drawn as (see the module docs).
+pub fn custom_cells(name: &str, look: Look) -> String {
+    match look {
+        Look::Text => format!("{OPEN}{name}{CLOSE}"),
+        Look::Standin => format!("{STANDIN}{STANDIN}"),
+        Look::Image(id) => {
+            let cell = image_cell(id);
+            format!("{cell}{cell}")
+        }
+    }
+}
+
+/// The two cells that draw the custom emoji `name` (a name or an alias of the server's) as a glyph
+/// in a list that has a column for one: its image or the stand-in while the image is on its way.
+/// `None` when `name` is not a custom emoji, or when it is drawn as its name (a terminal without
+/// images, a failed image), which such a list already shows in its name column.
+pub fn image_glyph(
+    name: &str,
+    aliases: &HashMap<String, String>,
+    view: &EmojiView,
+) -> Option<String> {
+    let Some(Found::Custom(own)) = lookup_found(name, aliases, view.custom) else {
+        return None;
+    };
+    match view.look(&own) {
+        Look::Text => None,
+        look => Some(custom_cells(&own, look)),
+    }
 }
 
 /// Longest name between the colons of a shortcode in message text. Real names are far shorter;
@@ -112,7 +189,11 @@ fn is_name_char(c: char) -> bool {
 ///
 /// Text without a colon is returned as it is, without allocating. Pure: the stored text of the
 /// message is never changed, only what is drawn.
-pub fn draw_shortcodes<'a>(text: &'a str, aliases: &HashMap<String, String>) -> Cow<'a, str> {
+pub fn draw_shortcodes<'a>(
+    text: &'a str,
+    aliases: &HashMap<String, String>,
+    view: &EmojiView,
+) -> Cow<'a, str> {
     if !text.contains(':') {
         return Cow::Borrowed(text);
     }
@@ -135,11 +216,20 @@ pub fn draw_shortcodes<'a>(text: &'a str, aliases: &HashMap<String, String>) -> 
             let free = end + 1 >= chars.len() || !chars[end + 1].is_alphanumeric();
             if closed && free {
                 let name: String = chars[start..end].iter().collect();
-                if let Some(glyph) = lookup(&name, aliases) {
-                    out.push_str(&glyph);
-                    changed = true;
-                    i = end + 1;
-                    continue;
+                match lookup_found(&name, aliases, view.custom) {
+                    Some(Found::Glyph(glyph)) => {
+                        out.push_str(&glyph);
+                        changed = true;
+                        i = end + 1;
+                        continue;
+                    }
+                    Some(Found::Custom(own)) => {
+                        out.push_str(&custom_cells(&own, view.look(&own)));
+                        changed = true;
+                        i = end + 1;
+                        continue;
+                    }
+                    None => {}
                 }
             }
         }
@@ -153,9 +243,111 @@ pub fn draw_shortcodes<'a>(text: &'a str, aliases: &HashMap<String, String>) -> 
     }
 }
 
+/// Turn the client's own cells in the spans of wrapped rows into what is drawn: the colon cells of
+/// a name into colons, a stand-in cell into a blank, and two cells of an image into the protocol's
+/// placeholder cells with the image id as their foreground colour. `inside` says whether a custom
+/// emoji's name was open at the end of the previous row (a name wider than the pane is cut across
+/// rows) and is updated for the next one. Text outside an emoji keeps its style; a name and a
+/// stand-in take `custom_style` on top of it. Rows without any cell come back as they were.
+pub fn expand(
+    spans: Vec<Span<'static>>,
+    custom_style: Style,
+    inside: &mut bool,
+) -> Vec<Span<'static>> {
+    let touched = |c: char| (INTERNAL_FIRST..=INTERNAL_LAST).contains(&(c as u32));
+    if !*inside && !spans.iter().any(|sp| sp.content.chars().any(touched)) {
+        return spans;
+    }
+    let mut out = Vec::with_capacity(spans.len() + 2);
+    for span in spans {
+        let mut buf = String::new();
+        let flush = |buf: &mut String, style: Style, out: &mut Vec<Span<'static>>| {
+            if !buf.is_empty() {
+                out.push(Span::styled(std::mem::take(buf), style));
+            }
+        };
+        let name_style = span.style.patch(custom_style);
+        let plain = |inside: bool| if inside { name_style } else { span.style };
+        // The image cells being collected: the image id and the column the next cell takes. A run
+        // is two cells; a third cell of the same image starts the next run at column 0, and so does
+        // a cell that follows a cut (a run split across two rows), a harmless blemish at widths the
+        // app never wraps to.
+        let mut run: Option<(u32, usize)> = None;
+        let image_style = |id: u32| {
+            // Reversed colours would make the terminal read the id from the wrong colour.
+            span.style
+                .remove_modifier(ratatui::style::Modifier::REVERSED)
+                .fg(Color::Rgb((id >> 16) as u8, (id >> 8) as u8, id as u8))
+        };
+        for c in span.content.chars() {
+            if let Some(id) = cell_image(c) {
+                match run {
+                    None => flush(&mut buf, plain(*inside), &mut out),
+                    Some((same, col)) if same != id || col == crate::kitty::COLS as usize => {
+                        flush(&mut buf, image_style(same), &mut out);
+                        run = None;
+                    }
+                    Some(_) => {}
+                }
+                let (id, col) = run.unwrap_or((id, 0));
+                buf.push_str(&crate::kitty::cell(col));
+                run = Some((id, col + 1));
+                continue;
+            }
+            if let Some((id, _)) = run.take() {
+                flush(&mut buf, image_style(id), &mut out);
+            }
+            match c {
+                OPEN => {
+                    flush(
+                        &mut buf,
+                        if *inside { name_style } else { span.style },
+                        &mut out,
+                    );
+                    *inside = true;
+                    buf.push(':');
+                }
+                CLOSE => {
+                    buf.push(':');
+                    flush(&mut buf, name_style, &mut out);
+                    *inside = false;
+                }
+                STANDIN => {
+                    flush(
+                        &mut buf,
+                        if *inside { name_style } else { span.style },
+                        &mut out,
+                    );
+                    buf.push(BLANK);
+                    flush(&mut buf, name_style, &mut out);
+                }
+                c if touched(c) => {}
+                c => buf.push(c),
+            }
+        }
+        let last = run.map_or(plain(*inside), |(id, _)| image_style(id));
+        flush(&mut buf, last, &mut out);
+    }
+    out
+}
+
+/// Undo reversed colours on the image cells of `area` of `buffer`, after a highlight was painted
+/// over rows that hold images: the id is the cell's foreground colour and must stay in it.
+pub fn keep_image_ids(buffer: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) {
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &mut buffer[(x, y)];
+            if cell.symbol().starts_with(crate::kitty::PLACEHOLDER) {
+                cell.set_style(Style::new().remove_modifier(ratatui::style::Modifier::REVERSED));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::emoji::NO_CUSTOM;
 
     fn none() -> HashMap<String, String> {
         HashMap::new()
@@ -295,7 +487,7 @@ mod tests {
     // ---- shortcodes in message text
 
     fn draw(text: &str) -> String {
-        draw_shortcodes(text, &none()).into_owned()
+        draw_shortcodes(text, &none(), &EmojiView::none()).into_owned()
     }
 
     #[test]
@@ -311,7 +503,10 @@ mod tests {
     #[test]
     fn an_alias_applies_in_message_text() {
         let a = aliases(&[("partyparrot", "🦜")]);
-        assert_eq!(draw_shortcodes("go :partyparrot:", &a), "go 🦜");
+        assert_eq!(
+            draw_shortcodes("go :partyparrot:", &a, &EmojiView::none()),
+            "go 🦜"
+        );
     }
 
     #[test]
@@ -328,19 +523,22 @@ mod tests {
     #[test]
     fn without_a_colon_nothing_is_allocated() {
         assert!(matches!(
-            draw_shortcodes("plain words", &none()),
+            draw_shortcodes("plain words", &none(), &EmojiView::none()),
             Cow::Borrowed(_)
         ));
         // And when a colon changes nothing, the original is returned too.
         assert!(matches!(
-            draw_shortcodes("note: see below", &none()),
+            draw_shortcodes("note: see below", &none(), &EmojiView::none()),
             Cow::Borrowed(_)
         ));
         assert!(matches!(
-            draw_shortcodes(":nothing_here:", &none()),
+            draw_shortcodes(":nothing_here:", &none(), &EmojiView::none()),
             Cow::Borrowed(_)
         ));
-        assert!(matches!(draw_shortcodes(":tada:", &none()), Cow::Owned(_)));
+        assert!(matches!(
+            draw_shortcodes(":tada:", &none(), &EmojiView::none()),
+            Cow::Owned(_)
+        ));
     }
 
     #[test]
@@ -403,5 +601,99 @@ mod tests {
         let drawn = draw("\u{1b}[31m :tada: \u{7}");
         assert!(drawn.contains('🎉'));
         assert!(drawn.contains('\u{1b}') && drawn.contains('\u{7}'));
+    }
+
+    fn custom_list() -> CustomEmojis {
+        CustomEmojis::Loaded(vec![
+            crate::data::CustomEmoji {
+                name: "rtshipit".into(),
+                aliases: vec!["rtship".into()],
+                ..Default::default()
+            },
+            crate::data::CustomEmoji {
+                name: "tada".into(),
+                aliases: vec![],
+                ..Default::default()
+            },
+        ])
+    }
+
+    #[test]
+    fn a_custom_emoji_is_found_by_name_and_by_alias_after_unicode() {
+        let list = custom_list();
+        assert_eq!(
+            lookup_found("rtshipit", &none(), &list),
+            Some(Found::Custom("rtshipit".into()))
+        );
+        assert_eq!(
+            lookup_found("rtship", &none(), &list),
+            Some(Found::Custom("rtshipit".into()))
+        );
+        // Unicode wins over a custom emoji of the same name.
+        assert_eq!(
+            lookup_found("tada", &none(), &list),
+            Some(Found::Glyph("🎉".into()))
+        );
+        // So does the user's own alias.
+        let a = aliases(&[("rtshipit", "🚢")]);
+        assert_eq!(
+            lookup_found("rtshipit", &a, &list),
+            Some(Found::Glyph("🚢".into()))
+        );
+        assert_eq!(lookup_found("nope", &none(), &list), None);
+        assert_eq!(lookup_found("rtshipit", &none(), &NO_CUSTOM), None);
+    }
+
+    #[test]
+    fn a_custom_name_the_terminal_could_not_draw_safely_is_not_drawn() {
+        let list = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "bad\u{1b}name".into(),
+            aliases: vec!["bad".into()],
+            ..Default::default()
+        }]);
+        assert_eq!(lookup_found("bad", &none(), &list), None);
+    }
+
+    #[test]
+    fn draw_shortcodes_writes_a_custom_emoji_as_cells_and_leaves_code_alone() {
+        let list = custom_list();
+        let view = EmojiView {
+            custom: &list,
+            ..EmojiView::none()
+        };
+        let drawn = draw_shortcodes("a :rtship: b `:rtshipit:` :nope:", &none(), &view);
+        assert_eq!(
+            drawn,
+            format!("a {OPEN}rtshipit{CLOSE} b `:rtshipit:` :nope:")
+        );
+        // Each cell is one column, like the colon it replaces.
+        assert_eq!(
+            drawn.chars().count(),
+            "a :rtshipit: b `:rtshipit:` :nope:".chars().count()
+        );
+    }
+
+    #[test]
+    fn expand_styles_the_name_and_carries_an_open_name_to_the_next_row() {
+        let custom = Style::new().add_modifier(ratatui::style::Modifier::ITALIC);
+        let mut inside = false;
+        let row = vec![Span::raw(format!("hi {OPEN}rt_"))];
+        let out = expand(row, custom, &mut inside);
+        assert!(inside);
+        assert_eq!(out[0].content, "hi ");
+        assert_eq!(out[1].content, ":rt_");
+        assert_eq!(out[1].style, custom);
+        let out = expand(
+            vec![Span::raw(format!("name{CLOSE} x"))],
+            custom,
+            &mut inside,
+        );
+        assert!(!inside);
+        assert_eq!(out[0].content, "name:");
+        assert_eq!(out[0].style, custom);
+        assert_eq!(out[1].content, " x");
+        // A row with nothing to do is returned as it was.
+        let plain = vec![Span::raw("plain")];
+        assert_eq!(expand(plain.clone(), custom, &mut inside), plain);
     }
 }

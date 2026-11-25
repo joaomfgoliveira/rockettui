@@ -2,6 +2,7 @@
 //! user passes through here before width math or drawing.
 
 use std::borrow::Cow;
+use unicode_width::UnicodeWidthChar;
 
 /// Width a TAB expands to.
 pub const TAB_WIDTH: usize = 4;
@@ -20,8 +21,15 @@ fn is_spoofing(c: char) -> bool {
         | 0x2066..=0x2069            // isolates
         | 0xfeff                     // BOM / zero-width no-break space
         | 0xe0000..=0xe007f          // Unicode tag block
+        | INTERNAL_FIRST..=INTERNAL_LAST // the client's own emoji cells (see `ui::emoji`)
     )
 }
+
+/// The first and last character of the private-use range the client keeps for its own emoji cells
+/// (the kitty placeholder `U+10EEEE`, the stand-in and the image cells; see `ui::emoji`). Server
+/// text can never hold one, so only the client's own emission can draw an image.
+pub const INTERNAL_FIRST: u32 = 0x10_8000;
+pub const INTERNAL_LAST: u32 = 0x10_fffd;
 
 /// True when `sanitize` would change this character.
 fn needs_change(c: char) -> bool {
@@ -42,7 +50,20 @@ pub fn sanitize(s: &str) -> Cow<'_, str> {
     }
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
+    // True right after one of the client's own emoji cells was dropped: the combining marks that
+    // would have given its row and column are dropped with it, so none is left to attach to the
+    // character before.
+    let mut after_cell = false;
     while let Some(c) = chars.next() {
+        let was_after_cell = std::mem::take(&mut after_cell);
+        if was_after_cell && UnicodeWidthChar::width(c) == Some(0) && !c.is_control() {
+            after_cell = true;
+            continue;
+        }
+        if (INTERNAL_FIRST..=INTERNAL_LAST).contains(&(c as u32)) {
+            after_cell = true;
+            continue;
+        }
         match c {
             '\r' => {
                 if chars.peek() == Some(&'\n') {
@@ -95,6 +116,33 @@ mod tests {
         assert_eq!(sanitize("\u{61c}\u{200e}\u{200f}\u{feff}x"), "x");
         assert_eq!(sanitize("a\u{2060}b"), "ab");
         assert_eq!(sanitize("\u{202a}\u{202b}\u{202c}\u{202d}y"), "y");
+    }
+
+    #[test]
+    fn strips_the_clients_own_emoji_cells() {
+        // The kitty placeholder, the stand-in and the first and last of the reserved range.
+        for c in ['\u{10EEEE}', '\u{108000}', '\u{10FFFD}', '\u{10FFF0}'] {
+            // Its row and column marks go with it, so none is left to attach to the letter before.
+            assert_eq!(sanitize(&format!("a{c}\u{305}\u{30d}b")), "ab");
+            assert_eq!(sanitize(&format!("{c}\u{305}\u{30d}\u{310}")), "");
+            assert_eq!(
+                sanitize("e\u{301}x"),
+                "e\u{301}x",
+                "other combining marks stay"
+            );
+            assert_eq!(sanitize_line(&format!("x{c}y")), "xy");
+        }
+        // Neighbouring private-use characters stay (icon fonts).
+        assert_eq!(
+            sanitize("\u{f0001}\u{e000}\u{107fff}"),
+            "\u{f0001}\u{e000}\u{107fff}"
+        );
+    }
+
+    #[test]
+    fn a_raw_graphics_escape_sequence_is_inert() {
+        let out = sanitize("\u{1b}_Ga=T,f=32,s=1,v=1,i=1,U=1,c=2,r=1;AAAA\u{1b}\\");
+        assert!(!out.contains('\u{1b}'));
     }
 
     #[test]

@@ -244,9 +244,18 @@ pub fn custom_emojis(resp: crate::api::wire::CustomEmojiResp) -> Vec<CustomEmoji
                         .collect()
                 })
                 .unwrap_or_default();
+            let text = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
             Some(CustomEmoji {
                 name: name.to_string(),
                 aliases,
+                ext: text("extension"),
+                etag: text("etag"),
             })
         })
         .collect()
@@ -935,6 +944,7 @@ mod tests {
         let e = CustomEmoji {
             name: "SENTINEL-NAME-1".to_string(),
             aliases: vec!["SENTINEL-ALIAS-2".to_string()],
+            ..Default::default()
         };
         let shown = format!("{e:?} {e:#?}");
         assert!(!shown.contains("SENTINEL"), "{shown}");

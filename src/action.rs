@@ -193,6 +193,13 @@ pub enum Action {
     CustomEmojisLoaded(Vec<crate::data::CustomEmoji>),
     /// The custom emojis could not be fetched; the picker goes on without them.
     CustomEmojisFailed,
+    /// The image of a custom emoji was fetched and decoded (`Effect::FetchEmojiImage`).
+    EmojiImageReady {
+        emoji: crate::effect::EmojiRef,
+        image: crate::emoji_image::Rgba,
+    },
+    /// The image of a custom emoji could not be fetched or decoded. Final for the session.
+    EmojiImageFailed(crate::effect::EmojiRef),
     /// The realtime connection is live (logged in and subscribed). Produced only by the realtime
     /// task. The reducer decides from `App.rt_seen_live` whether it is a reconnect.
     RtConnected,
@@ -371,6 +378,10 @@ impl std::fmt::Debug for Action {
             Action::ReactFailed { error } => write!(f, "ReactFailed({error:?})"),
             Action::CustomEmojisLoaded(list) => write!(f, "CustomEmojisLoaded(<{}>)", list.len()),
             Action::CustomEmojisFailed => write!(f, "CustomEmojisFailed"),
+            Action::EmojiImageReady { emoji, image } => {
+                write!(f, "EmojiImageReady({emoji:?}, {image:?})")
+            }
+            Action::EmojiImageFailed(emoji) => write!(f, "EmojiImageFailed({emoji:?})"),
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),

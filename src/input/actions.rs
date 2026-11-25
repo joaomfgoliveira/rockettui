@@ -184,6 +184,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::ReactFailed { .. }
         | Action::CustomEmojisLoaded(_)
         | Action::CustomEmojisFailed
+        | Action::EmojiImageReady { .. }
+        | Action::EmojiImageFailed(_)
         | Action::RtConnected
         | Action::RtDisconnected
         | Action::RtRejected
@@ -246,6 +248,11 @@ mod tests {
             },
             Action::CustomEmojisLoaded(Vec::new()),
             Action::CustomEmojisFailed,
+            Action::EmojiImageFailed(crate::effect::EmojiRef {
+                name: "n".to_string(),
+                etag: "e".to_string(),
+                ext: "png".to_string(),
+            }),
             Action::RtConnected,
             Action::RtDisconnected,
             Action::RtRejected,

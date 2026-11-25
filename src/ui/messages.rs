@@ -103,6 +103,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .buffer_mut()
             .set_style(Rect::new(inner.x, y, inner.width, 1), highlight);
     }
+    // An emoji image keeps its id in the cell's foreground colour: the cursor row must not reverse it.
+    for row in first..end {
+        let y = inner.y + u16::try_from(row - v.top_row).unwrap_or(u16::MAX);
+        crate::ui::emoji::keep_image_ids(frame.buffer_mut(), Rect::new(inner.x, y, inner.width, 1));
+    }
     // A match keeps its own style on the cursor row: no reversing, its colors as themed.
     let match_style = app.theme.search_match.remove_modifier(Modifier::REVERSED);
     for (row, x, width) in match_cells {
@@ -469,6 +474,52 @@ mod tests {
         for x in [2u16, 20, 40] {
             assert_eq!(buffer[(x, 2)].bg, Color::Indexed(2), "unfocused x {x}");
         }
+    }
+
+    #[test]
+    fn an_emoji_image_on_the_cursor_row_is_not_reversed() {
+        use crate::app::emoji::{CustomEmojis, Graphics, ImageState};
+        let mut app = app_80x24();
+        app.open_room(general());
+        app.graphics = Graphics::Supported;
+        app.custom_emojis = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "rtshipit".to_string(),
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        app.images.set_state(
+            "rtshipit",
+            ImageState::Ready {
+                etag: String::new(),
+                image: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 255].into(),
+                    ..Default::default()
+                },
+                id: 9,
+                uploaded: true,
+            },
+        );
+        let room = general();
+        app.messages.get_mut(&room).expect("messages")[0].body = "ship :rtshipit: it".to_string();
+        press(&mut app, "gg");
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let mut found = 0;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().starts_with(crate::kitty::PLACEHOLDER) {
+                    found += 1;
+                    assert!(!cell.modifier.contains(Modifier::REVERSED), "x {x} y {y}");
+                    assert_eq!(cell.fg, Color::Rgb(0, 0, 9), "the id stays the foreground");
+                }
+            }
+        }
+        assert_eq!(found, 2, "the two cells of the emoji");
+        // The rest of the cursor row is still highlighted.
+        assert!(buffer[(2, 2)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

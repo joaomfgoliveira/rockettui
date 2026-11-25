@@ -172,8 +172,13 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     } else {
         // A reaction that resolved to nothing is drawn raw: its `:name:` already is the glyph, so
         // the glyph cell stays empty and the glyph column is sized from real glyphs only.
+        let emoji = app.emoji_view();
         let glyph_of = |c: &Candidate| -> String {
-            if c.glyph == c.shown_name() {
+            if let Some(cells) =
+                crate::ui::emoji::image_glyph(&c.name, &app.settings.emoji_aliases, &emoji)
+            {
+                cells
+            } else if c.glyph == c.shown_name() {
                 String::new()
             } else {
                 c.glyph.clone()
@@ -225,9 +230,11 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
                 text = fit_author(&text, width).into_owned();
             }
             let pad = " ".repeat(width.saturating_sub(text.width()));
-            lines.push(Line::from(Span::styled(
-                format!("{text}{pad}"),
-                style(base),
+            // The glyph of a custom emoji is the client's own cells until here.
+            lines.push(Line::from(crate::ui::emoji::expand(
+                vec![Span::styled(format!("{text}{pad}"), style(base))],
+                theme.messages_custom_emoji,
+                &mut false,
             )));
         }
     }
@@ -240,7 +247,7 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Focus, react::CustomEmojis};
+    use crate::app::{Focus, emoji::CustomEmojis};
     use crate::data::{CustomEmoji, Message, Reaction, RoomId, SendState};
     use crate::test_util::{
         app_80x24, app_with_config, config_from_theme, press, render_buffer, render_to_string,
@@ -317,6 +324,92 @@ mod tests {
         assert!(app.react_picker.is_some(), "the picker opened");
     }
 
+    /// Custom emoji `rtshipit` loaded, the terminal able to show images and its image on screen.
+    fn with_ready_image(app: &mut crate::app::App) {
+        use crate::app::emoji::{CustomEmojis, Graphics, ImageState};
+        app.graphics = Graphics::Supported;
+        app.custom_emojis = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "rtshipit".to_string(),
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        app.images.set_state(
+            "rtshipit",
+            ImageState::Ready {
+                etag: String::new(),
+                image: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 255].into(),
+                    ..Default::default()
+                },
+                id: 9,
+                uploaded: true,
+            },
+        );
+    }
+
+    /// The placeholder cells of the buffer, as (x, y, foreground, reversed).
+    fn image_cells(
+        buffer: &ratatui::buffer::Buffer,
+    ) -> Vec<(u16, u16, ratatui::style::Color, bool)> {
+        let mut cells = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().starts_with(crate::kitty::PLACEHOLDER) {
+                    cells.push((
+                        x,
+                        y,
+                        cell.fg,
+                        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+                    ));
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn a_custom_emoji_shows_its_image_in_the_picker_rows() {
+        let mut app = on_reactions(app_80x24(), vec![reaction("rtshipit", &["me"])]);
+        with_ready_image(&mut app);
+        open_picker(&mut app);
+        let buffer = render_buffer(&app, 80, 24);
+        // The message behind the panel shows the emoji in its reaction row too (top rows).
+        let cells: Vec<_> = image_cells(&buffer)
+            .into_iter()
+            .filter(|c| c.1 > 5)
+            .collect();
+        assert_eq!(cells.len(), 2, "one emoji, two cells: {cells:?}");
+        for (_, _, fg, reversed) in &cells {
+            assert_eq!(*fg, Color::Rgb(0, 0, 9));
+            assert!(!reversed, "the selected row must not reverse the id");
+        }
+        let out = render_to_string(&app, 80, 24);
+        assert!(
+            out.contains(":rtshipit:"),
+            "the name stays in its column: {out}"
+        );
+    }
+
+    #[test]
+    fn the_picker_asks_for_the_images_of_the_custom_emojis_it_lists() {
+        let mut app = on_reactions(app_80x24(), vec![reaction("rtshipit", &["me"])]);
+        with_ready_image(&mut app);
+        app.images = crate::app::emoji::Images::default();
+        app.effects.clear();
+        open_picker(&mut app);
+        press(&mut app, "<Esc>");
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, crate::effect::Effect::FetchEmojiImage(_))),
+            "{:?}",
+            app.effects
+        );
+    }
+
     #[test]
     fn picker_browsing_80x24() {
         let mut app = on_reactions(app_80x24(), typical());
@@ -342,10 +435,12 @@ mod tests {
             CustomEmoji {
                 name: "ship_it".to_string(),
                 aliases: vec!["rt_ship".to_string()],
+                ..Default::default()
             },
             CustomEmoji {
                 name: "shipping_cart".to_string(),
                 aliases: Vec::new(),
+                ..Default::default()
             },
         ]);
         app.settings
