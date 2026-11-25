@@ -1,0 +1,264 @@
+[
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "73tfGKovSPK542pi7",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture plain",
+        "ts": {
+          "$date": 1795630635072
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630635085
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": []
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "ct8Ppen9ggfTSCX3A",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture parent",
+        "ts": {
+          "$date": 1795630635420
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630635431
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": []
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "ct8Ppen9ggfTSCX3A",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture parent",
+        "ts": {
+          "$date": 1795630635420
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630636787
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": [],
+        "replies": [
+          "pgpQdxMiDbS5HZJBu",
+          "iSMfZiJ2QeRhgoCgM"
+        ],
+        "tcount": 1,
+        "tlm": {
+          "$date": 1795630636765
+        }
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "ErDvzgxsfixcBRanw",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture reply one",
+        "tmid": "ct8Ppen9ggfTSCX3A",
+        "ts": {
+          "$date": 1795630636765
+        },
+        "u": {
+          "_id": "iSMfZiJ2QeRhgoCgM",
+          "username": "alice",
+          "name": "Alice"
+        },
+        "_updatedAt": {
+          "$date": 1795630636774
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": []
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "ct8Ppen9ggfTSCX3A",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture parent",
+        "ts": {
+          "$date": 1795630635420
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630637737
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": [],
+        "replies": [
+          "pgpQdxMiDbS5HZJBu",
+          "iSMfZiJ2QeRhgoCgM",
+          "9NCnvkooKeBwgLbcq"
+        ],
+        "tcount": 2,
+        "tlm": {
+          "$date": 1795630637708
+        }
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "8cNE5M6SWRsLPYogG",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture reply two",
+        "tmid": "ct8Ppen9ggfTSCX3A",
+        "ts": {
+          "$date": 1795630637708
+        },
+        "u": {
+          "_id": "9NCnvkooKeBwgLbcq",
+          "username": "bob",
+          "name": "Bob"
+        },
+        "_updatedAt": {
+          "$date": 1795630637719
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": []
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "ct8Ppen9ggfTSCX3A",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture parent",
+        "ts": {
+          "$date": 1795630635420
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630638688
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": [],
+        "replies": [
+          "pgpQdxMiDbS5HZJBu",
+          "iSMfZiJ2QeRhgoCgM",
+          "9NCnvkooKeBwgLbcq"
+        ],
+        "tcount": 3,
+        "tlm": {
+          "$date": 1795630638662
+        }
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  },
+  {
+    "eventName": "__my_messages__",
+    "args": [
+      {
+        "_id": "iYpbd95mJ688h33Ah",
+        "rid": "6b07261fd7e9f5a602bb4170",
+        "msg": "thread capture reply three also in channel",
+        "tmid": "ct8Ppen9ggfTSCX3A",
+        "tshow": true,
+        "ts": {
+          "$date": 1795630638662
+        },
+        "u": {
+          "_id": "pgpQdxMiDbS5HZJBu",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "_updatedAt": {
+          "$date": 1795630638672
+        },
+        "mentions": [],
+        "channels": [],
+        "urls": []
+      },
+      {
+        "roomParticipant": true,
+        "roomType": "c",
+        "roomName": "rt-public"
+      }
+    ]
+  }
+]

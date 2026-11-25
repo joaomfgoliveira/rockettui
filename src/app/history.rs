@@ -225,6 +225,9 @@ pub fn on_loaded(
     oldest_ts: Option<String>,
     older: bool,
 ) {
+    // A thread reply that is not also shown in the channel is not part of the main flow. The
+    // server already leaves it out of history; this keeps one that slips through out of the room.
+    let page: Vec<Message> = page.into_iter().filter(Message::in_main_flow).collect();
     if older {
         on_older_page(app, room, page, oldest_ts);
         return;
@@ -722,6 +725,10 @@ mod tests {
             .map(|i| Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: format!("{prefix}{i:03}"),
                 room_id: rid("r-general"),
@@ -955,6 +962,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid("r-general"),

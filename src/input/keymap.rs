@@ -108,6 +108,10 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // `gr` (`show_reactions`) opens the popup of who reacted to the message under the cursor.
         // `g` is already the prefix of `gg`, so this adds a second continuation, not a new prefix.
         (Mode::Normal, "gr", Action::ShowReactions),
+        // `gt` (`open_thread`) opens the thread of the message under the cursor in the thread pane.
+        // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
+        // closes the pane while it is focused.
+        (Mode::Normal, "gt", Action::OpenThread),
         // `+` (`react_message`) opens the reaction picker for the message under the cursor.
         (Mode::Normal, "+", Action::ReactMessage),
         // `<C-k>` (`switch_room`) opens the room switcher from any pane.

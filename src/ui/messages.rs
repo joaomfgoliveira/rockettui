@@ -608,6 +608,10 @@ mod tests {
             .push(Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
@@ -642,6 +646,10 @@ mod tests {
         msgs.push(Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: "hostile".to_string(),
             room_id: general(),
@@ -682,6 +690,10 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str, kind: MessageKind| Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -801,6 +813,10 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str, send: SendState| Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -930,6 +946,10 @@ mod tests {
             send: SendState::Sent,
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
         }
     }
@@ -1101,6 +1121,10 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str, reactions: Vec<Reaction>| Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions,
             id: id.to_string(),
             room_id: room.clone(),
@@ -1195,6 +1219,128 @@ mod tests {
         assert!(!reversed(body + 2), "the next message is not highlighted");
     }
 
+    /// A 52x20 pane in `layout` with a room of four messages: a parent with 3 replies, a parent
+    /// with 1 reply, a reply also shown in the channel and a plain message. The time of the last
+    /// reply is 00:11 UTC on 1970-01-01.
+    fn app_with_threads(layout: wrap::MessageLayout) -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        app.message_layout = layout;
+        let room = RoomId("quiet".to_string());
+        let msg = |id: &str, ts: i64, body: &str| Message {
+            edited: false,
+            plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
+            reactions: Vec::new(),
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: "alice".to_string(),
+            ts,
+            body: body.to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                Message {
+                    tcount: 3,
+                    tlm: Some(660),
+                    ..msg("1", 60, "deploy plan")
+                },
+                Message {
+                    tcount: 1,
+                    tlm: Some(700),
+                    ..msg("2", 120, "who owns the rollback")
+                },
+                Message {
+                    tmid: Some("1".to_string()),
+                    tshow: true,
+                    ..msg("3", 660, "done, also here")
+                },
+                msg("4", 720, "plain message"),
+            ],
+        );
+        app.open_room(room);
+        app
+    }
+
+    #[test]
+    fn thread_marker_compact_52x20() {
+        let app = app_with_threads(wrap::MessageLayout::Compact);
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("-> 3 replies, last 00:11"), "{text}");
+        assert!(text.contains("-> 1 reply, last 00:11"), "{text}");
+        assert!(text.contains("[thread] done, also here"), "{text}");
+        assert_eq!(
+            text.matches("[thread]").count(),
+            1,
+            "only the channel-visible reply is tagged"
+        );
+        assert_eq!(
+            text.matches("-> ").count(),
+            2,
+            "only the parents have a marker"
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn thread_marker_two_line_52x20() {
+        let app = app_with_threads(wrap::MessageLayout::TwoLine);
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("-> 3 replies, last 00:11"), "{text}");
+        assert!(text.contains("[thread] done, also here"), "{text}");
+        assert_eq!(
+            text.matches("[thread]").count(),
+            1,
+            "only the channel-visible reply is tagged"
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_thread_marker_wraps_in_a_narrow_pane() {
+        let mut app = app_with_threads(wrap::MessageLayout::TwoLine);
+        app.settings.sidebar_width = 56;
+        let pane = pane_rect(&app);
+        assert!(pane.width < 32, "narrow pane: {}", pane.width);
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("-> 3 replies,"), "{text}");
+        assert!(
+            !text.contains("-> 3 replies, last 00:11"),
+            "wrapped onto two rows: {text}"
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_cursor_highlight_covers_the_marker_row() {
+        let mut app = app_with_threads(wrap::MessageLayout::TwoLine);
+        press(&mut app, "gg");
+        let room = RoomId("quiet".to_string());
+        let v = view(&app, &room);
+        assert_eq!(v.cursor, 0);
+        let starts = row_starts(&app, &room);
+        // The first message: the day divider, header, body and the marker row.
+        assert_eq!(starts[1] - starts[0], 4);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width;
+        let reversed =
+            |y: u16| (1..width - 1).all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED));
+        let body = 2 + (starts[0] - v.top_row) as u16;
+        assert!(!reversed(body - 1), "the divider row");
+        assert!(reversed(body), "header row");
+        assert!(reversed(body + 2), "marker row of the cursor message");
+        assert!(!reversed(body + 3), "the next message is not highlighted");
+    }
+
     /// The 52x20 fake-data app with `general` open in `layout`, last seen just before its fifth
     /// newest message, so the `unread` divider is above that message and four follow it.
     fn app_with_unread_divider(layout: wrap::MessageLayout) -> App {
@@ -1284,6 +1430,10 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str| Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),

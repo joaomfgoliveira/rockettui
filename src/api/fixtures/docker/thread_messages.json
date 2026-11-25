@@ -1,0 +1,57 @@
+{
+  "messages": [
+    {
+      "_id": "hJpR8aJYGCTzP55ZM",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply one",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "ts": "2026-11-25T18:12:15.342Z",
+      "u": {
+        "_id": "CRrQp2dFtHHufdb8F",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T18:12:15.349Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "7rw4wgPbjYqLFRaMX",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply two",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "ts": "2026-11-25T18:12:16.295Z",
+      "u": {
+        "_id": "bc5XePpJFuuJMQW2o",
+        "username": "bob",
+        "name": "Bob"
+      },
+      "_updatedAt": "2026-11-25T18:12:16.305Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "qibd44HoJuQ2oPdgb",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply three also in channel",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "tshow": true,
+      "ts": "2026-11-25T18:12:17.249Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:12:17.262Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    }
+  ],
+  "count": 3,
+  "offset": 0,
+  "total": 3,
+  "success": true
+}

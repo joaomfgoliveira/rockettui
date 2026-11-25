@@ -9,7 +9,7 @@
 //!   marked stale (`App.stale`), refetched when it is next opened (`history::on_open`).
 
 use crate::app::history::{self, HistoryState};
-use crate::app::{App, RtState, messages, read, sidebar};
+use crate::app::{App, RtState, messages, read, sidebar, thread};
 use crate::data::{Message, RoomId, UnreadUpdate};
 
 /// A new message arrived live. It joins the room only when the room's history is Loaded, through
@@ -19,6 +19,20 @@ use crate::data::{Message, RoomId, UnreadUpdate};
 pub fn on_message(app: &mut App, message: Message) {
     let room = message.room_id.clone();
     if !matches!(app.history.get(&room), Some(HistoryState::Loaded { .. })) {
+        return;
+    }
+    // The open thread takes what is its own: a new reply, or an update of a message it holds.
+    thread::on_live_message(app, &message);
+    // A thread reply that is not also shown in the channel never joins the main flow: it moves no
+    // cursor, no divider and no follow rule. A parent's reply count is not bumped here: the server
+    // sends the parent's own update just before the reply (measured on 8.9.1 and 9.0.0) and that
+    // value is the one to show; adding one here would count the reply twice.
+    if !message.in_main_flow() {
+        return;
+    }
+    // An update of a thread parent the room does not hold (an old thread got a reply) is not a new
+    // message: it must not be appended at the bottom of the room.
+    if message.tcount > 0 && !messages::holds(app, &room, &message.id) {
         return;
     }
     // A held server message whose text, edited state or reactions changed is an update (an edit or
@@ -45,6 +59,7 @@ pub fn on_message(app: &mut App, message: Message) {
 /// A message of `room` was deleted: a held server message becomes a tombstone. A room that is not
 /// loaded, an unknown id and a pending local row are ignored.
 pub fn on_deleted(app: &mut App, room: &RoomId, id: &str) {
+    thread::on_deleted(app, room, id);
     messages::tombstone(app, room, id);
 }
 
@@ -142,6 +157,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid(room),
@@ -191,6 +210,70 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, Effect::LoadHistory { .. }))
             .collect()
+    }
+
+    // ---- thread replies stay out of the main flow
+    fn reply(id: &str, ts: i64, tshow: bool) -> Message {
+        Message {
+            tmid: Some("m0".to_string()),
+            tshow,
+            ..msg("r-general", id, ts)
+        }
+    }
+
+    #[test]
+    fn a_hidden_reply_moves_nothing_in_the_main_flow() {
+        let mut app = open_general_seen(5, Some(115));
+        press(&mut app, "k");
+        let view = app.msg_views.get(&rid("r-general")).copied();
+        let divider_before = divider(&app).map(str::to_string);
+        let held = ids(&app, "r-general");
+        let effects = app.effects.len();
+
+        update(&mut app, Action::RtMessage(reply("r1", 900, false)));
+
+        assert_eq!(ids(&app, "r-general"), held, "not stored in the room");
+        assert_eq!(
+            app.msg_views.get(&rid("r-general")).copied(),
+            view,
+            "cursor and scroll"
+        );
+        assert_eq!(divider(&app).map(str::to_string), divider_before, "divider");
+        assert_eq!(app.effects.len(), effects, "no mark-read timer restart");
+        assert!(!render_to_string(&app, 80, 24).contains("body of r1"));
+    }
+
+    #[test]
+    fn a_hidden_reply_does_not_stop_the_follow_of_the_next_message() {
+        let mut app = open_general(3);
+        update(&mut app, Action::RtMessage(reply("r1", 200, false)));
+        update(&mut app, Action::RtMessage(msg("r-general", "live-1", 210)));
+        assert_eq!(ids(&app, "r-general"), ["m0", "m1", "m2", "live-1"]);
+        let screen = render_to_string(&app, 80, 24);
+        assert!(screen.contains("body of live-1"), "{screen}");
+    }
+
+    #[test]
+    fn a_reply_also_sent_to_the_channel_joins_the_main_flow() {
+        let mut app = open_general(3);
+        update(&mut app, Action::RtMessage(reply("r1", 200, true)));
+        assert_eq!(ids(&app, "r-general"), ["m0", "m1", "m2", "r1"]);
+    }
+
+    #[test]
+    fn a_hidden_reply_in_a_history_page_is_not_held() {
+        let mut app = fixture_app();
+        press(&mut app, "<CR>");
+        load(
+            &mut app,
+            "r-general",
+            vec![
+                msg("r-general", "m0", 100),
+                reply("r1", 110, false),
+                reply("r2", 120, true),
+            ],
+        );
+        assert_eq!(ids(&app, "r-general"), ["m0", "r2"]);
     }
 
     // ---- live messages (2.1, 2.3)
@@ -314,6 +397,10 @@ mod tests {
             body: body.to_string(),
             edited: true,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             ..msg(room, id, ts)
         }

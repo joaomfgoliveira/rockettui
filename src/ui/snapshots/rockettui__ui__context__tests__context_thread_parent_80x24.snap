@@ -1,0 +1,27 @@
+---
+source: src/ui/context.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃? alice  sample                                   ┃
+│> * #general              │┃         -> 3 replies                             ┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┃                                                  ┃
+│  ▾ People (1)            │┃                                                  ┃
+│  Recent                  │┃                                                  ┃
+│    #random               │┌ ? ───────────────────────────────────────────────┐
+│    &secrets [e2e]        ││Message                                           │
+│    #quiet                ││gt  open the thread                               │
+│                          ││+   add or remove your reaction                   │
+│                          ││gg  jump to the oldest message                    │
+│                          ││G   jump to the newest message                    │
+│                          ││/   find text in the room                         │
+│                          ││n   next match, older                             │
+│                          ││N   previous match, newer                         │
+│                          ││?   all keys (full help)                          │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  general

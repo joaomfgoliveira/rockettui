@@ -1,0 +1,27 @@
+---
+source: src/ui/help.rs
+expression: out
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q to close) ───────────────────────────────┐
+┃  Unread                  ┃│gt                 open the thread of the message │
+┃> * #general              ┃│N                  previous match, toward newer me│
+┃  * &dev-team             ┃│r                  retry a failed message         │
+┃  * @alice                ┃│?                  show what the selected object c│
+┃  Folders                 ┃│gr                 show who reacted to the message│
+┃  ▾ Work (1)              ┃│:                  start a : command              │
+┃      ~design-review      ┃│<C-k>              switch to another room by name │
+┃      +platform           ┃│a                  type a message (Insert mode)   │
+┃  ▾ People (1)            ┃│i                  type a message (Insert mode)   │
+┃  Recent                  ┃│o                  type a message (Insert mode)   │
+┃    #random               ┃│                                                  │
+┃    &secrets [e2e]        ┃│Insert mode                                       │
+┃    #quiet                ┃│<C-c>              cancel, or leave the mode      │
+┃                          ┃│<Esc>              cancel, or leave the mode      │
+┃                          ┃│<Down>             cursor down                    │
+┃                          ┃│<Left>             cursor left                    │
+┃                          ┃│<Right>            cursor right                   │
+┃                          ┃└──────────────────────────────────────────────────┘
+┃                          ┃┌ Input ───────────────────────────────────────────┐
+┃                          ┃│press i to write                                  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────────────────┘
+ NORMAL  -

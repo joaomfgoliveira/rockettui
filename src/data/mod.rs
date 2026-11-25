@@ -180,6 +180,22 @@ pub struct Message {
     pub plain_text: bool,
     /// The reactions in the order the server lists them; empty when there are none.
     pub reactions: Vec<Reaction>,
+    /// The id of the thread parent when this message is a reply (`tmid`); `None` for any other.
+    pub tmid: Option<String>,
+    /// True for a reply that was also sent to the channel (`tshow`): it shows in the main flow.
+    pub tshow: bool,
+    /// On a thread parent, how many replies it has (`tcount`); 0 for any other message.
+    pub tcount: u32,
+    /// On a thread parent, unix seconds of the last reply (`tlm`).
+    pub tlm: Option<i64>,
+}
+
+impl Message {
+    /// True when the main message flow draws and counts this message: everything but a thread
+    /// reply that was not also sent to the channel.
+    pub fn in_main_flow(&self) -> bool {
+        self.tmid.is_none() || self.tshow
+    }
 }
 
 /// One reaction of a message: the shortcode and who gave it.
@@ -258,6 +274,10 @@ mod tests {
         let message = Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: vec![Reaction {
                 name: "SENTINEL-REACTION-5c1e".to_string(),
                 users: vec!["SENTINEL-USER-9a4d".to_string(), "other".to_string()],
@@ -284,6 +304,10 @@ mod tests {
         let message = Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),

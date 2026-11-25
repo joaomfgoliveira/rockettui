@@ -259,6 +259,10 @@ mod tests {
             .map(|i| Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: format!("s{i}"),
                 room_id: room.clone(),

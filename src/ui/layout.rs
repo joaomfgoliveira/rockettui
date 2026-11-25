@@ -7,7 +7,15 @@ use ratatui::layout::{Constraint, Layout, Rect};
 /// `sidebar_width` overrides it.
 pub const SIDEBAR_WIDTH: u16 = 28;
 
-/// The five regions of the screen.
+/// Narrowest terminal (in columns) that shows the sidebar, the message pane and the thread pane
+/// side by side. Below it an open thread takes the place of the message pane.
+pub const THREAD_SPLIT_MIN_WIDTH: u16 = 100;
+
+/// Share of the area right of the sidebar given to the message pane when a thread is shown beside
+/// it; the thread pane gets the rest.
+const MESSAGES_PERCENT: u16 = 60;
+
+/// The regions of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Areas {
     pub sidebar: Rect,
@@ -15,12 +23,30 @@ pub struct Areas {
     pub input: Rect,
     pub status: Rect,
     pub cmdline: Rect,
+    /// Where the thread pane is drawn, `None` while no thread is open. Beside the message pane
+    /// and the input bar (the full height of the body) on a wide terminal; on a narrow one it is
+    /// the rect of `messages`, which then is not drawn but keeps its size, so closing the thread
+    /// brings it back unchanged.
+    pub thread: Option<Rect>,
+}
+
+impl Areas {
+    /// True when the thread pane replaces the message pane instead of sitting beside it.
+    pub fn thread_takes_over(&self) -> bool {
+        self.thread == Some(self.messages)
+    }
 }
 
 /// Split `area` into the five regions. `sidebar_width` is the sidebar column width in cells; it is
 /// not clamped, so a width beyond the terminal leaves the main column narrow or empty. `input_rows`
 /// is the number of content rows of the input bar; the bar itself is two rows taller (borders).
 pub fn areas(area: Rect, sidebar_width: u16, input_rows: u16) -> Areas {
+    areas_with_thread(area, sidebar_width, input_rows, false)
+}
+
+/// Like `areas`, with room for the thread pane when `thread` is true: beside the messages when the
+/// terminal is at least `THREAD_SPLIT_MIN_WIDTH` columns wide, over them otherwise.
+pub fn areas_with_thread(area: Rect, sidebar_width: u16, input_rows: u16, thread: bool) -> Areas {
     let [body, status, cmdline] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(1),
@@ -29,17 +55,27 @@ pub fn areas(area: Rect, sidebar_width: u16, input_rows: u16) -> Areas {
     .areas(area);
     let [sidebar, main] =
         Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(0)]).areas(body);
+    let split = thread && area.width >= THREAD_SPLIT_MIN_WIDTH;
+    let (left, beside) = if split {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(MESSAGES_PERCENT), Constraint::Min(0)])
+                .areas(main);
+        (left, Some(right))
+    } else {
+        (main, None)
+    };
     let [messages, input] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_rows.saturating_add(2)),
     ])
-    .areas(main);
+    .areas(left);
     Areas {
         sidebar,
         messages,
         input,
         status,
         cmdline,
+        thread: beside.or(thread.then_some(messages)),
     }
 }
 
@@ -87,6 +123,65 @@ mod tests {
             assert!(r.x >= outer.x && r.y >= outer.y);
             assert!(r.right() <= outer.right());
             assert!(r.bottom() <= outer.bottom());
+        }
+    }
+
+    #[test]
+    fn a_wide_terminal_puts_the_thread_beside_the_messages() {
+        let a = areas_with_thread(Rect::new(0, 0, 160, 40), SIDEBAR_WIDTH, 1, true);
+        let thread = a.thread.expect("open");
+        assert!(!a.thread_takes_over());
+        assert_eq!(a.messages.right(), thread.x, "side by side");
+        assert_eq!(thread.right(), 160);
+        assert_eq!(
+            thread.height, a.sidebar.height,
+            "the full height of the body"
+        );
+        assert_eq!(
+            a.input.right(),
+            thread.x,
+            "the input stays under the messages"
+        );
+        assert!(a.messages.width > thread.width, "about 60/40");
+    }
+
+    #[test]
+    fn a_narrow_terminal_gives_the_message_pane_to_the_thread() {
+        let open = areas_with_thread(Rect::new(0, 0, 99, 30), SIDEBAR_WIDTH, 1, true);
+        let closed = areas(Rect::new(0, 0, 99, 30), SIDEBAR_WIDTH, 1);
+        assert!(open.thread_takes_over());
+        assert_eq!(
+            open.messages, closed.messages,
+            "the message pane keeps its size"
+        );
+        let edge = areas_with_thread(Rect::new(0, 0, 100, 30), SIDEBAR_WIDTH, 1, true);
+        assert!(
+            !edge.thread_takes_over(),
+            "100 columns is the first split width"
+        );
+    }
+
+    #[test]
+    fn no_thread_leaves_the_layout_as_it_was() {
+        let a = areas_with_thread(Rect::new(0, 0, 160, 40), SIDEBAR_WIDTH, 1, false);
+        assert_eq!(a, areas(Rect::new(0, 0, 160, 40), SIDEBAR_WIDTH, 1));
+        assert_eq!(a.thread, None);
+    }
+
+    #[test]
+    fn every_size_stays_inside_the_terminal_with_a_thread() {
+        for w in [0u16, 1, 10, 40, 99, 100, 101, 160, 300] {
+            for h in [0u16, 1, 8, 24, 60] {
+                let outer = Rect::new(0, 0, w, h);
+                let a = areas_with_thread(outer, SIDEBAR_WIDTH, 3, true);
+                let thread = a.thread.expect("open");
+                for r in [a.sidebar, a.messages, a.input, a.status, a.cmdline, thread] {
+                    assert!(
+                        r.right() <= outer.right() && r.bottom() <= outer.bottom(),
+                        "{w}x{h}"
+                    );
+                }
+            }
         }
     }
 }

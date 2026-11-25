@@ -201,22 +201,22 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             let author = fit_author(&author, col).into_owned();
             let pad = " ".repeat(col - author.width() + 2);
             let prefix_width = time_col + 1 + col + 2;
-            let body_width = width.saturating_sub(prefix_width).max(MIN_BODY);
+            let body_width = width
+                .saturating_sub(prefix_width + tag_width(msg))
+                .max(MIN_BODY);
             let indent = " ".repeat(prefix_width);
-            body_rows(msg, body_width, body_style, ctx)
+            tag_reply(msg, body_rows(msg, body_width, body_style, ctx), ctx)
                 .into_iter()
                 .enumerate()
                 .map(|(i, mut spans)| {
                     if i == 0 {
-                        spans.splice(
-                            0..0,
-                            [
-                                Span::styled(time.clone(), time_style),
-                                Span::raw(" "),
-                                Span::styled(author.clone(), name),
-                                Span::raw(pad.clone()),
-                            ],
-                        );
+                        let prefix = vec![
+                            Span::styled(time.clone(), time_style),
+                            Span::raw(" "),
+                            Span::styled(author.clone(), name),
+                            Span::raw(pad.clone()),
+                        ];
+                        spans.splice(0..0, prefix);
                     } else {
                         spans.insert(0, Span::raw(indent.clone()));
                     }
@@ -225,7 +225,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
                 .collect()
         }
         MessageLayout::TwoLine => {
-            let body_width = width.saturating_sub(2).max(MIN_BODY);
+            let body_width = width.saturating_sub(2 + tag_width(msg)).max(MIN_BODY);
             let mut header = vec![
                 Span::styled(author, name),
                 Span::raw("  "),
@@ -239,7 +239,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             }
             std::iter::once(Line::from(header))
                 .chain(
-                    body_rows(msg, body_width, body_style, ctx)
+                    tag_reply(msg, body_rows(msg, body_width, body_style, ctx), ctx)
                         .into_iter()
                         .map(|mut spans| {
                             spans.insert(0, Span::raw("  "));
@@ -303,7 +303,90 @@ fn body_rows(
         }
     }
     rows.extend(reaction_rows(msg, width, ctx));
+    rows.extend(thread_rows(msg, width, ctx));
     rows
+}
+
+/// The text of the thread marker row of a message with replies: `-> 3 replies, last 14:02`, or
+/// `-> 1 reply, last 14:02`; without a last-reply time just the count. Plain ASCII, so the row is
+/// one cell per character.
+fn thread_marker_text(msg: &Message, ctx: &RowCtx) -> String {
+    let count = msg.tcount;
+    let noun = if count == 1 { "reply" } else { "replies" };
+    match msg.tlm {
+        Some(tlm) => format!(
+            "-> {count} {noun}, last {}",
+            format_ts(ctx.time_format, tlm, ctx.zone)
+        ),
+        None => format!("-> {count} {noun}"),
+    }
+}
+
+/// What starts the body of a reply that is also shown in the channel, in
+/// `theme.messages_thread_reply_hint`. Its width is what the text of such a reply gives up.
+const THREAD_REPLY_TAG: &str = "[thread] ";
+
+/// True when the body of `msg` starts with the thread-reply tag: a reply that is also shown in
+/// the channel.
+fn shows_reply_mark(msg: &Message) -> bool {
+    msg.tmid.is_some() && msg.tshow && msg.kind != MessageKind::Deleted
+}
+
+/// A reply shown in the channel as body rows: the first row starts with `THREAD_REPLY_TAG`, the
+/// others are indented by its width so the text lines up, and every text span is italic. Any other
+/// message is returned as it is.
+fn tag_reply(
+    msg: &Message,
+    rows: Vec<Vec<Span<'static>>>,
+    ctx: &RowCtx,
+) -> Vec<Vec<Span<'static>>> {
+    if !shows_reply_mark(msg) {
+        return rows;
+    }
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, spans)| {
+            let lead = if i == 0 {
+                Span::styled(
+                    THREAD_REPLY_TAG,
+                    ctx.theme
+                        .messages_thread_reply_hint
+                        .add_modifier(ratatui::style::Modifier::ITALIC),
+                )
+            } else {
+                Span::raw(" ".repeat(THREAD_REPLY_TAG.len()))
+            };
+            let mut out = vec![lead];
+            out.extend(spans.into_iter().map(|mut span| {
+                span.style = span.style.add_modifier(ratatui::style::Modifier::ITALIC);
+                span
+            }));
+            out
+        })
+        .collect()
+}
+
+/// Columns the tag takes from the body of `msg`: 0 unless it is a reply shown in the channel.
+fn tag_width(msg: &Message) -> usize {
+    if shows_reply_mark(msg) {
+        THREAD_REPLY_TAG.len()
+    } else {
+        0
+    }
+}
+
+/// The thread marker row of `msg` at `width` columns, as spans without any prefix, after the body
+/// and the reaction rows: `theme.messages_thread` on a message that has replies, wrapped to
+/// `width`. Any other message has none. (A reply shown in the channel is tagged at the start of
+/// its body instead, see `tag_reply`.)
+fn thread_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'static>>> {
+    if msg.tmid.is_some() || msg.tcount == 0 {
+        return Vec::new();
+    }
+    wrap_clean(&thread_marker_text(msg, ctx), width)
+        .into_iter()
+        .map(|row| vec![Span::styled(row, ctx.theme.messages_thread)])
+        .collect()
 }
 
 /// What sits between two reactions of a row.
@@ -478,6 +561,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
@@ -1167,6 +1254,10 @@ mod tests {
         Message {
             edited: true,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             ..msg(author, body)
         }
@@ -1253,6 +1344,10 @@ mod tests {
             body: "SECRET-TEXT".to_string(),
             edited: true,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             ..deleted("alice")
         };
@@ -1302,6 +1397,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: format!("m{ts}"),
             room_id: RoomId("r".to_string()),
@@ -1351,6 +1450,252 @@ mod tests {
         assert_eq!(divider_text(&msg_at(i64::MAX), None, 30), None);
         let ok = msg_at(0);
         assert_eq!(divider_text(&msg_at(i64::MAX), Some(&ok), 30), None);
+    }
+
+    // ---- thread rows ----
+
+    fn parent(replies: u32, tlm: Option<i64>) -> Message {
+        Message {
+            tcount: replies,
+            tlm,
+            ..msg("alice", "hello")
+        }
+    }
+
+    fn thread_text(m: &Message, width: u16, layout: MessageLayout) -> Vec<String> {
+        texts(&rows_with(m, width, layout, &HashMap::new(), None))
+    }
+
+    // 14:02 UTC on 1970-01-02.
+    const AT_1402: i64 = 86_400 + 14 * 3600 + 2 * 60;
+
+    #[test]
+    fn a_parent_gets_one_marker_row_with_the_count_and_the_last_time() {
+        let m = parent(3, Some(AT_1402));
+        let compact = thread_text(&m, 60, MessageLayout::Compact);
+        assert_eq!(compact.len(), 2);
+        // Aligned with the body: the time column, the author column and their gaps.
+        assert_eq!(
+            compact[1],
+            format!("{}-> 3 replies, last 14:02", " ".repeat(5 + 1 + 5 + 2))
+        );
+        let two = thread_text(&m, 60, MessageLayout::TwoLine);
+        assert_eq!(two.len(), 3, "header, body, marker");
+        assert_eq!(two[2], "  -> 3 replies, last 14:02");
+    }
+
+    #[test]
+    fn one_reply_is_singular_and_no_time_is_just_the_count() {
+        let one = thread_text(&parent(1, Some(AT_1402)), 60, MessageLayout::TwoLine);
+        assert_eq!(one[2], "  -> 1 reply, last 14:02");
+        let bare = thread_text(&parent(2, None), 60, MessageLayout::TwoLine);
+        assert_eq!(bare[2], "  -> 2 replies");
+    }
+
+    #[test]
+    fn a_message_without_replies_is_drawn_as_before() {
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let plain = rows_with(&msg("alice", "hello"), 60, layout, &HashMap::new(), None);
+            let none = rows_with(&parent(0, None), 60, layout, &HashMap::new(), None);
+            assert_eq!(texts(&plain), texts(&none));
+            assert_eq!(
+                none.len(),
+                if layout == MessageLayout::Compact {
+                    1
+                } else {
+                    2
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_marker_comes_after_the_body_and_the_reaction_row() {
+        let m = Message {
+            reactions: vec![reaction("+1", &["a"])],
+            ..parent(2, Some(AT_1402))
+        };
+        let rows = thread_text(&m, 60, MessageLayout::TwoLine);
+        assert_eq!(rows.len(), 4);
+        assert!(rows[2].contains('1'), "{rows:?}");
+        assert!(rows[3].contains("replies"), "{rows:?}");
+    }
+
+    #[test]
+    fn the_marker_wraps_in_a_narrow_pane_and_stays_plain_ascii() {
+        let m = parent(12, Some(AT_1402));
+        for width in [10u16, 14, 20, 30] {
+            let rows = thread_text(&m, width, MessageLayout::TwoLine);
+            let marker = &rows[2..];
+            assert!(!marker.is_empty());
+            for row in &rows {
+                assert!(
+                    row.width() <= usize::from(width).max(MIN_BODY + 2),
+                    "{width}: {rows:?}"
+                );
+            }
+            assert!(
+                marker
+                    .join(" ")
+                    .chars()
+                    .all(|c| c.is_ascii() && !c.is_control()),
+                "{marker:?}"
+            );
+        }
+        let narrow = thread_text(&m, 14, MessageLayout::TwoLine);
+        assert!(narrow.len() > 3, "wrapped onto more rows: {narrow:?}");
+    }
+
+    #[test]
+    fn a_channel_visible_reply_starts_its_body_with_the_thread_tag_in_italics() {
+        use ratatui::style::Modifier;
+        let theme = Theme::default();
+        let reply = |tshow| Message {
+            tmid: Some("p".to_string()),
+            tshow,
+            ..msg("alice", "hello")
+        };
+        let italic = |line: &Line<'_>, from: usize| {
+            line.spans[from..]
+                .iter()
+                .all(|s| s.style.add_modifier.contains(Modifier::ITALIC))
+        };
+        // Two-line: no extra row; the tag follows the indent and the text italic after it.
+        let plain = rows_with(
+            &msg("alice", "hello"),
+            60,
+            MessageLayout::TwoLine,
+            &HashMap::new(),
+            None,
+        );
+        let rows = rows_with(
+            &reply(true),
+            60,
+            MessageLayout::TwoLine,
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(text(&rows[1]), "  [thread] hello");
+        assert_eq!(text(&rows[0]), text(&plain[0]), "the header is as before");
+        assert_eq!(
+            rows[1].spans[1].style,
+            theme
+                .messages_thread_reply_hint
+                .add_modifier(Modifier::ITALIC)
+                .patch(ratatui::style::Style::default())
+        );
+        assert!(italic(&rows[1], 1), "tag and body are italic");
+        assert!(
+            !rows[0]
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::ITALIC)),
+            "author and time are not"
+        );
+        // Compact: the tag starts the body and the text moves right by its width.
+        let marked = rows_with(
+            &reply(true),
+            60,
+            MessageLayout::Compact,
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(marked.len(), 1);
+        assert_eq!(text(&marked[0]), "00:00 alice  [thread] hello");
+        assert!(italic(&marked[0], 4), "tag and body are italic");
+        assert!(
+            !marked[0].spans[..3]
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::ITALIC))
+        );
+        // A reply that is not shown in the channel is not drawn here at all, and a plain message
+        // has no tag and no italics.
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            for m in [reply(false), msg("alice", "hello")] {
+                let rows = rows_with(&m, 60, layout, &HashMap::new(), None);
+                assert!(!texts(&rows).join("\n").contains("[thread]"));
+                assert!(rows.iter().all(|r| {
+                    !r.spans
+                        .iter()
+                        .any(|s| s.style.add_modifier.contains(Modifier::ITALIC))
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn a_tagged_replys_wrapped_rows_stay_under_its_text() {
+        let long = Message {
+            tmid: Some("p".to_string()),
+            tshow: true,
+            ..msg("alice", "one two three four five six seven eight nine ten")
+        };
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = texts(&rows_with(&long, 36, layout, &HashMap::new(), None));
+            let body: Vec<&String> = rows.iter().filter(|r| !r.starts_with("alice")).collect();
+            assert!(body.len() >= 2, "{rows:?}");
+            assert!(body[0].contains("[thread] one"));
+            let first = body[0].split("one").next().unwrap_or("").chars().count();
+            for row in &body[1..] {
+                assert!(row.width() <= 36, "{row:?}");
+                assert_eq!(
+                    row.chars().take_while(|c| *c == ' ').count(),
+                    first,
+                    "continuation rows line up with the text: {rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_marker_takes_its_theme_style() {
+        let theme = Theme::default();
+        let rows = rows_with(
+            &parent(3, Some(AT_1402)),
+            60,
+            MessageLayout::TwoLine,
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(rows[2].spans[1].style, theme.messages_thread);
+    }
+
+    #[test]
+    fn a_deleted_parent_shows_no_marker() {
+        let m = Message {
+            kind: MessageKind::Deleted,
+            ..parent(3, Some(AT_1402))
+        };
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = thread_text(&m, 60, layout);
+            assert!(!rows.join("\n").contains("replies"), "{rows:?}");
+        }
+    }
+
+    #[test]
+    fn block_rows_counts_the_marker_row() {
+        let theme = Theme::default();
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::TwoLine,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
+            own_user: None,
+            unread_before: None,
+        };
+        let with = parent(3, Some(AT_1402));
+        let without = msg("alice", "hello");
+        assert_eq!(
+            block_rows(&with, None, 60, &ctx),
+            block_rows(&without, None, 60, &ctx) + 1
+        );
     }
 
     // ---- reaction rows ----

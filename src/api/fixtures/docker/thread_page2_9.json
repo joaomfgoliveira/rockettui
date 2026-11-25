@@ -1,0 +1,25 @@
+{
+  "messages": [
+    {
+      "_id": "iYpbd95mJ688h33Ah",
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "msg": "thread capture reply three also in channel",
+      "tmid": "ct8Ppen9ggfTSCX3A",
+      "tshow": true,
+      "ts": "2026-11-25T18:17:18.662Z",
+      "u": {
+        "_id": "pgpQdxMiDbS5HZJBu",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:17:18.672Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    }
+  ],
+  "count": 1,
+  "offset": 2,
+  "total": 3,
+  "success": true
+}

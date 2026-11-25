@@ -102,6 +102,10 @@ fn message_in_state(send: SendState) -> Message {
     Message {
         edited: false,
         plain_text: true,
+        tmid: None,
+        tshow: false,
+        tcount: 0,
+        tlm: None,
         reactions: Vec::new(),
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),

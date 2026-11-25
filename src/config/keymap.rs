@@ -632,6 +632,54 @@ mod tests {
     }
 
     #[test]
+    fn open_thread_default_rebind_unbind_and_unknown_spelling() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        // `gt` in every preset, next to the other `g` bindings it must not disturb.
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "gt", Action::OpenThread), "{preset:?}");
+            assert!(is(&keymap, "gg", Action::GotoTop), "{preset:?}");
+            assert!(is(&keymap, "gr", Action::ShowReactions), "{preset:?}");
+            assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
+            // `close_thread` has no default key; `Esc` stays `cancel`, which closes the pane.
+            assert!(is(&keymap, "<Esc>", Action::Cancel), "{preset:?}");
+        }
+        // Rebind: the new key works and `gt` stays; `close_thread` can be bound.
+        let src = "[normal]\n\"T\" = \"open_thread\"\n\"Q\" = \"close_thread\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "T", Action::OpenThread));
+        assert!(is(&keymap, "gt", Action::OpenThread));
+        assert!(is(&keymap, "Q", Action::CloseThread));
+        // Unbind with `none`.
+        let src = "[normal]\n\"gt\" = \"none\"\n";
+        assert!(errors(src).is_empty());
+        let keymap = built(src);
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gt"), "none");
+        assert!(is(&keymap, "gg", Action::GotoTop));
+        // A misspelled name is a config error that names it.
+        for wrong in ["open_threads", "thread_open", "close_thread_pane"] {
+            let found = errors(&format!("[normal]\n\"T\" = \"{wrong}\"\n"));
+            assert_eq!(found.len(), 1, "{wrong}: {found:?}");
+            assert!(found[0].message.contains(wrong), "{found:?}");
+        }
+        // The names round-trip.
+        assert_eq!(
+            crate::input::actions::name_of(&Action::OpenThread),
+            Some("open_thread")
+        );
+        assert_eq!(
+            crate::input::actions::name_of(&Action::CloseThread),
+            Some("close_thread")
+        );
+    }
+
+    #[test]
     fn react_message_default_rebind_unbind_and_unknown_spelling() {
         let is = |keymap: &Keymap, keys: &str, want: Action| {
             matches!(
@@ -712,21 +760,22 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "<C-u>"), "exact");
         assert!(errors("[normal]\n\"<C-d>\" = \"none\"\n").is_empty());
 
-        // Unbinding gg leaves gr: g is still a prefix.
+        // Unbinding gg leaves gr and gt: g is still a prefix.
         let keymap = built("[normal]\ngg = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
-        // Unbinding both leaves nothing: g is no longer a prefix.
-        let keymap = built("[normal]\ngg = \"none\"\ngr = \"none\"\n");
+        // Unbinding all of them leaves nothing: g is no longer a prefix.
+        let keymap = built("[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gt"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "none");
     }
 
     #[test]
     fn none_gg_then_bind_g() {
         // TOML iterates `g` before `gg`; the result must not depend on it.
-        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ng = \"goto_top\"\n";
+        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ng = \"goto_top\"\n";
         assert!(errors(src).is_empty(), "{:?}", problems(src));
         let keymap = built(src);
         let g = parse_keys("g").unwrap();
@@ -739,9 +788,9 @@ mod tests {
 
     #[test]
     fn prefix_clash_names_both() {
-        // `g` is the prefix of two default bindings, `gg` and `gr`: one error for each.
+        // `g` is the prefix of three default bindings, `gg`, `gr` and `gt`: one error for each.
         let found = errors("[normal]\ng = \"goto_top\"\n");
-        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found.len(), 3, "{found:?}");
         assert_eq!(line_of(&found[0]), Some(2));
         assert!(found.iter().all(|p| p.message.contains("`g`")), "{found:?}");
         assert!(
@@ -752,10 +801,14 @@ mod tests {
             found.iter().any(|p| p.message.contains("`gr`")),
             "{found:?}"
         );
-        // Unbinding one of them is not enough; unbinding both resolves it.
+        assert!(
+            found.iter().any(|p| p.message.contains("`gt`")),
+            "{found:?}"
+        );
+        // Unbinding one of them is not enough; unbinding all resolves it.
         let half = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
-        assert_eq!(errors(half).len(), 1);
-        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\n";
+        assert_eq!(errors(half).len(), 2);
+        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\n";
         assert!(errors(resolved).is_empty());
     }
 

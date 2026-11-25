@@ -73,6 +73,11 @@ pub enum Action {
     /// Normal mode, messages pane focused, cursor on a message that has reactions (`gr`): open the
     /// popup that lists who gave each one. Anything else is a silent no-op.
     ShowReactions,
+    /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
+    /// in the thread pane. A message with no thread says so on the status line.
+    OpenThread,
+    /// Close the thread pane (`Esc` with the pane focused; no default key otherwise).
+    CloseThread,
     /// Open the help overlay (no default key; `?` then `?` or `:help`); while it is open, close it.
     ShowHelp,
     /// Open the context popup (`?`): the actions that apply to the selected object.
@@ -147,6 +152,23 @@ pub enum Action {
     ContextFailed {
         room: RoomId,
         context_id: u64,
+        error: crate::api::ApiError,
+    },
+    /// A page of a thread's replies arrived, oldest first, for the thread `parent_id` of `room`.
+    /// `offset` is where the page started; `parent` is the parent message when the request had to
+    /// fetch it (it was not held by the main flow).
+    ThreadLoaded {
+        room: RoomId,
+        parent_id: String,
+        offset: u32,
+        parent: Option<Message>,
+        page: crate::api::ThreadPage,
+    },
+    /// A thread request failed; the error is a fixed kind with no payload text.
+    ThreadLoadFailed {
+        room: RoomId,
+        parent_id: String,
+        offset: u32,
         error: crate::api::ApiError,
     },
     /// A history request failed; the error is a fixed kind with no payload text.
@@ -298,6 +320,8 @@ impl std::fmt::Debug for Action {
             Action::ShowReactions => write!(f, "ShowReactions"),
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
+            Action::OpenThread => write!(f, "OpenThread"),
+            Action::CloseThread => write!(f, "CloseThread"),
             Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ShowContext => write!(f, "ShowContext"),
             Action::SearchStart => write!(f, "SearchStart"),
@@ -373,6 +397,25 @@ impl std::fmt::Debug for Action {
                 context_id,
                 error,
             } => write!(f, "ContextFailed({room:?}, #{context_id}, {error:?})"),
+            Action::ThreadLoaded {
+                room,
+                parent_id,
+                offset,
+                page,
+                ..
+            } => write!(
+                f,
+                "ThreadLoaded({room:?}, {parent_id}, offset={offset}, {page:?})"
+            ),
+            Action::ThreadLoadFailed {
+                room,
+                parent_id,
+                offset,
+                error,
+            } => write!(
+                f,
+                "ThreadLoadFailed({room:?}, {parent_id}, offset={offset}, {error:?})"
+            ),
             Action::HistoryFailed { room, older, error } => {
                 write!(f, "HistoryFailed({room:?}, older={older}, {error:?})")
             }
@@ -431,6 +474,10 @@ mod tests {
         let message = Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
@@ -469,6 +516,10 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
@@ -507,6 +558,10 @@ mod tests {
             message: Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),

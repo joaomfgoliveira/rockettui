@@ -50,6 +50,9 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.reactions",
     "messages.reactions_own",
     "messages.custom_emoji",
+    "messages.thread",
+    "messages.thread_reply_hint",
+    "thread_pane.border",
     "help.border",
     "help.title",
     "help.heading",
@@ -256,6 +259,13 @@ pub struct Theme {
     /// terminal that cannot show images or when the image failed, and the blank it takes while the
     /// image is on its way.
     pub messages_custom_emoji: Style,
+    /// The marker row under a thread's first message: the reply count and the last reply time.
+    pub messages_thread: Style,
+    /// The `[thread]` tag at the start of a reply that is also shown in the channel (the reply's text is italic).
+    pub messages_thread_reply_hint: Style,
+    /// Added over the focused or unfocused pane border for the border of the thread pane. Plain by
+    /// default: the pane then looks like the other panes, focus included.
+    pub thread_pane_border: Style,
     /// The help overlay: its border, its title, the section headings, the key column and the
     /// description column.
     pub help_border: Style,
@@ -335,6 +345,9 @@ impl Default for Theme {
             messages_reactions: plain.add_modifier(Modifier::DIM),
             messages_reactions_own: plain.add_modifier(Modifier::BOLD),
             messages_custom_emoji: plain.add_modifier(Modifier::ITALIC),
+            messages_thread: plain.fg(Color::Cyan),
+            messages_thread_reply_hint: plain.fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            thread_pane_border: plain,
             help_border: plain,
             help_title: plain.add_modifier(Modifier::BOLD),
             help_heading: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -403,6 +416,9 @@ impl Theme {
             ("messages", "reactions") => Some(&mut self.messages_reactions),
             ("messages", "reactions_own") => Some(&mut self.messages_reactions_own),
             ("messages", "custom_emoji") => Some(&mut self.messages_custom_emoji),
+            ("messages", "thread") => Some(&mut self.messages_thread),
+            ("messages", "thread_reply_hint") => Some(&mut self.messages_thread_reply_hint),
+            ("thread_pane", "border") => Some(&mut self.thread_pane_border),
             ("help", "border") => Some(&mut self.help_border),
             ("help", "title") => Some(&mut self.help_title),
             ("help", "heading") => Some(&mut self.help_heading),
@@ -959,8 +975,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            56,
-            "17 chrome and border paths, the fourteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            59,
+            "17 chrome and border paths, the seventeen messages and thread elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -1009,6 +1025,47 @@ mod tests {
         // Untouched elements keep their built-in style.
         assert_eq!(theme.reactions_border, t.reactions_border);
         assert_eq!(theme.messages_reactions_own, t.messages_reactions_own);
+    }
+
+    #[test]
+    fn thread_elements_default_override_and_unknown_spelling() {
+        let t = Theme::default();
+        // The marker row is readable (coloured) and differs from the body and from the reply hint;
+        // the mark is bold; the pane border adds nothing over the focus borders.
+        assert_ne!(t.messages_thread, t.messages_body);
+        assert_ne!(t.messages_thread, t.messages_thread_reply_hint);
+        assert_eq!(t.messages_thread_reply_hint.add_modifier, Modifier::BOLD);
+        assert_eq!(t.thread_pane_border, Style::default());
+        assert_ne!(
+            t.border_type_focused, t.border_type_unfocused,
+            "focus shows on the pane border"
+        );
+
+        let (theme, out) = parse_str(
+            "[messages.thread]\nfg = \"magenta\"\n[messages.thread_reply_hint]\nfg = \"green\"\n\
+             [thread_pane.border]\nfg = \"yellow\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_thread.fg, Some(Color::Magenta));
+        assert_eq!(theme.messages_thread_reply_hint.fg, Some(Color::Green));
+        // The default modifier survives a partial override.
+        assert_eq!(
+            theme.messages_thread_reply_hint.add_modifier,
+            Modifier::BOLD
+        );
+        assert_eq!(theme.thread_pane_border.fg, Some(Color::Yellow));
+        assert_eq!(theme.messages_body, t.messages_body, "others untouched");
+
+        // A misspelled element is reported by name and changes nothing.
+        let (theme, out) = parse_str("[messages.threads]\nfg = \"red\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(
+            out[0].key.as_deref().is_some_and(|k| k.contains("threads")),
+            "{out:?}"
+        );
+        assert_eq!(theme.messages_thread, t.messages_thread);
+        let (_, out) = parse_str("[thread_pane.borders]\nfg = \"red\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
     }
 
     #[test]

@@ -55,6 +55,10 @@ pub fn submit(app: &mut App) {
     let message = Message {
         edited: false,
         plain_text: true,
+        tmid: None,
+        tshow: false,
+        tcount: 0,
+        tlm: None,
         reactions: Vec::new(),
         id: format!("{}{}", app.id_prefix, app.local_seq),
         room_id: room.clone(),
@@ -306,6 +310,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),

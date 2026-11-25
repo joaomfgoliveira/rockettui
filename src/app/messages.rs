@@ -273,6 +273,46 @@ pub fn anchored<R>(app: &mut App, room: &RoomId, change: impl FnOnce(&mut App) -
     result
 }
 
+/// True when `message` differs from the held copy `held` in what a live update changes: the text,
+/// the edited state, the reactions and, for a thread parent, the reply count and last reply time.
+pub fn changed(held: &Message, message: &Message) -> bool {
+    held.body != message.body
+        || held.edited != message.edited
+        || held.reactions != message.reactions
+        || held.tcount != message.tcount
+        || held.tlm != message.tlm
+}
+
+/// True when `room` holds a message with this id.
+pub fn holds(app: &App, room: &RoomId, id: &str) -> bool {
+    app.messages
+        .get(room)
+        .is_some_and(|held| held.iter().any(|m| m.id == id))
+}
+
+/// Put `message` into the held `slot`, as a `Sent` message. An `rm` copy comes from the deleter:
+/// the original author and time stay.
+pub fn replace_slot(slot: &mut Message, message: Message) {
+    let keep = (message.kind == MessageKind::Deleted).then(|| (slot.author.clone(), slot.ts));
+    *slot = Message {
+        send: SendState::Sent,
+        ..message
+    };
+    if let Some((author, ts)) = keep {
+        slot.author = author;
+        slot.ts = ts;
+    }
+}
+
+/// Turn `slot` into a tombstone: author and time stay, the body and the reactions go.
+pub fn tombstone_slot(slot: &mut Message) {
+    slot.body.clear();
+    slot.kind = MessageKind::Deleted;
+    slot.edited = false;
+    // A tombstone shows nothing of the message, reactions included (as `map::message` maps it).
+    slot.reactions.clear();
+}
+
 /// True when `message` is a live update of a message `room` holds: the held copy is a server
 /// message (`Sent`, not a tombstone) whose text, edited state or reactions differ. An equal copy
 /// (a pin) and a copy of a pending local row are not updates. A reaction changes only the
@@ -285,9 +325,7 @@ pub fn is_update(app: &App, room: &RoomId, message: &Message) -> bool {
         .is_some_and(|held| {
             held.send == SendState::Sent
                 && held.kind != MessageKind::Deleted
-                && (held.body != message.body
-                    || held.edited != message.edited
-                    || held.reactions != message.reactions)
+                && changed(held, message)
         })
 }
 
@@ -311,16 +349,7 @@ pub fn apply_update(app: &mut App, room: &RoomId, message: Message) {
         .get_mut(room)
         .and_then(|held| held.iter_mut().find(|m| m.id == message.id))
     {
-        // An `rm` copy comes from the deleter: keep the original author and time.
-        let keep = (message.kind == MessageKind::Deleted).then(|| (slot.author.clone(), slot.ts));
-        *slot = Message {
-            send: SendState::Sent,
-            ..message
-        };
-        if let Some((author, ts)) = keep {
-            slot.author = author;
-            slot.ts = ts;
-        }
+        replace_slot(slot, message);
     }
 }
 
@@ -349,11 +378,7 @@ pub fn tombstone_in_place(app: &mut App, room: &RoomId, id: &str) {
         .get_mut(room)
         .and_then(|held| held.iter_mut().find(|m| m.id == id))
     {
-        slot.body.clear();
-        slot.kind = MessageKind::Deleted;
-        slot.edited = false;
-        // A tombstone shows nothing of the message, reactions included (as `map::message` maps it).
-        slot.reactions.clear();
+        tombstone_slot(slot);
     }
 }
 
@@ -668,6 +693,10 @@ mod tests {
             .push(crate::data::Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
@@ -763,6 +792,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),

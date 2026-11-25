@@ -53,6 +53,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "delete_message",
     "show_reactions",
     "react_message",
+    "open_thread",
+    "close_thread",
     "switch_room",
     "show_help",
     "show_context",
@@ -101,6 +103,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "delete_message" => Action::DeleteMessage,
         "show_reactions" => Action::ShowReactions,
         "react_message" => Action::ReactMessage,
+        "open_thread" => Action::OpenThread,
+        "close_thread" => Action::CloseThread,
         "switch_room" => Action::SwitchRoom,
         "show_help" => Action::ShowHelp,
         "show_context" => Action::ShowContext,
@@ -152,6 +156,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::DeleteMessage => Some("delete_message"),
         Action::ShowReactions => Some("show_reactions"),
         Action::ReactMessage => Some("react_message"),
+        Action::OpenThread => Some("open_thread"),
+        Action::CloseThread => Some("close_thread"),
         Action::SwitchRoom => Some("switch_room"),
         Action::ShowHelp => Some("show_help"),
         Action::ShowContext => Some("show_context"),
@@ -176,6 +182,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::LoadFailed(_)
         | Action::HistoryLoaded { .. }
         | Action::HistoryFailed { .. }
+        | Action::ThreadLoaded { .. }
+        | Action::ThreadLoadFailed { .. }
         | Action::SearchPage { .. }
         | Action::ContextLoaded { .. }
         | Action::ContextFailed { .. }

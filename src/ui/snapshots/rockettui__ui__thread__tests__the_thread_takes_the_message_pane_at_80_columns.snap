@@ -1,0 +1,27 @@
+---
+source: src/ui/thread.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ Thread ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃── 1970-01-01 ────────────────────────────────────┃
+│> * #general              │┃00:01 alice  deploy plan: who takes the rollback? ┃
+│  * &dev-team             │┃             -> 2 replies, last 00:11             ┃
+│  * @alice                │┃00:02 bob    I can take it                        ┃
+│  Folders                 │┃00:11 alice  [thread] thanks, done                ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┃                                                  ┃
+│  ▾ People (1)            │┃                                                  ┃
+│  Recent                  │┃                                                  ┃
+│    #random               │┃                                                  ┃
+│    &secrets [e2e]        │┃                                                  ┃
+│    #quiet                │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│                          │┌ Input ───────────────────────────────────────────┐
+│                          ││press i to write                                  │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  quiet

@@ -140,6 +140,16 @@ pub struct HistoryResp {
     pub messages: Vec<WireMsg>,
 }
 
+/// The success body of `chat.getThreadMessages`: the replies oldest first, and how many the thread
+/// has in all (the paging bound).
+#[derive(Deserialize)]
+pub struct ThreadResp {
+    #[serde(default)]
+    pub messages: Vec<WireMsg>,
+    #[serde(default)]
+    pub total: u32,
+}
+
 /// The success body of `chat.sendMessage` and of `chat.getMessage`: the one message, as stored.
 #[derive(Deserialize)]
 pub struct MessageResp {
@@ -173,6 +183,18 @@ pub struct WireMsg {
     /// an object give none: the server drops the key when the last reaction is taken back.
     #[serde(default)]
     pub reactions: WireReactions,
+    /// The thread parent's id on a reply.
+    #[serde(default)]
+    pub tmid: Option<String>,
+    /// A reply that was also sent to the channel.
+    #[serde(default)]
+    pub tshow: bool,
+    /// On a thread parent: the number of replies.
+    #[serde(default)]
+    pub tcount: Option<u32>,
+    /// On a thread parent: the time of the last reply, ISO string (REST) or `$date` (stream).
+    #[serde(default)]
+    pub tlm: Option<ApiDate>,
 }
 
 /// One reaction of a message: the shortcode as the server writes it (`:+1:`, with the colons) and

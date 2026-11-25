@@ -21,6 +21,7 @@ pub mod search;
 pub mod send;
 pub mod sidebar;
 pub mod switcher;
+pub mod thread;
 pub mod update;
 
 use crate::data::{Folder, Message, Room, RoomId, SendState};
@@ -53,6 +54,8 @@ pub enum Focus {
     Sidebar,
     Messages,
     Input,
+    /// The thread pane, open only while `App.thread` is set.
+    Thread,
 }
 
 /// Where the room load stands, shown in the status bar (D-05, D-06).
@@ -174,6 +177,8 @@ pub struct App {
     /// The room switcher (`app::switcher`), when open. Like `help` it is a state, not a mode. No
     /// `Debug` of its own beyond a redacting one: it holds the typed query.
     pub switcher: Option<switcher::Switcher>,
+    /// The open thread of the open room (`app::thread`), if any. No `Debug`: it holds messages.
+    pub thread: Option<thread::ThreadPane>,
     /// The rooms opened this session, most recently opened first (`open_room`). In memory only:
     /// never written to disk. The switcher orders an empty search by it.
     pub recent_rooms: Vec<RoomId>,
@@ -262,6 +267,7 @@ impl App {
             anim_ms: 0,
             react_picker: None,
             switcher: None,
+            thread: None,
             recent_rooms: Vec::new(),
             search: None,
             search_prompt: None,
@@ -299,7 +305,12 @@ impl App {
     /// and every reducer computation take their geometry from here, so they cannot disagree.
     pub fn areas(&self) -> crate::ui::layout::Areas {
         let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
-        crate::ui::layout::areas(area, self.settings.sidebar_width, self.input_rows())
+        crate::ui::layout::areas_with_thread(
+            area,
+            self.settings.sidebar_width,
+            self.input_rows(),
+            self.thread.is_some(),
+        )
     }
 
     /// What the drawing of custom emojis reads: the list, the images and the terminal's support.
@@ -366,10 +377,15 @@ impl App {
     pub fn input_rows(&self) -> u16 {
         let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
         // The input pane's width does not depend on its own height.
-        let width = crate::ui::layout::areas(area, self.settings.sidebar_width, 1)
-            .input
-            .width
-            .saturating_sub(2);
+        let width = crate::ui::layout::areas_with_thread(
+            area,
+            self.settings.sidebar_width,
+            1,
+            self.thread.is_some(),
+        )
+        .input
+        .width
+        .saturating_sub(2);
         let rows = self.input.visual_row_count(width);
         u16::try_from(rows)
             .unwrap_or(u16::MAX)
@@ -399,6 +415,7 @@ impl App {
             self.confirm = None;
             search::clear(self);
             results::close_all(self);
+            thread::discard(self);
             if let Some(old) = self.current_room.clone() {
                 jump::reset(self, &old);
             }
@@ -680,6 +697,10 @@ mod tests {
                 .push(Message {
                     edited: false,
                     plain_text: true,
+                    tmid: None,
+                    tshow: false,
+                    tcount: 0,
+                    tlm: None,
                     reactions: Vec::new(),
                     id: format!("u-{n}"),
                     room_id: rid(room),

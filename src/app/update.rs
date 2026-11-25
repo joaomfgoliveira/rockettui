@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, help, history,
-    jump, react, reactions, read, realtime, results, search, send, sidebar, switcher,
+    jump, react, reactions, read, realtime, results, search, send, sidebar, switcher, thread,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -171,6 +171,19 @@ fn reduce(app: &mut App, action: Action) {
         Action::HistoryFailed { room, older, error } => {
             history::on_failed(app, room, older, error);
         }
+        Action::ThreadLoaded {
+            room,
+            parent_id,
+            offset,
+            parent,
+            page,
+        } => thread::on_loaded(app, &room, &parent_id, offset, parent, page),
+        Action::ThreadLoadFailed {
+            room,
+            parent_id,
+            offset,
+            error,
+        } => thread::on_failed(app, &room, &parent_id, offset, error),
         Action::MessageSent { room, id, message } => send::on_sent(app, room, id, message),
         Action::SendFailed { room, id, error } => send::on_failed(app, room, id, error),
         Action::EditDone { room, id, message } => edit::on_edit_done(app, room, id, message),
@@ -205,12 +218,26 @@ fn reduce(app: &mut App, action: Action) {
         | Action::Select
         | Action::ToggleFold => apply_motion(app, &action, None),
         // Absolute focus targets from any pane (A11).
-        Action::FocusLeft => app.focus = Focus::Sidebar,
-        Action::FocusRight => app.focus = Focus::Messages,
+        // The thread pane sits right of the messages: `l` from the messages goes into it (when it
+        // is open) and `h` from it comes back.
+        Action::FocusLeft => {
+            app.focus = if app.focus == Focus::Thread {
+                Focus::Messages
+            } else {
+                Focus::Sidebar
+            }
+        }
+        Action::FocusRight => {
+            app.focus = if app.focus == Focus::Messages && app.thread.is_some() {
+                Focus::Thread
+            } else {
+                Focus::Messages
+            }
+        }
         Action::FocusDown => app.focus = Focus::Input,
         // Like the absolute targets above, the cycle acts in any mode it is bound in (A28).
-        Action::FocusNext => app.focus = cycle_focus(app.focus, true),
-        Action::FocusPrev => app.focus = cycle_focus(app.focus, false),
+        Action::FocusNext => app.focus = cycle_focus(app, true),
+        Action::FocusPrev => app.focus = cycle_focus(app, false),
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();
@@ -220,6 +247,7 @@ fn reduce(app: &mut App, action: Action) {
                 app.cmdline.clear();
                 app.mode = Mode::Normal;
             }
+            Mode::Normal if app.focus == Focus::Thread => thread::close(app),
             Mode::Normal => {
                 app.status_msg = None;
                 search::clear(app);
@@ -287,6 +315,8 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowHelp => app.help = Some(0),
         Action::ShowContext => app.context = true,
         Action::ShowReactions => reactions::open(app),
+        Action::OpenThread => thread::open(app),
+        Action::CloseThread => thread::close(app),
         Action::ReactMessage => react::open(app),
         Action::SwitchRoom => switcher::open(app),
         Action::SearchStart => search::start(app),
@@ -425,19 +455,28 @@ fn dispatch(app: &mut App, outcome: Outcome) {
     }
 }
 
-/// The panes `<Tab>` cycles through, in order. The input bar is not one of them: it is reached
-/// on purpose (`Ctrl-w j`, `i`). An open thread pane will be appended here while it is open.
-const CYCLE: &[Focus] = &[Focus::Sidebar, Focus::Messages];
+/// The panes `<Tab>` cycles through, in order: the sidebar, the messages and, while a thread is
+/// open, the thread pane. The input bar is not one of them: it is reached on purpose (`Ctrl-w j`,
+/// `i`).
+fn cycle_panes(app: &App) -> Vec<Focus> {
+    let mut panes = vec![Focus::Sidebar, Focus::Messages];
+    if app.thread.is_some() {
+        panes.push(Focus::Thread);
+    }
+    panes
+}
 
-/// The pane after (`forward`) or before `from` in [`CYCLE`], wrapping around. From a pane outside
-/// the cycle (the input bar) forward lands on the first pane and backward on the last.
-fn cycle_focus(from: Focus, forward: bool) -> Focus {
-    let n = CYCLE.len();
-    match (CYCLE.iter().position(|f| *f == from), forward) {
-        (Some(i), true) => CYCLE[(i + 1) % n],
-        (Some(i), false) => CYCLE[(i + n - 1) % n],
-        (None, true) => CYCLE[0],
-        (None, false) => CYCLE[n - 1],
+/// The pane after (`forward`) or before the focused one in [`cycle_panes`], wrapping around. From
+/// a pane outside the cycle (the input bar) forward lands on the first pane and backward on the
+/// last.
+fn cycle_focus(app: &App, forward: bool) -> Focus {
+    let panes = cycle_panes(app);
+    let n = panes.len();
+    match (panes.iter().position(|f| *f == app.focus), forward) {
+        (Some(i), true) => panes[(i + 1) % n],
+        (Some(i), false) => panes[(i + n - 1) % n],
+        (None, true) => panes[0],
+        (None, false) => panes[n - 1],
     }
 }
 
@@ -452,6 +491,9 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
             crate::app::messages::apply_motion(app, motion, count);
             history::maybe_load_older(app);
             jump::maybe_load_newer(app);
+        }
+        Focus::Thread => {
+            crate::app::thread::apply_motion(app, motion, count);
         }
         Focus::Input => input_motion(app, motion, count),
     }
@@ -1050,6 +1092,10 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: RoomId(room.to_string()),

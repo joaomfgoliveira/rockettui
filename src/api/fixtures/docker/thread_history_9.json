@@ -1,0 +1,92 @@
+{
+  "messages": [
+    {
+      "_id": "iYpbd95mJ688h33Ah",
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "msg": "thread capture reply three also in channel",
+      "tmid": "ct8Ppen9ggfTSCX3A",
+      "tshow": true,
+      "ts": "2026-11-25T18:17:18.662Z",
+      "u": {
+        "_id": "pgpQdxMiDbS5HZJBu",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:17:18.672Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "ct8Ppen9ggfTSCX3A",
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "msg": "thread capture parent",
+      "ts": "2026-11-25T18:17:15.420Z",
+      "u": {
+        "_id": "pgpQdxMiDbS5HZJBu",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:17:18.688Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "pgpQdxMiDbS5HZJBu",
+        "iSMfZiJ2QeRhgoCgM",
+        "9NCnvkooKeBwgLbcq"
+      ],
+      "tcount": 3,
+      "tlm": "2026-11-25T18:17:18.662Z"
+    },
+    {
+      "_id": "73tfGKovSPK542pi7",
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "msg": "thread capture plain",
+      "ts": "2026-11-25T18:17:15.072Z",
+      "u": {
+        "_id": "pgpQdxMiDbS5HZJBu",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:17:15.085Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "6b072624d7e9f5a602bb4214",
+      "t": "uj",
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "ts": "2026-11-25T18:17:08.519Z",
+      "msg": "bob",
+      "u": {
+        "_id": "9NCnvkooKeBwgLbcq",
+        "username": "bob",
+        "name": "Bob"
+      },
+      "groupable": false,
+      "_updatedAt": "2026-11-25T18:17:08.527Z"
+    },
+    {
+      "_id": "jcYWyYhdBGmJEJ6qE",
+      "alias": "",
+      "msg": "seed message 129",
+      "attachments": [],
+      "parseUrls": true,
+      "groupable": false,
+      "ts": "2026-11-25T18:17:07.068Z",
+      "u": {
+        "_id": "iSMfZiJ2QeRhgoCgM",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "rid": "6b07261fd7e9f5a602bb4170",
+      "_updatedAt": "2026-11-25T18:17:07.073Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    }
+  ],
+  "success": true
+}

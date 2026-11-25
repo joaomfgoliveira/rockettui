@@ -92,6 +92,21 @@ mod tests {
     }
 
     #[test]
+    fn help_shows_the_thread_row_when_scrolled_to_it() {
+        let mut app = app_80x24();
+        let lines = crate::app::help::build(&app.keymap);
+        let at = lines
+            .iter()
+            .position(|l| matches!(l, crate::app::help::HelpLine::Row { keys, .. } if keys == "gt"))
+            .expect("the gt row");
+        press(&mut app, "??");
+        app.help = Some(at);
+        let out = render_to_string(&app, 80, 24);
+        assert!(out.contains("open the thread of the message"), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
     fn help_closed_draws_nothing() {
         let app = app_80x24();
         assert!(!render_to_string(&app, 80, 24).contains("Help"));

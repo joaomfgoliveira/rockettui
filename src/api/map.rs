@@ -3,7 +3,7 @@
 //! `subscriptions.get` says which rooms the user joined and how they show; `rooms.get` adds what
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
-use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
+use crate::api::wire::{ApiDate, WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits};
 use crate::data::{
     CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
@@ -215,6 +215,12 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
     let edited = msg.edited_at.is_some() && kind != MessageKind::Deleted;
     let plain_text = is_plain_text(&msg, kind);
     let reactions = reactions(&msg, kind);
+    let (tmid, tshow, tcount, tlm) = (
+        msg.tmid.filter(|t| !t.is_empty()),
+        msg.tshow,
+        msg.tcount.unwrap_or(0),
+        msg.tlm.as_ref().and_then(ApiDate::secs),
+    );
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -226,6 +232,10 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         edited,
         plain_text,
         reactions,
+        tmid,
+        tshow,
+        tcount,
+        tlm,
     }
 }
 
@@ -1094,5 +1104,109 @@ mod tests {
         assert_eq!(m.kind, MessageKind::Deleted);
         assert_eq!(m.body, "");
         assert!(!m.edited);
+    }
+
+    /// The thread captures of both Docker servers: (thread messages, history, parent, stream).
+    const THREAD_FIXTURES: [(&str, &str, &str, &str); 2] = [
+        (
+            include_str!("fixtures/docker/thread_messages.json"),
+            include_str!("fixtures/docker/thread_history.json"),
+            include_str!("fixtures/docker/thread_parent.json"),
+            include_str!("fixtures/docker/thread_stream.json"),
+        ),
+        (
+            include_str!("fixtures/docker/thread_messages_9.json"),
+            include_str!("fixtures/docker/thread_history_9.json"),
+            include_str!("fixtures/docker/thread_parent_9.json"),
+            include_str!("fixtures/docker/thread_stream_9.json"),
+        ),
+    ];
+
+    #[test]
+    fn thread_fields_map_from_the_docker_captures() {
+        let room = RoomId("r".to_string());
+        for (thread, history, parent, stream) in THREAD_FIXTURES {
+            // A parent: REST gives `tlm` as an ISO string.
+            let parent: crate::api::wire::MessageResp =
+                serde_json::from_str(parent).expect("parent");
+            let parent = message(&room, parent.message);
+            assert_eq!(parent.tmid, None);
+            assert_eq!(parent.tcount, 3);
+            assert!(parent.tlm.is_some_and(|t| t > 0));
+            assert!(parent.in_main_flow());
+
+            // The replies, oldest first; only the last was also sent to the channel.
+            let replies = docker_history(thread);
+            assert_eq!(replies.len(), 3);
+            let replies: Vec<Message> = replies.into_iter().map(|m| message(&room, m)).collect();
+            assert!(
+                replies
+                    .iter()
+                    .all(|r| r.tmid.as_deref() == Some(parent.id.as_str()))
+            );
+            assert_eq!(
+                replies.iter().map(|r| r.tshow).collect::<Vec<_>>(),
+                [false, false, true]
+            );
+            assert!(replies.windows(2).all(|w| w[0].ts <= w[1].ts));
+            assert_eq!(
+                replies
+                    .iter()
+                    .map(Message::in_main_flow)
+                    .collect::<Vec<_>>(),
+                [false, false, true]
+            );
+            assert!(replies.iter().all(|r| r.tcount == 0 && r.tlm.is_none()));
+
+            // History: the server already left out the plain replies; the plain message has no
+            // thread fields.
+            let history: Vec<Message> = docker_history(history)
+                .into_iter()
+                .map(|m| message(&room, m))
+                .collect();
+            let plain = history
+                .iter()
+                .find(|m| m.body.ends_with("plain"))
+                .expect("plain");
+            assert_eq!(
+                (plain.tmid.clone(), plain.tshow, plain.tcount, plain.tlm),
+                (None, false, 0, None)
+            );
+            assert!(history.iter().any(|m| m.id == replies[2].id && m.tshow));
+            assert!(!history.iter().any(|m| m.id == replies[0].id));
+
+            // The stream gives `tlm` as `{"$date": ms}` and the same fields on a reply.
+            let events: Vec<serde_json::Value> = serde_json::from_str(stream).expect("stream");
+            let mapped: Vec<Message> = events
+                .into_iter()
+                .map(|f| {
+                    let first = f["args"][0].clone();
+                    message(
+                        &room,
+                        serde_json::from_value(first).expect("stream message"),
+                    )
+                })
+                .collect();
+            let bumped: Vec<&Message> = mapped.iter().filter(|m| m.tcount > 0).collect();
+            assert_eq!(
+                bumped.iter().map(|m| m.tcount).collect::<Vec<_>>(),
+                [1, 2, 3]
+            );
+            assert!(bumped.iter().all(|m| m.tlm.is_some() && m.id == parent.id));
+            assert_eq!(bumped[2].tlm, parent.tlm);
+            let live_reply = mapped
+                .iter()
+                .find(|m| m.id == replies[0].id)
+                .expect("reply");
+            assert_eq!(live_reply.tmid.as_deref(), Some(parent.id.as_str()));
+            assert!(!live_reply.in_main_flow());
+        }
+    }
+
+    #[test]
+    fn an_empty_tmid_is_not_a_reply() {
+        let json = r#"{"_id":"m1","rid":"r","msg":"x","ts":"2026-11-17T10:00:00.123Z","u":{"username":"a"},"tmid":"","tcount":null}"#;
+        let m = message(&RoomId("r".into()), serde_json::from_str(json).unwrap());
+        assert!(m.tmid.is_none() && m.in_main_flow() && m.tcount == 0);
     }
 }

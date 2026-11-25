@@ -1,0 +1,25 @@
+{
+  "message": {
+    "_id": "ct8Ppen9ggfTSCX3A",
+    "rid": "6b07261fd7e9f5a602bb4170",
+    "msg": "thread capture parent",
+    "ts": "2026-11-25T18:17:15.420Z",
+    "u": {
+      "_id": "pgpQdxMiDbS5HZJBu",
+      "username": "dev",
+      "name": "Dev"
+    },
+    "_updatedAt": "2026-11-25T18:17:18.688Z",
+    "mentions": [],
+    "channels": [],
+    "urls": [],
+    "replies": [
+      "pgpQdxMiDbS5HZJBu",
+      "iSMfZiJ2QeRhgoCgM",
+      "9NCnvkooKeBwgLbcq"
+    ],
+    "tcount": 3,
+    "tlm": "2026-11-25T18:17:18.662Z"
+  },
+  "success": true
+}

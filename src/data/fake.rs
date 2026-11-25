@@ -112,6 +112,10 @@ fn messages(room: &str, count: usize) -> Vec<Message> {
             Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: format!("{room}-{n:03}"),
                 room_id: RoomId(room.to_string()),

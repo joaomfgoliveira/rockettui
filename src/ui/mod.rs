@@ -16,6 +16,7 @@ pub mod sanitize;
 pub mod sidebar;
 pub mod status;
 pub mod switcher;
+pub mod thread;
 pub mod timefmt;
 pub mod wrap;
 
@@ -38,9 +39,20 @@ pub fn view(frame: &mut Frame, app: &App) {
         frame.render_widget(Paragraph::new(notice), area);
         return;
     }
-    let areas = layout::areas(area, app.settings.sidebar_width, app.input_rows());
+    let areas = layout::areas_with_thread(
+        area,
+        app.settings.sidebar_width,
+        app.input_rows(),
+        app.thread.is_some(),
+    );
     sidebar::render(frame, areas.sidebar, app);
-    messages::render(frame, areas.messages, app);
+    // An open thread sits beside the message pane, or, on a narrow terminal, takes its place.
+    if !areas.thread_takes_over() {
+        messages::render(frame, areas.messages, app);
+    }
+    if let Some(pane) = areas.thread {
+        thread::render(frame, pane, app);
+    }
     input::render(frame, areas.input, app);
     results::render(frame, areas.messages, app);
     help::render(frame, areas.messages, app);
@@ -101,6 +113,10 @@ mod tests {
             Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "hostile-0".to_string(),
                 room_id: RoomId(id.0.clone()),

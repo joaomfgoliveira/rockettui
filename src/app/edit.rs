@@ -272,6 +272,10 @@ mod tests {
             send: SendState::Sent,
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
         }
     }
@@ -378,6 +382,10 @@ mod tests {
         };
         let attachment = Message {
             plain_text: false,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             ..row("x", OWN, "see [attachment: a.pdf]")
         };

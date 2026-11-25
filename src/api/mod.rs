@@ -291,6 +291,25 @@ impl fmt::Debug for SearchHits {
     }
 }
 
+/// One page of a thread's replies, oldest first, and the number of replies the thread has in all.
+#[derive(Clone, PartialEq)]
+pub struct ThreadPage {
+    pub messages: Vec<Message>,
+    pub total: u32,
+}
+
+/// Redacting `Debug`: the counts only, never the text.
+impl fmt::Debug for ThreadPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ThreadPage(<{} of {} messages>)",
+            self.messages.len(),
+            self.total
+        )
+    }
+}
+
 /// The room's history around one message, oldest first. `selected` is the index of that message;
 /// `newest_raw` is the raw timestamp of the newest message held, the `oldest` value of the page
 /// after the window; `reaches_newest` is true when nothing newer than the window exists;
@@ -510,6 +529,37 @@ impl Client {
         let request = self.http.get(self.endpoint("chat.search")).query(&params);
         let resp: wire::HistoryResp = read_json(request, ApiError::Rejected).await?;
         Ok(map::search_page(room, resp.messages))
+    }
+
+    /// One page of the replies of thread `tmid`: `GET chat.getThreadMessages` with `tmid`, `count`
+    /// and `offset`. Measured on 8.9.1 and 9.0.0: the replies come oldest first, `total` is the
+    /// whole thread, and the parent is not among them. A refused request is `ApiError::Rejected`
+    /// and no server text reaches the error.
+    pub async fn load_thread(
+        &self,
+        room: &RoomId,
+        tmid: &str,
+        offset: u32,
+        count: u16,
+    ) -> Result<ThreadPage, ApiError> {
+        let params = [
+            ("tmid", tmid.to_string()),
+            ("count", count.to_string()),
+            ("offset", offset.to_string()),
+        ];
+        let request = self
+            .http
+            .get(self.endpoint("chat.getThreadMessages"))
+            .query(&params);
+        let resp: wire::ThreadResp = read_json(request, ApiError::Rejected).await?;
+        Ok(ThreadPage {
+            messages: resp
+                .messages
+                .into_iter()
+                .map(|msg| map::message(room, msg))
+                .collect(),
+            total: resp.total,
+        })
     }
 
     /// One `*.history` request for the messages after `raw_ts` (`oldest`, exclusive), newest first
@@ -793,7 +843,7 @@ mod tests {
     use crate::effect::{self, Effect};
     use crate::test_util::render_to_string;
     use ratatui::layout::Size;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const SUBS: &str = include_str!("fixtures/subscriptions.json");
@@ -2097,6 +2147,10 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r".to_string()),
@@ -2490,6 +2544,10 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                tmid: None,
+                tshow: false,
+                tcount: 0,
+                tlm: None,
                 reactions: Vec::new(),
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),
@@ -2504,5 +2562,100 @@ mod tests {
         let shown = format!("{page:?}");
         assert!(!shown.contains("SENTINEL-BODY-7f3a"), "{shown}");
         assert!(shown.contains('1'));
+    }
+
+    #[tokio::test]
+    async fn load_thread_pages_by_offset_on_both_servers() {
+        for (full, page2, label) in [
+            (
+                include_str!("fixtures/docker/thread_messages.json"),
+                include_str!("fixtures/docker/thread_page2.json"),
+                "8.9.1",
+            ),
+            (
+                include_str!("fixtures/docker/thread_messages_9.json"),
+                include_str!("fixtures/docker/thread_page2_9.json"),
+                "9.0.0",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/chat.getThreadMessages"))
+                .and(header("X-User-Id", USER))
+                .and(header("X-Auth-Token", TOKEN))
+                .and(query_param("tmid", "parent-1"))
+                .and(query_param("count", "50"))
+                .and(query_param("offset", "0"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(full, "application/json"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/chat.getThreadMessages"))
+                .and(query_param("count", "2"))
+                .and(query_param("offset", "2"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(page2, "application/json"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = client_for(&server);
+            let room = RoomId("r1".to_string());
+
+            let all = client
+                .load_thread(&room, "parent-1", 0, 50)
+                .await
+                .expect(label);
+            assert_eq!((all.messages.len(), all.total), (3, 3), "{label}");
+            assert!(
+                all.messages
+                    .iter()
+                    .all(|m| m.tmid.is_some() && m.room_id == room)
+            );
+            assert!(
+                all.messages.windows(2).all(|w| w[0].ts <= w[1].ts),
+                "{label}"
+            );
+
+            let rest = client
+                .load_thread(&room, "parent-1", 2, 2)
+                .await
+                .expect(label);
+            assert_eq!((rest.messages.len(), rest.total), (1, 3), "{label}");
+            assert_eq!(rest.messages[0].id, all.messages[2].id, "{label}");
+            assert!(rest.messages[0].tshow, "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn load_thread_errors_carry_no_message_text() {
+        for (status, want) in [
+            (400, ApiError::Rejected),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (404, ApiError::NotFound),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/chat.getThreadMessages"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw(
+                    "{\"success\":false,\"error\":\"SENTINEL-THREAD-TEXT\"}",
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .load_thread(&RoomId("r1".to_string()), "SENTINEL-TMID", 0, 50)
+                .await
+                .expect_err("refused");
+            assert_eq!(error, want, "status {status}");
+            let shown = format!("{error:?} {error}");
+            assert!(!shown.contains("SENTINEL"), "{shown}");
+        }
+        let page = ThreadPage {
+            messages: vec![],
+            total: 4,
+        };
+        assert!(!format!("{page:?}").contains("body"));
     }
 }

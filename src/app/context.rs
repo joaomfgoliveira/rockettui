@@ -4,7 +4,7 @@
 //! the actions themselves use, so the popup does not promise an action that would be a silent
 //! no-op. Only built-in text is shown, never a message, an author or a room name.
 
-use crate::app::{App, Focus, Mode, edit, react, reactions, send, sidebar};
+use crate::app::{App, Focus, Mode, edit, react, reactions, send, sidebar, thread};
 use crate::input::actions::name_of;
 use crate::input::key::format_keys;
 
@@ -22,6 +22,8 @@ pub enum Kind {
     SearchResults,
     /// The context view of one search result.
     SearchContext,
+    /// The thread pane.
+    Thread,
     Nothing,
 }
 
@@ -38,6 +40,7 @@ impl Kind {
             Kind::Input => "Input bar",
             Kind::SearchResults => "Search results",
             Kind::SearchContext => "Search result in context",
+            Kind::Thread => "Thread",
             Kind::Nothing => "Nothing selected",
         }
     }
@@ -102,6 +105,15 @@ impl Kind {
                 ("half_page_down", "half a page down"),
                 ("half_page_up", "half a page up"),
             ],
+            Kind::Thread => &[
+                ("close_thread", "close the thread"),
+                ("move_down", "next message"),
+                ("move_up", "previous message"),
+                ("goto_top", "first message"),
+                ("goto_bottom", "last message"),
+                ("half_page_down", "half a page down"),
+                ("half_page_up", "half a page up"),
+            ],
             Kind::Header | Kind::Nothing => &[],
         }
     }
@@ -116,6 +128,11 @@ impl Kind {
         }
     }
 }
+
+/// The thread action: listed on a message that has a thread (replies, or a reply shown in the
+/// channel), first among the actions that depend on the message (`lines` places it). A test checks
+/// the name is a real action.
+const THREAD_ACTION: (&str, &str) = ("open_thread", "open the thread");
 
 /// The react action: listed on a message the user can react to, after the message's own actions
 /// and before the reactions row and the jumps (`lines` places it). Not part of `Kind::actions`
@@ -161,6 +178,7 @@ pub fn classify(app: &App) -> Kind {
             None => Kind::Nothing,
         },
         Focus::Input => Kind::Input,
+        Focus::Thread => Kind::Thread,
         Focus::Messages => {
             if send::unsent_under_cursor(app).is_some() {
                 Kind::UnsentMessage
@@ -212,6 +230,9 @@ pub fn lines(app: &App) -> Context {
         Kind::OwnMessage | Kind::UnsentMessage | Kind::OtherMessage
     );
     let mut message_actions: Vec<(&str, &str)> = Vec::new();
+    if is_message && thread::under_cursor(app).is_some() {
+        message_actions.push(THREAD_ACTION);
+    }
     if is_message && react::reactable_under_cursor(app) {
         message_actions.push(REACT_ACTION);
     }
@@ -243,6 +264,26 @@ pub fn lines(app: &App) -> Context {
                 keys,
                 desc: (*desc).to_string(),
             });
+        }
+    }
+    // `Esc` closes the focused thread pane: it is `cancel`, so every key bound to it counts with
+    // the keys of `close_thread` itself.
+    if kind == Kind::Thread {
+        let mut keys: Vec<String> = ["cancel", "close_thread"]
+            .iter()
+            .filter_map(|name| keys_for(app, name))
+            .collect();
+        keys.sort();
+        if let Some(row) = rows.iter_mut().find(|r| r.desc == "close the thread") {
+            row.keys = keys.join(" ");
+        } else {
+            rows.insert(
+                0,
+                ContextLine {
+                    keys: keys.join(" "),
+                    desc: "close the thread".to_string(),
+                },
+            );
         }
     }
     rows.extend(kind.fixed_rows().iter().map(|(keys, desc)| ContextLine {
@@ -542,6 +583,98 @@ mod tests {
         );
     }
 
+    /// `messages_app` with the one message turned into a thread parent with `replies` replies.
+    fn thread_app(replies: u32) -> App {
+        let mut app = messages_app("someone-else", SendState::Sent);
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0].tcount = replies;
+        app
+    }
+
+    #[test]
+    fn the_thread_row_is_on_a_parent_and_a_channel_visible_reply_only() {
+        let ctx = lines(&thread_app(3));
+        assert_eq!(descs(&ctx)[0], "open the thread");
+        assert_eq!(ctx.rows[0].keys, "gt");
+        // A reply also shown in the channel opens its parent's thread.
+        let mut app = thread_app(0);
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0].tmid = Some("parent".to_string());
+        assert_eq!(lines(&app).rows[0].desc, "open the thread");
+        // A plain message has none.
+        let ctx = lines(&thread_app(0));
+        assert!(
+            !descs(&ctx).contains(&"open the thread"),
+            "{:?}",
+            descs(&ctx)
+        );
+    }
+
+    #[test]
+    fn the_thread_row_follows_the_live_keymap() {
+        let app = messages_app_in(
+            app_with_config(config_from_keymap("[normal]\n\"gt\" = \"none\"\n"), 80, 24),
+            "someone-else",
+            SendState::Sent,
+        );
+        let mut app = app;
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0].tcount = 2;
+        assert!(
+            !descs(&lines(&app)).contains(&"open the thread"),
+            "an action with no key bound is left out"
+        );
+        // Rebound to another key, the row shows that key.
+        let mut app = messages_app_in(
+            app_with_config(
+                config_from_keymap("[normal]\n\"T\" = \"open_thread\"\n"),
+                80,
+                24,
+            ),
+            "someone-else",
+            SendState::Sent,
+        );
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0].tcount = 2;
+        assert_eq!(lines(&app).rows[0].keys, "T gt");
+    }
+
+    #[test]
+    fn the_pane_lists_closing_the_thread_with_esc() {
+        let mut app = thread_app(3);
+        app.focus = Focus::Thread;
+        let ctx = lines(&app);
+        assert_eq!(ctx.kind, Kind::Thread);
+        assert_eq!(ctx.rows[0].desc, "close the thread");
+        assert!(ctx.rows[0].keys.contains("<Esc>"), "{:?}", ctx.rows[0]);
+        assert!(!descs(&ctx).contains(&"open the thread"));
+        // A key bound to `close_thread` joins the list.
+        let mut app = thread_app(3);
+        app.keymap = app_with_config(
+            config_from_keymap("[normal]\n\"Q\" = \"close_thread\"\n"),
+            80,
+            24,
+        )
+        .keymap;
+        app.focus = Focus::Thread;
+        assert!(lines(&app).rows[0].keys.contains('Q'));
+    }
+
+    #[test]
+    fn the_thread_actions_are_real_described_actions() {
+        let (name, desc) = THREAD_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        for name in [name, "close_thread"] {
+            assert!(
+                crate::app::help::DESCRIPTIONS
+                    .iter()
+                    .any(|(n, _)| *n == name),
+                "{name} has no help description"
+            );
+        }
+    }
+
     #[test]
     fn the_react_action_is_a_real_described_action() {
         let (name, desc) = REACT_ACTION;
@@ -685,6 +818,7 @@ mod tests {
             Kind::UnsentMessage,
             Kind::OtherMessage,
             Kind::Input,
+            Kind::Thread,
             Kind::Nothing,
         ] {
             for (name, desc) in kind.actions() {

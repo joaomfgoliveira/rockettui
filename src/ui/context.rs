@@ -125,6 +125,25 @@ mod tests {
     }
 
     #[test]
+    fn context_thread_parent_80x24() {
+        let mut app = app_80x24();
+        let room = app.rooms[0].id.clone();
+        let mut m = crate::test_util::sample_message("m-ctx");
+        m.room_id = room.clone();
+        m.author = "alice".to_string();
+        m.ts = i64::MAX / 4;
+        m.tcount = 3;
+        app.messages.insert(room.clone(), vec![m]);
+        app.current_room = Some(room);
+        app.own_username = Some("me".to_string());
+        app.focus = crate::app::Focus::Messages;
+        press(&mut app, "?");
+        let out = render_to_string(&app, 80, 24);
+        assert!(out.contains("open the thread"), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
     fn context_smallest_size() {
         let mut app = app_80x24();
         app.size = ratatui::layout::Size::new(40, 8);

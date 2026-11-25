@@ -82,6 +82,17 @@ pub enum Effect {
         count: u16,
         before: Option<String>,
     },
+    /// One page of the replies of thread `parent_id` of `room` (`Client::load_thread`), `count` of
+    /// them from `offset`; with `fetch_parent` the parent message is fetched too (`chat.getMessage`),
+    /// for a thread whose parent the main flow does not hold. Answers `Action::ThreadLoaded` or
+    /// `Action::ThreadLoadFailed`, addressed by `room` and `parent_id`.
+    LoadThread {
+        room: RoomId,
+        parent_id: String,
+        offset: u32,
+        count: u16,
+        fetch_parent: bool,
+    },
     /// One page of the server search of `room`: `GET chat.search`, `count` results from `offset`.
     /// Answers `Action::SearchPage`, addressed by `room` and `search_id`. The query is a
     /// `SendText`, so `Debug` never prints it.
@@ -176,6 +187,17 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     older: before.is_some(),
                     error,
                 },
+                Effect::LoadThread {
+                    room,
+                    parent_id,
+                    offset,
+                    ..
+                } => Action::ThreadLoadFailed {
+                    room,
+                    parent_id,
+                    offset,
+                    error,
+                },
                 Effect::SearchRoom {
                     room,
                     search_id,
@@ -239,6 +261,37 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     older,
                 }],
                 Err(error) => vec![Action::HistoryFailed { room, older, error }],
+            }
+        }
+        Effect::LoadThread {
+            room,
+            parent_id,
+            offset,
+            count,
+            fetch_parent,
+        } => {
+            let replies = client.load_thread(&room, &parent_id, offset, count);
+            let parent = async {
+                if fetch_parent {
+                    client.get_message(&room, &parent_id).await.map(Some)
+                } else {
+                    Ok(None)
+                }
+            };
+            match tokio::join!(replies, parent) {
+                (Ok(page), Ok(parent)) => vec![Action::ThreadLoaded {
+                    room,
+                    parent_id,
+                    offset,
+                    parent,
+                    page,
+                }],
+                (Err(error), _) | (_, Err(error)) => vec![Action::ThreadLoadFailed {
+                    room,
+                    parent_id,
+                    offset,
+                    error,
+                }],
             }
         }
         Effect::SearchRoom {
@@ -1010,6 +1063,10 @@ mod tests {
         let pending = Message {
             edited: false,
             plain_text: true,
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
             reactions: Vec::new(),
             id: "rt-test-1".to_string(),
             room_id: general(),

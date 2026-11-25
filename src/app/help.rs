@@ -66,6 +66,11 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "react_message",
         "add or remove your reaction on the message under the cursor",
     ),
+    (
+        "open_thread",
+        "open the thread of the message under the cursor",
+    ),
+    ("close_thread", "close the thread pane"),
     ("switch_room", "switch to another room by name"),
     ("show_help", "show or close this help"),
     ("show_context", "show what the selected object can do"),
@@ -179,6 +184,36 @@ mod tests {
         assert!(has(&lines, "?", "show what the selected object can do"));
         assert!(has(&lines, "dd", "delete your message under the cursor"));
         assert!(has(&lines, "<C-d>", "half a page down"));
+    }
+
+    #[test]
+    fn the_thread_keys_are_listed_follow_the_keymap_and_close_has_no_default() {
+        let lines = build(&default_keymap());
+        assert!(has(
+            &lines,
+            "gt",
+            "open the thread of the message under the cursor"
+        ));
+        assert!(
+            !rows(&lines).iter().any(|(_, d)| d == "close the thread"),
+            "close_thread has no default key; Esc is `cancel`"
+        );
+        let config =
+            config_from_keymap("[normal]\n\"T\" = \"open_thread\"\n\"Q\" = \"close_thread\"\n");
+        let lines = build(&config.keymap);
+        assert!(has(
+            &lines,
+            "T",
+            "open the thread of the message under the cursor"
+        ));
+        assert!(has(
+            &lines,
+            "gt",
+            "open the thread of the message under the cursor"
+        ));
+        assert!(has(&lines, "Q", "close the thread pane"));
+        let config = config_from_keymap("[normal]\n\"gt\" = \"none\"\n");
+        assert!(!rows(&build(&config.keymap)).iter().any(|(k, _)| k == "gt"));
     }
 
     #[test]

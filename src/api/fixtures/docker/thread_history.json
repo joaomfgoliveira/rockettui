@@ -1,0 +1,111 @@
+{
+  "messages": [
+    {
+      "_id": "qibd44HoJuQ2oPdgb",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply three also in channel",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "tshow": true,
+      "ts": "2026-11-25T18:12:17.249Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:12:17.262Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "QgmKweJdAobgpNJzg",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture parent",
+      "ts": "2026-11-25T18:12:14.002Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:12:17.276Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "JjeoCMcSJnKcsJdxF",
+        "CRrQp2dFtHHufdb8F",
+        "bc5XePpJFuuJMQW2o"
+      ],
+      "tcount": 3,
+      "tlm": "2026-11-25T18:12:17.249Z"
+    },
+    {
+      "_id": "QNNSEGEC4PEdaGjmg",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture plain",
+      "ts": "2026-11-25T18:12:13.651Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T18:12:13.656Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "iokAmqYq3kinFrc57",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "demo: reactions below this one",
+      "ts": "2026-11-25T13:52:40.100Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T13:52:40.530Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "reactions": {
+        ":rtshipit:": {
+          "usernames": [
+            "dev"
+          ]
+        },
+        ":rtplain:": {
+          "usernames": [
+            "dev"
+          ]
+        },
+        ":rtspin:": {
+          "usernames": [
+            "dev"
+          ]
+        },
+        ":tada:": {
+          "usernames": [
+            "dev"
+          ]
+        }
+      }
+    },
+    {
+      "_id": "3iDjxsR6yEjCKwX5b",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "demo: an animated emoji :rtspin: and another :rtspin: next to a still one :rtshipit:",
+      "ts": "2026-11-25T13:52:39.728Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T13:52:39.747Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    }
+  ],
+  "success": true
+}

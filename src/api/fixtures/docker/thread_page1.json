@@ -1,0 +1,40 @@
+{
+  "messages": [
+    {
+      "_id": "hJpR8aJYGCTzP55ZM",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply one",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "ts": "2026-11-25T18:12:15.342Z",
+      "u": {
+        "_id": "CRrQp2dFtHHufdb8F",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T18:12:15.349Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "7rw4wgPbjYqLFRaMX",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "thread capture reply two",
+      "tmid": "QgmKweJdAobgpNJzg",
+      "ts": "2026-11-25T18:12:16.295Z",
+      "u": {
+        "_id": "bc5XePpJFuuJMQW2o",
+        "username": "bob",
+        "name": "Bob"
+      },
+      "_updatedAt": "2026-11-25T18:12:16.305Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    }
+  ],
+  "count": 2,
+  "offset": 0,
+  "total": 3,
+  "success": true
+}
