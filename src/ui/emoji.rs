@@ -46,6 +46,7 @@ const LEGACY: &[(&str, &str)] = &[
     ("slight_frown", "slightly_frowning_face"),
     ("upside_down", "upside_down_face"),
     ("white_frowning_face", "frowning_face"),
+    ("older_person", "older_adult"),
 ];
 
 /// The emoji a name stands for in the unicode table, the legacy map or the server's own names.
@@ -386,6 +387,7 @@ mod tests {
     #[test]
     fn legacy_emojione_names_resolve() {
         assert_eq!(resolve("slight_smile", &none()), "🙂");
+        assert_eq!(resolve("older_person", &none()), "🧓");
         assert_eq!(resolve("simple_smile", &none()), "🙂");
         assert_eq!(resolve("slight_frown", &none()), "🙁");
         assert_eq!(resolve("upside_down", &none()), "🙃");

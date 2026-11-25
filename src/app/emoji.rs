@@ -300,7 +300,10 @@ pub fn request_images(app: &mut App) {
             continue;
         }
         app.images.requested.insert(key);
-        if !matches!(emoji.ext.as_str(), "png" | "gif" | "webp") {
+        if !matches!(
+            emoji.ext.as_str(),
+            "png" | "gif" | "webp" | "jpeg" | "jpg" | "ico"
+        ) {
             // A format the client does not decode: the fallback, without a request.
             app.images.state.insert(
                 emoji.name.clone(),

@@ -1,7 +1,7 @@
 //! Custom emoji images: decoding what the server sends and keeping it on disk.
 //!
 //! The bytes are untrusted (a server, or whoever may upload an emoji to it, chose them), so
-//! everything here is defensive: only png, gif and webp are read, the dimensions come from the
+//! everything here is defensive: only png, gif, webp, jpeg and ico are read, the dimensions come from the
 //! header and are checked before any pixel is decoded, an animated image gives its first frame, and
 //! nothing here panics or formats the bytes, a name or a path into an error.
 //!
@@ -22,7 +22,7 @@ pub const SHRINK_TO: u32 = 128;
 /// Why an image was not used. No payload: nothing about the bytes is kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageError {
-    /// Not a png, gif or webp, or the bytes do not decode.
+    /// Not a png, gif, webp, jpeg or ico, or the bytes do not decode.
     Bad,
     /// Larger than `MAX_SIDE` on a side (read from the header, nothing was decoded).
     TooBig,
@@ -111,14 +111,20 @@ const MIN_DELAY_MS: u32 = 20;
 /// What a frame with no delay shows for.
 const DEFAULT_DELAY_MS: u32 = 100;
 
-/// Decode `bytes` as a png, gif or webp image, its first frame only.
+/// Decode `bytes` as a png, gif, webp, jpeg or ico image, its first frame only.
 pub fn decode(bytes: &[u8]) -> Result<Rgba, ImageError> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|_| ImageError::Bad)?;
     if !matches!(
         reader.format(),
-        Some(ImageFormat::Png | ImageFormat::Gif | ImageFormat::WebP)
+        Some(
+            ImageFormat::Png
+                | ImageFormat::Gif
+                | ImageFormat::WebP
+                | ImageFormat::Jpeg
+                | ImageFormat::Ico
+        )
     ) {
         return Err(ImageError::Bad);
     }
@@ -226,7 +232,7 @@ pub fn cache_dir(
 /// set becomes `~` plus its code, so two different names cannot share a file. `None` for an
 /// extension that is not a decoded format.
 pub fn cache_file_name(name: &str, etag: &str, ext: &str) -> Option<String> {
-    if !matches!(ext, "png" | "gif" | "webp") {
+    if !matches!(ext, "png" | "gif" | "webp" | "jpeg" | "jpg" | "ico") {
         return None;
     }
     let safe = |s: &str| {
@@ -331,6 +337,35 @@ mod tests {
             Err(ImageError::TooBig)
         );
         assert!(decode(&png(MAX_SIDE, 1, [0; 4])).is_ok());
+    }
+
+    #[test]
+    fn a_jpeg_decodes() {
+        // Server emojis are sometimes jpegs (`.jpeg` extension).
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 30, 30]));
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut out)
+            .encode_image(&img)
+            .expect("encode");
+        let got = decode(&out).expect("decodes");
+        assert_eq!((got.width, got.height), (8, 8));
+        assert_eq!(got.pixels[3], 255, "opaque");
+    }
+
+    #[test]
+    fn an_ico_decodes() {
+        // Server emojis are sometimes icons (`.ico` extension).
+        let rgba = vec![10u8, 200, 30, 255].repeat(16 * 16);
+        let mut out = Vec::new();
+        image::codecs::ico::IcoEncoder::new(&mut out)
+            .write_image(&rgba, 16, 16, image::ExtendedColorType::Rgba8)
+            .expect("encode");
+        let got = decode(&out).expect("decodes");
+        assert_eq!((got.width, got.height), (16, 16));
+        assert_eq!(
+            cache_file_name("pminds", "e", "ico").as_deref(),
+            Some("pminds@e.ico")
+        );
     }
 
     #[test]

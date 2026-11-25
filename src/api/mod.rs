@@ -748,7 +748,7 @@ impl Client {
             && name != ".."
             && !name.contains(['/', '\\', '?', '#', '%'])
             && !name.chars().any(char::is_control);
-        if !safe_name || !matches!(ext, "png" | "gif" | "webp") {
+        if !safe_name || !matches!(ext, "png" | "gif" | "webp" | "jpeg" | "jpg" | "ico") {
             return Err(ApiError::BadResponse);
         }
         let mut url = self.base.clone();
