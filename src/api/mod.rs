@@ -207,6 +207,19 @@ struct SendMsg<'a> {
     id: &'a str,
     rid: &'a str,
     msg: &'a str,
+    /// The parent of the thread this message replies to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmid: Option<&'a str>,
+    /// A thread reply that is also shown in the channel.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tshow: bool,
+}
+
+/// The thread a sent message replies to: its parent's id and whether it is also shown in the channel.
+#[derive(Clone, Copy)]
+pub struct ThreadTarget<'a> {
+    pub parent_id: &'a str,
+    pub also_in_channel: bool,
 }
 
 /// The body of `chat.update`: the room id, the message id and the new text. Built from `Serialize`
@@ -711,12 +724,15 @@ impl Client {
         room: &RoomId,
         id: &str,
         text: &str,
+        thread: Option<ThreadTarget<'_>>,
     ) -> Result<Message, ApiError> {
         let body = SendBody {
             message: SendMsg {
                 id,
                 rid: &room.0,
                 msg: text,
+                tmid: thread.map(|t| t.parent_id),
+                tshow: thread.is_some_and(|t| t.also_in_channel),
             },
         };
         let request = self
@@ -1175,7 +1191,7 @@ mod tests {
             .await;
         let room = RoomId("r-general".to_string());
         let message = client_for(&server)
-            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .send_message(&room, "rt-test-1", SEND_TEXT, None)
             .await
             .expect("send works");
         assert_eq!(message.id, "rt-test-1");
@@ -1192,6 +1208,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_thread_reply_carries_tmid_and_tshow_only_when_set() {
+        let room = RoomId("r-general".to_string());
+        for (also, expected) in [
+            (
+                false,
+                serde_json::json!({"message": {
+                    "_id": "rt-test-1", "rid": "r-general", "msg": "hi", "tmid": "parent-1"
+                }}),
+            ),
+            (
+                true,
+                serde_json::json!({"message": {
+                    "_id": "rt-test-1", "rid": "r-general", "msg": "hi",
+                    "tmid": "parent-1", "tshow": true
+                }}),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/chat.sendMessage"))
+                .and(wiremock::matchers::body_json(expected))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(send_answer("rt-test-1", "hi"), "application/json"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let thread = ThreadTarget {
+                parent_id: "parent-1",
+                also_in_channel: also,
+            };
+            client_for(&server)
+                .send_message(&room, "rt-test-1", "hi", Some(thread))
+                .await
+                .expect("a reply is sent");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_thread_reply_is_a_rejection() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("{\"success\":false}"))
+            .mount(&server)
+            .await;
+        let thread = ThreadTarget {
+            parent_id: "gone",
+            also_in_channel: false,
+        };
+        let error = client_for(&server)
+            .send_message(&RoomId("r-general".to_string()), "x", "hi", Some(thread))
+            .await
+            .expect_err("rejected");
+        assert_eq!(error, ApiError::Rejected);
+    }
+
+    #[tokio::test]
     async fn send_message_errors() {
         let room = RoomId("r-general".to_string());
         let server = MockServer::start().await;
@@ -1200,7 +1274,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = client_for(&server)
-            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .send_message(&room, "rt-test-1", SEND_TEXT, None)
             .await
             .expect_err("401 fails");
         assert_eq!(error, ApiError::Unauthorized);
@@ -1223,7 +1297,7 @@ mod tests {
             .mount(&origin)
             .await;
         let error = client_for(&origin)
-            .send_message(&room, "rt-test-1", SEND_TEXT)
+            .send_message(&room, "rt-test-1", SEND_TEXT, None)
             .await
             .expect_err("307 fails");
         assert_eq!(error, ApiError::Redirected);
@@ -1239,7 +1313,7 @@ mod tests {
             .mount(&server)
             .await;
         client_for(&server)
-            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi", None)
             .await
             .expect_err("a non-2xx status fails")
     }
@@ -1271,7 +1345,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = client_for(&server)
-            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi", None)
             .await
             .expect_err("an undecodable answer fails");
         assert_eq!(error, ApiError::BadResponse);
@@ -1289,7 +1363,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = quick_client(&server.uri())
-            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi", None)
             .await
             .expect_err("the request times out");
         assert_eq!(error, ApiError::Timeout);
@@ -1786,7 +1860,7 @@ mod tests {
         let (url, handle) = dropping_server();
         let error = Client::new(&connection(&url, USER, TOKEN))
             .expect("client")
-            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi")
+            .send_message(&RoomId("r-general".to_string()), "rt-test-1", "hi", None)
             .await
             .expect_err("the connection is dropped");
         handle.join().expect("server thread");

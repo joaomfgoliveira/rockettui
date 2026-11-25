@@ -1,7 +1,8 @@
 //! Input pane: the multiline draft with its view window, an empty-state hint and the hardware
 //! cursor rules (D-14, D-18).
 
-use crate::app::{App, Focus, Mode};
+use crate::app::input_buf::InputBuffer;
+use crate::app::{App, Focus, InputTarget, Mode};
 use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
@@ -13,50 +14,106 @@ use ratatui::widgets::Paragraph;
 /// input bar is focused (so the D-18 motions are visible), nowhere otherwise. Command mode keeps
 /// its cursor on the command line (`status::cmdline_cursor`).
 pub fn cursor_position(app: &App, area: Rect) -> Option<Position> {
+    cursor_in(app, area, &app.input)
+}
+
+fn cursor_in(app: &App, area: Rect, buffer: &InputBuffer) -> Option<Position> {
     let editing =
         app.mode == Mode::Insert || (app.mode == Mode::Normal && app.focus == Focus::Input);
     let inner = pane_block("", false, &app.theme).inner(area);
     if !editing || inner.width == 0 || inner.height == 0 {
         return None;
     }
-    let (x, y) = app.input.cursor_visual(inner.width);
-    let top = u16::try_from(app.input.view_top(inner.width, inner.height)).unwrap_or(u16::MAX);
+    let (x, y) = buffer.cursor_visual(inner.width);
+    let top = u16::try_from(buffer.view_top(inner.width, inner.height)).unwrap_or(u16::MAX);
     Some(Position::new(
         inner.x + x.min(inner.width - 1),
         inner.y + y.saturating_sub(top).min(inner.height - 1),
     ))
 }
 
+/// The room's input bar. While the thread has a bar of its own and the live text is the thread's,
+/// this one shows the room's draft and is not the one being edited.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let title = if app.editing.is_some() {
-        " Editing: Enter saves, Esc cancels "
+    let live = !app.thread_bar_is_live();
+    let title = if live && app.editing.is_some() {
+        " Editing: Enter saves, Esc cancels ".to_string()
+    } else if live && app.input_target != InputTarget::Room {
+        // One shared bar (the thread takes the messages' place): say where the text goes.
+        reply_title(&app.input_target)
     } else {
-        " Input "
+        " Input ".to_string()
     };
-    let block = pane_block(title, app.focus == Focus::Input, &app.theme);
+    bar(frame, area, app, app.room_bar_buffer(), &title, live);
+}
+
+/// The thread's own input bar, under the thread pane.
+pub fn render_thread(frame: &mut Frame, area: Rect, app: &App) {
+    let live = app.thread_bar_is_live();
+    let target = if live {
+        app.input_target.clone()
+    } else {
+        InputTarget::Room
+    };
+    let title = if live && app.editing.is_some() {
+        " Editing: Enter saves, Esc cancels ".to_string()
+    } else if live {
+        reply_title(&target)
+    } else {
+        " Reply ".to_string()
+    };
+    bar(frame, area, app, app.thread_bar_buffer(), &title, live);
+}
+
+/// The title of a bar whose text is a thread reply, with the also-in-channel state.
+fn reply_title(target: &InputTarget) -> String {
+    match target {
+        InputTarget::Thread {
+            also_in_channel: true,
+            ..
+        } => " Reply in thread, also to channel ".to_string(),
+        _ => " Reply in thread ".to_string(),
+    }
+}
+
+/// Draw one bar. `live` is true when the bar shows the text being edited: only that one takes the
+/// focus border and the hardware cursor.
+fn bar(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    buffer: Option<&InputBuffer>,
+    title: &str,
+    live: bool,
+) {
+    let focused = live && app.focus == Focus::Input;
+    let block = pane_block(title, focused, &app.theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    if app.input.is_empty() && app.mode != Mode::Insert {
-        let hint = Line::styled("press i to write", app.theme.input_hint);
-        frame.render_widget(Paragraph::new(hint), inner);
-    } else {
-        let top = app.input.view_top(inner.width, inner.height);
-        // The buffer is already sanitized; drawing through sanitize_line keeps the every-renderer
-        // rule of T-01-01 and leaves the cursor math untouched.
-        let rows: Vec<Line> = app
-            .input
-            .visual_rows(inner.width)
-            .iter()
-            .skip(top)
-            .take(usize::from(inner.height))
-            .map(|row| Line::styled(sanitize_line(row).into_owned(), app.theme.input_text))
-            .collect();
-        frame.render_widget(Paragraph::new(rows), inner);
+    match buffer.filter(|b| !b.is_empty()) {
+        Some(buffer) => {
+            let top = buffer.view_top(inner.width, inner.height);
+            // The buffer is already sanitized; drawing through sanitize_line keeps the
+            // every-renderer rule of T-01-01 and leaves the cursor math untouched.
+            let rows: Vec<Line> = buffer
+                .visual_rows(inner.width)
+                .iter()
+                .skip(top)
+                .take(usize::from(inner.height))
+                .map(|row| Line::styled(sanitize_line(row).into_owned(), app.theme.input_text))
+                .collect();
+            frame.render_widget(Paragraph::new(rows), inner);
+        }
+        None if live && app.mode == Mode::Insert => {}
+        None => {
+            let hint = Line::styled("press i to write", app.theme.input_hint);
+            frame.render_widget(Paragraph::new(hint), inner);
+        }
     }
-    if let Some(pos) = cursor_position(app, area) {
+    if live && let Some(pos) = cursor_in(app, area, &app.input) {
         frame.set_cursor_position(pos);
     }
 }

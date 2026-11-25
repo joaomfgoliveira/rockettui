@@ -53,7 +53,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let v = thread::view(app);
-    let ctx = app.row_ctx(msgs);
+    let ctx = app.thread_row_ctx(msgs);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
     for (i, msg) in msgs.iter().enumerate() {
@@ -175,6 +175,65 @@ mod tests {
             out.contains("before the thread"),
             "the message pane is still drawn: {out}"
         );
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn each_pane_has_its_own_input_bar_beside_the_messages() {
+        let mut app = app_with_thread(160, 24);
+        app.focus = Focus::Thread;
+        press(&mut app, "ia thread reply<C-b>");
+        let out = render_to_string(&app, 160, 24);
+        assert!(out.contains("Reply in thread, also to channel"), "{out}");
+        assert!(out.contains("a thread reply"), "{out}");
+        assert!(out.contains("Input"), "the room bar stays: {out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn the_room_draft_and_the_thread_draft_show_at_once() {
+        let mut app = app_with_thread(160, 24);
+        app.focus = Focus::Messages;
+        press(&mut app, "iroom draft<Esc>");
+        app.focus = Focus::Thread;
+        press(&mut app, "ithread draft<Esc>");
+        let out = render_to_string(&app, 160, 24);
+        assert!(out.contains("room draft"), "{out}");
+        assert!(out.contains("thread draft"), "{out}");
+    }
+
+    #[test]
+    fn one_shared_bar_names_the_thread_when_it_takes_the_pane_at_80_columns() {
+        let mut app = app_with_thread(80, 24);
+        app.focus = Focus::Thread;
+        press(&mut app, "ihi");
+        let out = render_to_string(&app, 80, 24);
+        assert!(out.contains("Reply in thread"), "{out}");
+        assert!(!out.contains("Input"), "{out}");
+    }
+
+    #[test]
+    fn a_failed_reply_is_drawn_in_the_pane_with_the_failed_marker() {
+        let mut app = app_with_thread(160, 24);
+        app.focus = Focus::Thread;
+        press(&mut app, "inot delivered<CR>");
+        let id = app
+            .thread
+            .as_ref()
+            .and_then(|p| p.messages.last())
+            .map(|m| m.id.clone())
+            .expect("the pending reply");
+        update(
+            &mut app,
+            Action::SendFailed {
+                room: RoomId("quiet".to_string()),
+                id,
+                error: crate::api::ApiError::Rejected,
+            },
+        );
+        let out = render_to_string(&app, 160, 24);
+        assert!(out.contains("not delivered"), "{out}");
+        assert!(out.contains(&app.theme.markers.failed), "{out}");
         insta::assert_snapshot!(out);
     }
 

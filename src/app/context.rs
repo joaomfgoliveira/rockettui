@@ -107,6 +107,7 @@ impl Kind {
             ],
             Kind::Thread => &[
                 ("close_thread", "close the thread"),
+                ("reply_in_thread", "reply in this thread"),
                 ("move_down", "next message"),
                 ("move_up", "previous message"),
                 ("goto_top", "first message"),
@@ -133,6 +134,11 @@ impl Kind {
 /// channel), first among the actions that depend on the message (`lines` places it). A test checks
 /// the name is a real action.
 const THREAD_ACTION: (&str, &str) = ("open_thread", "open the thread");
+
+/// The reply action: listed on a message that can be replied to (not a system message, not a
+/// deleted one, not one still being sent), right after the thread action. A test checks the name is
+/// a real action.
+const REPLY_ACTION: (&str, &str) = ("reply_in_thread", "reply in its thread");
 
 /// The react action: listed on a message the user can react to, after the message's own actions
 /// and before the reactions row and the jumps (`lines` places it). Not part of `Kind::actions`
@@ -232,6 +238,9 @@ pub fn lines(app: &App) -> Context {
     let mut message_actions: Vec<(&str, &str)> = Vec::new();
     if is_message && thread::under_cursor(app).is_some() {
         message_actions.push(THREAD_ACTION);
+    }
+    if is_message && thread::replyable_under_cursor(app) {
+        message_actions.push(REPLY_ACTION);
     }
     if is_message && react::reactable_under_cursor(app) {
         message_actions.push(REACT_ACTION);
@@ -394,6 +403,7 @@ mod tests {
             [
                 "edit the message",
                 "delete the message",
+                "reply in its thread",
                 "add or remove your reaction",
                 "jump to the oldest message",
                 "jump to the newest message",
@@ -404,12 +414,13 @@ mod tests {
         );
         assert_eq!(ctx.rows[0].keys, "e");
         assert_eq!(ctx.rows[1].keys, "dd");
-        assert_eq!(ctx.rows[2].keys, "+");
-        assert_eq!(ctx.rows[3].keys, "gg");
-        assert_eq!(ctx.rows[4].keys, "G");
-        assert_eq!(ctx.rows[5].keys, "/");
-        assert_eq!(ctx.rows[6].keys, "n");
-        assert_eq!(ctx.rows[7].keys, "N");
+        assert_eq!(ctx.rows[2].keys, "gR");
+        assert_eq!(ctx.rows[3].keys, "+");
+        assert_eq!(ctx.rows[4].keys, "gg");
+        assert_eq!(ctx.rows[5].keys, "G");
+        assert_eq!(ctx.rows[6].keys, "/");
+        assert_eq!(ctx.rows[7].keys, "n");
+        assert_eq!(ctx.rows[8].keys, "N");
     }
 
     #[test]
@@ -448,6 +459,7 @@ mod tests {
         assert_eq!(
             descs(&ctx),
             [
+                "reply in its thread",
                 "add or remove your reaction",
                 "show who reacted",
                 "jump to the oldest message",
@@ -457,8 +469,9 @@ mod tests {
                 "previous match, newer"
             ]
         );
-        assert_eq!(ctx.rows[0].keys, "+");
-        assert_eq!(ctx.rows[1].keys, "gr");
+        assert_eq!(ctx.rows[0].keys, "gR");
+        assert_eq!(ctx.rows[1].keys, "+");
+        assert_eq!(ctx.rows[2].keys, "gr");
     }
 
     #[test]
@@ -472,9 +485,9 @@ mod tests {
             [
                 "edit the message",
                 "delete the message",
+                "reply in its thread",
                 "add or remove your reaction",
-                "show who reacted",
-                "jump to the oldest message"
+                "show who reacted"
             ]
         );
     }
@@ -502,7 +515,7 @@ mod tests {
         let mut app = messages_app_in(rebound, "someone-else", SendState::Sent);
         react(&mut app);
         // Both the new key and the preset key are bound; every key is listed, sorted.
-        assert_eq!(lines(&app).rows[1].keys, "R gr");
+        assert_eq!(lines(&app).rows[2].keys, "R gr");
 
         let unbound = app_with_config(config_from_keymap("[normal]\n\"gr\" = \"none\"\n"), 80, 24);
         let mut app = messages_app_in(unbound, "someone-else", SendState::Sent);
@@ -665,7 +678,7 @@ mod tests {
         let (name, desc) = THREAD_ACTION;
         assert!(ACTION_NAMES.contains(&name));
         assert!(!desc.is_empty());
-        for name in [name, "close_thread"] {
+        for name in [name, REPLY_ACTION.0, "close_thread"] {
             assert!(
                 crate::app::help::DESCRIPTIONS
                     .iter()
@@ -709,6 +722,7 @@ mod tests {
         assert_eq!(
             descs(&ctx),
             [
+                "reply in its thread",
                 "add or remove your reaction",
                 "jump to the oldest message",
                 "jump to the newest message",

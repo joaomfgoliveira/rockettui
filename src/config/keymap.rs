@@ -680,6 +680,41 @@ mod tests {
     }
 
     #[test]
+    fn thread_reply_actions_default_rebind_unbind_and_unknown_spelling() {
+        let is = |keymap: &Keymap, mode: Mode, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(mode, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(
+                is(&keymap, Mode::Normal, "gR", Action::ReplyInThread),
+                "{preset:?}"
+            );
+            assert!(
+                is(&keymap, Mode::Insert, "<C-b>", Action::ToggleReplyToChannel),
+                "{preset:?}"
+            );
+            assert!(is(&keymap, Mode::Normal, "gr", Action::ShowReactions));
+        }
+        let src = "[normal]\n\"<C-r>\" = \"reply_in_thread\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, Mode::Normal, "<C-r>", Action::ReplyInThread));
+        assert!(is(&keymap, Mode::Normal, "gR", Action::ReplyInThread));
+        let src = "[insert]\n\"<C-b>\" = \"none\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        assert_eq!(lookup_kind(&built(src), Mode::Insert, "<C-b>"), "none");
+        for wrong in ["reply_thread", "toggle_reply"] {
+            let found = errors(&format!("[normal]\n\"<C-r>\" = \"{wrong}\"\n"));
+            assert_eq!(found.len(), 1, "{wrong}: {found:?}");
+            assert!(found[0].message.contains(wrong), "{found:?}");
+        }
+    }
+
+    #[test]
     fn react_message_default_rebind_unbind_and_unknown_spelling() {
         let is = |keymap: &Keymap, keys: &str, want: Action| {
             matches!(
@@ -765,17 +800,19 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
         // Unbinding all of them leaves nothing: g is no longer a prefix.
-        let keymap = built("[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\n");
+        let keymap =
+            built("[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gt"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gR"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "none");
     }
 
     #[test]
     fn none_gg_then_bind_g() {
         // TOML iterates `g` before `gg`; the result must not depend on it.
-        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ng = \"goto_top\"\n";
+        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ng = \"goto_top\"\n";
         assert!(errors(src).is_empty(), "{:?}", problems(src));
         let keymap = built(src);
         let g = parse_keys("g").unwrap();
@@ -788,9 +825,9 @@ mod tests {
 
     #[test]
     fn prefix_clash_names_both() {
-        // `g` is the prefix of three default bindings, `gg`, `gr` and `gt`: one error for each.
+        // `g` is the prefix of four default bindings, `gg`, `gr`, `gt` and `gR`: one error for each.
         let found = errors("[normal]\ng = \"goto_top\"\n");
-        assert_eq!(found.len(), 3, "{found:?}");
+        assert_eq!(found.len(), 4, "{found:?}");
         assert_eq!(line_of(&found[0]), Some(2));
         assert!(found.iter().all(|p| p.message.contains("`g`")), "{found:?}");
         assert!(
@@ -807,8 +844,8 @@ mod tests {
         );
         // Unbinding one of them is not enough; unbinding all resolves it.
         let half = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
-        assert_eq!(errors(half).len(), 2);
-        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\n";
+        assert_eq!(errors(half).len(), 3);
+        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\n";
         assert!(errors(resolved).is_empty());
     }
 

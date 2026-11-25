@@ -7,7 +7,7 @@ expression: out
 │> * #general              │┃00:01 alice  deploy plan: who takes the rollback? ┃
 │  * &dev-team             │┃             -> 2 replies, last 00:11             ┃
 │  * @alice                │┃00:02 bob    I can take it                        ┃
-│  Folders                 │┃00:11 alice  [thread] thanks, done                ┃
+│  Folders                 │┃00:11 alice  thanks, done                         ┃
 │  ▾ Work (1)              │┃                                                  ┃
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┃                                                  ┃

@@ -234,7 +234,11 @@ fn reduce(app: &mut App, action: Action) {
                 Focus::Messages
             }
         }
-        Action::FocusDown => app.focus = Focus::Input,
+        Action::FocusDown => {
+            // Going down from the thread pane lands in the thread's input bar.
+            thread::retarget(app, thread::target_for_focus(app));
+            app.focus = Focus::Input;
+        }
         // Like the absolute targets above, the cycle acts in any mode it is bound in (A28).
         Action::FocusNext => app.focus = cycle_focus(app, true),
         Action::FocusPrev => app.focus = cycle_focus(app, false),
@@ -262,6 +266,7 @@ fn reduce(app: &mut App, action: Action) {
         },
         Action::EnterInsert => {
             if app.mode == Mode::Normal {
+                thread::retarget(app, thread::target_for_focus(app));
                 app.prev_focus = app.focus;
                 app.focus = Focus::Input;
                 app.mode = Mode::Insert;
@@ -316,6 +321,8 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowContext => app.context = true,
         Action::ShowReactions => reactions::open(app),
         Action::OpenThread => thread::open(app),
+        Action::ReplyInThread => thread::start_reply(app),
+        Action::ToggleReplyToChannel => thread::toggle_also_in_channel(app),
         Action::CloseThread => thread::close(app),
         Action::ReactMessage => react::open(app),
         Action::SwitchRoom => switcher::open(app),

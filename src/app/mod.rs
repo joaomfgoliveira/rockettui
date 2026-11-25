@@ -49,6 +49,54 @@ impl Mode {
     }
 }
 
+/// What a draft belongs to: a room's input, or the reply being written to one of its threads
+/// (`thread-reply`). In memory only, like the draft text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DraftKey {
+    pub room: RoomId,
+    /// The parent message of the thread, or `None` for the room's own input.
+    pub thread: Option<String>,
+}
+
+impl DraftKey {
+    /// The key of a room's own draft.
+    pub fn room(room: RoomId) -> Self {
+        Self { room, thread: None }
+    }
+}
+
+/// Where the text of the input bar goes when it is sent (`thread-reply`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InputTarget {
+    /// The open room's main flow.
+    #[default]
+    Room,
+    /// A reply to the open thread whose parent message is `parent_id`.
+    Thread {
+        parent_id: String,
+        /// The reply is also shown in the channel. Off for every new reply and every new target.
+        also_in_channel: bool,
+    },
+}
+
+impl InputTarget {
+    /// A reply to `parent_id`, not shown in the channel.
+    pub fn thread(parent_id: String) -> Self {
+        Self::Thread {
+            parent_id,
+            also_in_channel: false,
+        }
+    }
+
+    /// The parent of the thread the text goes to, when it goes to one.
+    pub fn parent_id(&self) -> Option<&str> {
+        match self {
+            Self::Room => None,
+            Self::Thread { parent_id, .. } => Some(parent_id),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Sidebar,
@@ -127,7 +175,14 @@ pub struct App {
     /// never written to disk; a draft leaves here only through `open_room` (back into `input`) and
     /// is sent only by Enter in its own room. An empty draft is not stored. `InputBuffer`'s `Debug`
     /// redacts the text.
-    pub drafts: HashMap<RoomId, input_buf::InputBuffer>,
+    pub drafts: HashMap<DraftKey, input_buf::InputBuffer>,
+    /// Where `input` goes when sent. Set when Insert mode starts from the thread pane, kept over
+    /// `Esc`, and reset to the room when the pane closes or another room opens, so `input` always
+    /// holds the draft of the target (`app::thread::retarget` swaps the buffers).
+    pub input_target: InputTarget,
+    /// Thread replies that are not `Sent` and whose pane is closed, so they still go out in order
+    /// and show again when their thread is reopened. `app::thread` moves them in and out.
+    pub outbox: Vec<Message>,
     /// The client id of a send whose row was confirmed `Sent` by an incoming server copy (a
     /// realtime echo or a history page, D-21) while its POST had not answered yet. The entry keeps
     /// that room's single in-flight slot occupied until the request's own `MessageSent` or
@@ -251,6 +306,8 @@ impl App {
             cmdline: String::new(),
             input: input_buf::InputBuffer::new(),
             drafts: HashMap::new(),
+            input_target: InputTarget::Room,
+            outbox: Vec::new(),
             awaiting_answer: HashMap::new(),
             local_seq: 0,
             id_prefix: "local-".to_string(),
@@ -309,8 +366,42 @@ impl App {
             area,
             self.settings.sidebar_width,
             self.input_rows(),
+            self.thread_input_rows(),
             self.thread.is_some(),
         )
+    }
+
+    /// True when the thread sits beside the messages and so has an input bar of its own.
+    pub fn thread_has_own_input(&self) -> bool {
+        self.thread.is_some() && self.size.width >= crate::ui::layout::THREAD_SPLIT_MIN_WIDTH
+    }
+
+    /// The draft shown in the room's input bar, when there is one. While the thread has an input
+    /// bar of its own the room's bar shows the room draft even when the live text is the thread's;
+    /// with one shared bar it shows the live text whatever it is aimed at.
+    pub fn room_bar_buffer(&self) -> Option<&input_buf::InputBuffer> {
+        if self.thread_has_own_input() && self.input_target != InputTarget::Room {
+            let room = self.current_room.clone()?;
+            return self.drafts.get(&DraftKey::room(room));
+        }
+        Some(&self.input)
+    }
+
+    /// The draft shown in the thread's own input bar: `None` when it has no draft.
+    pub fn thread_bar_buffer(&self) -> Option<&input_buf::InputBuffer> {
+        if self.input_target != InputTarget::Room {
+            return Some(&self.input);
+        }
+        let pane = self.thread.as_ref()?;
+        self.drafts.get(&DraftKey {
+            room: pane.room.clone(),
+            thread: Some(pane.parent_id.clone()),
+        })
+    }
+
+    /// True when the live text is shown in the thread's own bar (and so is the one being edited).
+    pub fn thread_bar_is_live(&self) -> bool {
+        self.thread_has_own_input() && self.input_target != InputTarget::Room
     }
 
     /// What the drawing of custom emojis reads: the list, the images and the terminal's support.
@@ -344,7 +435,15 @@ impl App {
             emoji: self.emoji_view(),
             own_user: self.own_username.as_deref(),
             unread_before: None,
+            in_thread: false,
         }
+    }
+
+    /// `row_ctx` for the thread pane: the same, with replies drawn without the channel tag.
+    pub fn thread_row_ctx(&self, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
+        let mut ctx = self.row_ctx(msgs);
+        ctx.in_thread = true;
+        ctx
     }
 
     /// `row_ctx` for the messages pane of `room`: the same, plus the message the `unread` divider
@@ -373,28 +472,49 @@ impl App {
             .unwrap_or(0)
     }
 
-    /// Rows the input bar occupies: the draft's visual rows, from 1 up to `MAX_INPUT_ROWS`.
+    /// Content rows of the room's input bar: its draft's visual rows, from 1 up to
+    /// `MAX_INPUT_ROWS`.
     pub fn input_rows(&self) -> u16 {
-        let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
-        // The input pane's width does not depend on its own height.
-        let width = crate::ui::layout::areas_with_thread(
-            area,
-            self.settings.sidebar_width,
-            1,
-            self.thread.is_some(),
-        )
-        .input
-        .width
-        .saturating_sub(2);
-        let rows = self.input.visual_row_count(width);
+        let width = self.probe_areas().input.width.saturating_sub(2);
+        Self::rows_of(self.room_bar_buffer(), width)
+    }
+
+    /// Content rows of the thread's own input bar, 1 while it has none.
+    pub fn thread_input_rows(&self) -> u16 {
+        let Some(bar) = self.probe_areas().thread_input else {
+            return 1;
+        };
+        Self::rows_of(self.thread_bar_buffer(), bar.width.saturating_sub(2))
+    }
+
+    fn rows_of(buffer: Option<&input_buf::InputBuffer>, width: u16) -> u16 {
+        let rows = buffer.map_or(1, |b| b.visual_row_count(width));
         u16::try_from(rows)
             .unwrap_or(u16::MAX)
             .clamp(1, input_buf::MAX_INPUT_ROWS)
     }
 
-    /// Inner (width, height) of the input pane, borders removed; shared by reducer and renderer.
+    /// The regions with one row per bar: widths do not depend on the bars' own heights.
+    fn probe_areas(&self) -> crate::ui::layout::Areas {
+        let area = ratatui::layout::Rect::new(0, 0, self.size.width, self.size.height);
+        crate::ui::layout::areas_with_thread(
+            area,
+            self.settings.sidebar_width,
+            1,
+            1,
+            self.thread.is_some(),
+        )
+    }
+
+    /// Inner (width, height) of the bar the live text is shown in, borders removed; shared by
+    /// reducer and renderer.
     pub fn input_viewport(&self) -> (u16, u16) {
-        let pane = self.areas().input;
+        let areas = self.areas();
+        let pane = if self.thread_bar_is_live() {
+            areas.thread_input.unwrap_or(areas.input)
+        } else {
+            areas.input
+        };
         (pane.width.saturating_sub(2), pane.height.saturating_sub(2))
     }
 
@@ -423,13 +543,19 @@ impl App {
                 Some(old) => {
                     let live = std::mem::take(&mut self.input);
                     if !live.is_empty() {
-                        self.drafts.insert(old, live);
+                        self.drafts.insert(DraftKey::room(old), live);
                     }
-                    self.input = self.drafts.remove(&id).unwrap_or_default();
+                    self.input = self
+                        .drafts
+                        .remove(&DraftKey::room(id.clone()))
+                        .unwrap_or_default();
                 }
                 None => {
                     if self.input.is_empty() {
-                        self.input = self.drafts.remove(&id).unwrap_or_default();
+                        self.input = self
+                            .drafts
+                            .remove(&DraftKey::room(id.clone()))
+                            .unwrap_or_default();
                     }
                 }
             }
@@ -468,9 +594,12 @@ impl App {
     /// The number of messages, over every room, whose send state is not `Sent`: Queued, Sending,
     /// Failed or Unconfirmed (D-20). Such messages live in memory only.
     pub fn undelivered_count(&self) -> usize {
+        let pane = self.thread.iter().flat_map(|p| p.messages.iter());
         self.messages
             .values()
             .flatten()
+            .chain(pane)
+            .chain(self.outbox.iter())
             .filter(|m| m.send.is_unsent())
             .count()
     }
@@ -674,7 +803,7 @@ mod tests {
         crate::test_util::press(&mut app, "isecret draft<Esc>");
         open_via_sidebar(&mut app, "random");
         assert_eq!(app.drafts.len(), 1);
-        let shown = format!("{:?}", app.drafts[&rid("general")]);
+        let shown = format!("{:?}", app.drafts[&DraftKey::room(rid("general"))]);
         assert!(!shown.contains("secret"), "{shown}");
     }
 

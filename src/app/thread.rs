@@ -7,7 +7,7 @@
 
 use crate::api::{ApiError, ThreadPage};
 use crate::app::messages::{self, MsgView};
-use crate::app::{App, StatusMsg};
+use crate::app::{App, DraftKey, InputTarget, StatusMsg, edit};
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::Effect;
 
@@ -121,35 +121,162 @@ pub fn open(app: &mut App) {
         return;
     };
     let origin = message.id.clone();
-    let parent = held.iter().find(|m| m.id == parent_id).cloned();
+    open_at(app, room, parent_id, origin, true);
+}
+
+/// Open the pane on thread `parent_id` of `room`, replacing any open one. The parent is taken from
+/// the main flow when it is held and fetched otherwise. With `fetch_replies` the replies are asked
+/// for; without it the thread is known to be empty (a message about to get its first reply), so the
+/// pane is `Loaded` at once. Replies not yet sent come back from the outbox.
+fn open_at(app: &mut App, room: RoomId, parent_id: String, origin: String, fetch_replies: bool) {
+    retarget(app, InputTarget::Room);
+    if let Some(old) = app.thread.take() {
+        keep_unsent(app, &old);
+    }
+    let parent = app
+        .messages
+        .get(&room)
+        .and_then(|held| held.iter().find(|m| m.id == parent_id))
+        .cloned();
     let fetch_parent = parent.is_none();
+    let mut pending = Vec::new();
+    app.outbox.retain(|m| {
+        let mine = m.room_id == room && m.tmid.as_deref() == Some(parent_id.as_str());
+        if mine {
+            pending.push(m.clone());
+        }
+        !mine
+    });
+    let request = fetch_replies || fetch_parent;
     app.thread = Some(ThreadPane {
         room: room.clone(),
         parent_id: parent_id.clone(),
         origin,
-        messages: parent.into_iter().collect(),
+        messages: parent.into_iter().chain(pending).collect(),
         view: MsgView::default(),
-        load: ThreadLoad::Loading,
+        load: if request {
+            ThreadLoad::Loading
+        } else {
+            ThreadLoad::Loaded
+        },
         total: 0,
         next_offset: 0,
         loading_more: false,
     });
-    app.effects.push(Effect::LoadThread {
-        room,
-        parent_id,
-        offset: 0,
-        count: PAGE,
-        fetch_parent,
-    });
+    if request {
+        app.effects.push(Effect::LoadThread {
+            room,
+            parent_id,
+            offset: 0,
+            count: PAGE,
+            fetch_parent,
+        });
+    }
     app.focus = crate::app::Focus::Thread;
+}
+
+/// True when the message under the cursor of the focused messages pane can be replied to: what the
+/// context popup checks before it lists the action.
+pub fn replyable_under_cursor(app: &App) -> bool {
+    use crate::app::{Focus, Mode};
+    if app.mode != Mode::Normal || app.focus != Focus::Messages {
+        return false;
+    }
+    let Some(room) = app.current_room.as_ref() else {
+        return false;
+    };
+    app.messages
+        .get(room)
+        .and_then(|held| held.get(messages::view(app, room).cursor))
+        .is_some_and(|m| m.kind == MessageKind::Normal && !m.send.is_unsent())
+}
+
+/// `reply_in_thread`: start a reply to the message under the cursor. From the messages pane the
+/// thread of that message opens (empty when it has no replies yet, and the first reply creates it);
+/// on a reply shown in the channel it is the reply's parent. From the thread pane it is the open
+/// thread. A system message, a deleted one and an encrypted room refuse on the status line.
+pub fn start_reply(app: &mut App) {
+    use crate::app::{Focus, Mode};
+    if app.mode != Mode::Normal {
+        return;
+    }
+    let Some(room) = app.current_room.clone() else {
+        return;
+    };
+    let parent_id = match app.focus {
+        Focus::Thread => {
+            let Some(pane) = app.thread.as_ref() else {
+                return;
+            };
+            pane.parent_id.clone()
+        }
+        Focus::Messages => {
+            let Some(message) = app
+                .messages
+                .get(&room)
+                .and_then(|held| held.get(messages::view(app, &room).cursor))
+            else {
+                return;
+            };
+            if message.kind != MessageKind::Normal || message.send.is_unsent() {
+                app.status_msg = Some(StatusMsg::Info(
+                    "This message cannot be replied to".to_string(),
+                ));
+                return;
+            }
+            let parent_id = message.tmid.clone().unwrap_or_else(|| message.id.clone());
+            if app.rooms.iter().any(|r| r.id == room && r.encrypted) {
+                app.status_msg = Some(StatusMsg::Error("encrypted, not supported".into()));
+                return;
+            }
+            let has_replies = message.tcount > 0 || message.tmid.is_some();
+            let origin = message.id.clone();
+            let already_open = app
+                .thread
+                .as_ref()
+                .is_some_and(|p| p.room == room && p.parent_id == parent_id);
+            if !already_open {
+                open_at(app, room.clone(), parent_id.clone(), origin, has_replies);
+            }
+            parent_id
+        }
+        _ => return,
+    };
+    if app.rooms.iter().any(|r| r.id == room && r.encrypted) {
+        app.status_msg = Some(StatusMsg::Error("encrypted, not supported".into()));
+        return;
+    }
+    retarget(app, InputTarget::thread(parent_id));
+    app.prev_focus = Focus::Thread;
+    app.focus = Focus::Input;
+    app.mode = Mode::Insert;
+}
+
+/// `toggle_reply_to_channel`: in Insert mode with a thread as the target, flip whether the reply is
+/// also shown in the channel. Anything else changes nothing.
+pub fn toggle_also_in_channel(app: &mut App) {
+    if app.mode != crate::app::Mode::Insert {
+        return;
+    }
+    if let InputTarget::Thread {
+        also_in_channel, ..
+    } = &mut app.input_target
+    {
+        *also_in_channel = !*also_in_channel;
+    }
 }
 
 /// `close_thread`: close the pane and put the main flow's cursor on the message it was opened from
 /// (when that message is held). Nothing happens when no thread is open.
 pub fn close(app: &mut App) {
+    if app.thread.is_none() {
+        return;
+    }
+    retarget(app, InputTarget::Room);
     let Some(pane) = app.thread.take() else {
         return;
     };
+    keep_unsent(app, &pane);
     if app.focus == crate::app::Focus::Thread {
         app.focus = crate::app::Focus::Messages;
     }
@@ -169,12 +296,112 @@ pub fn close(app: &mut App) {
     }
 }
 
+/// Move the replies of a pane that is going away and are not `Sent` to the outbox, so they still go
+/// out and come back when their thread is reopened.
+fn keep_unsent(app: &mut App, pane: &ThreadPane) {
+    app.outbox
+        .extend(pane.messages.iter().filter(|m| m.send.is_unsent()).cloned());
+}
+
+/// A reply of `room` to `parent_id` was accepted by the server. The first reply of a thread raises
+/// the parent's count from 0 to 1 in the main flow, so the marker row shows at once; the server's
+/// own update of the parent, which follows, is the value that stays.
+pub fn on_reply_sent(app: &mut App, room: &RoomId, parent_id: &str, reply: &Message) {
+    if let Some(parent) = app
+        .messages
+        .get_mut(room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == parent_id))
+        .filter(|m| m.tcount == 0)
+    {
+        parent.tcount = 1;
+        parent.tlm = Some(reply.ts);
+    }
+    if let Some(parent) = app
+        .thread
+        .as_mut()
+        .filter(|p| &p.room == room && p.parent_id == parent_id)
+        .and_then(|p| p.messages.iter_mut().find(|m| m.id == parent_id))
+        .filter(|m| m.tcount == 0)
+    {
+        parent.tcount = 1;
+        parent.tlm = Some(reply.ts);
+    }
+}
+
 /// Drop the pane without touching the main flow: the room it belonged to is no longer open.
 pub fn discard(app: &mut App) {
-    app.thread = None;
+    retarget(app, InputTarget::Room);
+    if let Some(pane) = app.thread.take() {
+        keep_unsent(app, &pane);
+    }
     if app.focus == crate::app::Focus::Thread {
         app.focus = crate::app::Focus::Messages;
     }
+}
+
+/// Point the input bar at `target`, keeping every draft: the live text goes back in `drafts` under
+/// its own key (unless it is empty) and the new target's draft, empty when it has none, becomes the
+/// live text. Nothing happens when the target is already the one in use, so a repeated `i` keeps
+/// the also-in-channel state. An edit in progress ends first, so the text that moves is a draft and
+/// never the text being edited.
+pub fn retarget(app: &mut App, target: InputTarget) {
+    if app.input_target.parent_id() == target.parent_id() {
+        return;
+    }
+    edit::cancel(app);
+    if let Some(room) = app.current_room.clone() {
+        let old = DraftKey {
+            room: room.clone(),
+            thread: app.input_target.parent_id().map(str::to_string),
+        };
+        let new = DraftKey {
+            room,
+            thread: target.parent_id().map(str::to_string),
+        };
+        let live = std::mem::take(&mut app.input);
+        if !live.is_empty() {
+            app.drafts.insert(old, live);
+        }
+        app.input = app.drafts.remove(&new).unwrap_or_default();
+        let (width, height) = app.input_viewport();
+        app.input.settle(width, height);
+    }
+    app.input_target = target;
+}
+
+/// The input target an Insert-mode start from the focused pane means: the open thread when the pane
+/// is focused, the room from any other pane, and the target already in use when the input bar
+/// itself is focused.
+pub fn target_for_focus(app: &App) -> InputTarget {
+    use crate::app::Focus;
+    match (&app.thread, app.focus) {
+        (Some(pane), Focus::Thread) => InputTarget::thread(pane.parent_id.clone()),
+        (_, Focus::Input) => app.input_target.clone(),
+        _ => InputTarget::Room,
+    }
+}
+
+/// The message under the cursor of the thread pane while the pane is focused in `room`.
+pub fn under_pane_cursor<'a>(app: &'a App, room: &RoomId) -> Option<&'a Message> {
+    if app.focus != crate::app::Focus::Thread {
+        return None;
+    }
+    let pane = app.thread.as_ref().filter(|p| &p.room == room)?;
+    pane.messages.get(view(app).cursor)
+}
+
+/// The held message `id` of `room`: in the main flow, or else in the open thread pane. What edit,
+/// delete and react look a message up with, so they work on the pane's messages too.
+pub fn held_message<'a>(app: &'a App, room: &RoomId, id: &str) -> Option<&'a Message> {
+    app.messages
+        .get(room)
+        .and_then(|held| held.iter().find(|m| m.id == id))
+        .or_else(|| {
+            app.thread
+                .as_ref()
+                .filter(|p| &p.room == room)
+                .and_then(|p| p.messages.iter().find(|m| m.id == id))
+        })
 }
 
 /// The open pane, when it is the thread `parent_id` of `room`.
@@ -233,7 +460,19 @@ pub fn on_live_message(app: &mut App, message: &Message) {
         return;
     };
     if let Some(slot) = pane.messages.iter_mut().find(|m| m.id == message.id) {
-        if slot.kind != MessageKind::Deleted && messages::changed(slot, message) {
+        if slot.send != SendState::Sent {
+            // The server's copy of a reply of ours that is still pending: confirm it in place. A
+            // request still in flight keeps the room's send slot until its own answer (D-03).
+            let was = slot.send;
+            *slot = Message {
+                send: SendState::Sent,
+                ..message.clone()
+            };
+            if was == SendState::Sending {
+                app.awaiting_answer
+                    .insert(message.room_id.clone(), message.id.clone());
+            }
+        } else if slot.kind != MessageKind::Deleted && messages::changed(slot, message) {
             messages::replace_slot(slot, message.clone());
         }
         return;
@@ -278,7 +517,7 @@ pub fn row_starts(app: &App) -> Vec<usize> {
         .thread
         .as_ref()
         .map_or(&[][..], |p| p.messages.as_slice());
-    messages::row_starts_of(msgs, width, &app.row_ctx(msgs))
+    messages::row_starts_of(msgs, width, &app.thread_row_ctx(msgs))
 }
 
 /// The effective view of the pane: its stored cursor, clamped, and scrolled so the cursor message
@@ -343,6 +582,7 @@ pub fn request_more(app: &mut App) {
 mod tests {
     use super::*;
     use crate::action::Action;
+    use crate::api::ApiError;
     use crate::api::map;
     use crate::api::wire::{RoomsResp, SubscriptionsResp};
     use crate::app::update::update;
@@ -1090,5 +1330,557 @@ mod tests {
         assert!(app.effects.is_empty(), "not at the edge yet");
         press(&mut app, "j");
         assert_eq!(thread_effects(&app).len(), 1);
+    }
+
+    /// The thread of `p-1` open and focused, as after `gt` on a parent with two replies.
+    fn open_pane() -> App {
+        let mut app = app_with(vec![parent("p-1", 100, 2)]);
+        app.thread = None;
+        press(&mut app, "gt");
+        loaded(
+            &mut app,
+            "p-1",
+            0,
+            None,
+            page(&[("r-1", 110), ("r-2", 120)], "p-1", 2),
+        );
+        app
+    }
+
+    fn room_key() -> DraftKey {
+        DraftKey::room(rid("r-general"))
+    }
+
+    fn thread_key() -> DraftKey {
+        DraftKey {
+            room: rid("r-general"),
+            thread: Some("p-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn insert_from_the_pane_targets_the_thread() {
+        let mut app = open_pane();
+        assert_eq!(app.focus, Focus::Thread);
+        press(&mut app, "i");
+        assert_eq!(app.mode, Mode::Insert);
+        assert_eq!(app.focus, Focus::Input);
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+    }
+
+    #[test]
+    fn insert_from_the_messages_pane_targets_the_room() {
+        let mut app = open_pane();
+        app.focus = Focus::Messages;
+        press(&mut app, "i");
+        assert_eq!(app.input_target, InputTarget::Room);
+    }
+
+    #[test]
+    fn text_and_target_survive_esc() {
+        let mut app = open_pane();
+        press(&mut app, "ihalf<Esc>");
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.focus, Focus::Thread);
+        assert_eq!(app.input.text(), "half");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        press(&mut app, "i");
+        assert_eq!(app.input.text(), "half");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+    }
+
+    #[test]
+    fn room_and_thread_drafts_stay_apart() {
+        let mut app = open_pane();
+        app.focus = Focus::Messages;
+        press(&mut app, "ia<Esc>");
+        app.focus = Focus::Thread;
+        press(&mut app, "ib<Esc>");
+        assert_eq!(app.input.text(), "b");
+        assert_eq!(app.drafts[&room_key()].text(), "a");
+
+        press(&mut app, "<Esc>");
+        assert!(app.thread.is_none());
+        assert_eq!(app.input_target, InputTarget::Room);
+        assert_eq!(app.input.text(), "a");
+        assert_eq!(app.drafts[&thread_key()].text(), "b");
+
+        press(&mut app, "gt");
+        press(&mut app, "i");
+        assert_eq!(app.input.text(), "b");
+        assert!(!app.drafts.contains_key(&thread_key()));
+    }
+
+    #[test]
+    fn an_empty_thread_draft_is_not_stored() {
+        let mut app = open_pane();
+        press(&mut app, "i<Esc><Esc>");
+        assert!(app.drafts.is_empty());
+        assert_eq!(app.input_target, InputTarget::Room);
+    }
+
+    #[test]
+    fn changing_room_resets_the_target_and_keeps_the_thread_draft() {
+        let mut app = open_pane();
+        press(&mut app, "ireply<Esc>");
+        app.open_room(rid("r-random"));
+        assert!(app.thread.is_none());
+        assert_eq!(app.input_target, InputTarget::Room);
+        assert!(app.input.is_empty(), "the other room has no draft");
+        assert_eq!(app.drafts[&thread_key()].text(), "reply");
+        assert!(!app.drafts.contains_key(&room_key()));
+    }
+
+    #[test]
+    fn opening_a_thread_puts_the_target_back_on_the_room_and_keeps_the_draft() {
+        let mut app = open_pane();
+        press(&mut app, "ione<Esc>");
+        app.focus = Focus::Messages;
+        press(&mut app, "gt");
+        assert_eq!(app.input_target, InputTarget::Room);
+        assert!(app.input.is_empty());
+        assert_eq!(app.drafts[&thread_key()].text(), "one");
+    }
+
+    fn sends(app: &App) -> Vec<(String, Option<String>, bool)> {
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::SendMessage {
+                    id, tmid, tshow, ..
+                } => Some((id.clone(), tmid.clone(), *tshow)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn server_copy(id: &str, tshow: bool) -> Message {
+        Message {
+            body: "ok".to_string(),
+            ts: 130,
+            ..reply(id, 130, "p-1", tshow)
+        }
+    }
+
+    #[test]
+    fn enter_in_the_thread_input_sends_a_reply_to_the_thread() {
+        let mut app = open_pane();
+        let main_before = app.messages[&rid("r-general")].len();
+        press(&mut app, "iok<CR>");
+        assert_eq!(
+            sends(&app),
+            vec![("local-1".to_string(), Some("p-1".to_string()), false)]
+        );
+        let pane = app.thread.as_ref().expect("open");
+        let last = pane.messages.last().expect("row");
+        assert_eq!((last.id.as_str(), last.body.as_str()), ("local-1", "ok"));
+        assert_eq!(last.send, SendState::Sending);
+        assert_eq!(app.messages[&rid("r-general")].len(), main_before);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+    }
+
+    #[test]
+    fn also_in_channel_rides_the_request_and_resets_after_the_send() {
+        let mut app = open_pane();
+        press(&mut app, "i");
+        app.input_target = InputTarget::Thread {
+            parent_id: "p-1".to_string(),
+            also_in_channel: true,
+        };
+        press(&mut app, "ok<CR>");
+        assert_eq!(
+            sends(&app),
+            vec![("local-1".to_string(), Some("p-1".to_string()), true)]
+        );
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+    }
+
+    #[test]
+    fn replies_and_room_messages_share_one_ordered_queue() {
+        let mut app = open_pane();
+        app.focus = Focus::Messages;
+        press(&mut app, "ione<CR><Esc>");
+        app.focus = Focus::Thread;
+        press(&mut app, "itwo<CR>");
+        app.focus = Focus::Input;
+        assert_eq!(sends(&app).len(), 1, "one in flight per room");
+        assert_eq!(sends(&app)[0].0, "local-1");
+        update(
+            &mut app,
+            Action::MessageSent {
+                room: rid("r-general"),
+                id: "local-1".to_string(),
+                message: Message {
+                    id: "local-1".to_string(),
+                    ..msg("local-1", 130)
+                },
+            },
+        );
+        let all = sends(&app);
+        assert_eq!(all.len(), 2);
+        assert_eq!(
+            all[1],
+            ("local-2".to_string(), Some("p-1".to_string()), false)
+        );
+    }
+
+    #[test]
+    fn the_live_copy_confirms_the_pending_reply_once() {
+        let mut app = open_pane();
+        press(&mut app, "iok<CR>");
+        let before = app.thread.as_ref().expect("open").messages.len();
+        update(
+            &mut app,
+            Action::RtMessage(Message {
+                id: "local-1".to_string(),
+                ..server_copy("local-1", false)
+            }),
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert_eq!(pane.messages.len(), before, "confirmed in place");
+        assert_eq!(pane.messages.last().expect("row").send, SendState::Sent);
+        assert_eq!(
+            app.messages[&rid("r-general")]
+                .iter()
+                .filter(|m| m.id == "local-1")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_rejected_reply_fails_in_the_pane_and_retry_and_discard_work() {
+        let mut app = open_pane();
+        press(&mut app, "iok<CR>");
+        update(
+            &mut app,
+            Action::SendFailed {
+                room: rid("r-general"),
+                id: "local-1".to_string(),
+                error: ApiError::Rejected,
+            },
+        );
+        let state = |app: &App| {
+            app.thread
+                .as_ref()
+                .expect("open")
+                .messages
+                .last()
+                .expect("row")
+                .send
+        };
+        assert_eq!(state(&app), SendState::Failed);
+        assert!(
+            app.messages[&rid("r-general")]
+                .iter()
+                .all(|m| m.id != "local-1"),
+            "never in the main flow"
+        );
+        app.effects.clear();
+        app.focus = Focus::Thread;
+        app.mode = Mode::Normal;
+        press(&mut app, "G");
+        press(&mut app, "r");
+        assert_eq!(sends(&app).len(), 1);
+        assert_eq!(state(&app), SendState::Sending);
+
+        update(
+            &mut app,
+            Action::SendFailed {
+                room: rid("r-general"),
+                id: "local-1".to_string(),
+                error: ApiError::Forbidden,
+            },
+        );
+        press(&mut app, "dd");
+        assert!(
+            app.thread
+                .as_ref()
+                .expect("open")
+                .messages
+                .iter()
+                .all(|m| m.id != "local-1")
+        );
+    }
+
+    #[test]
+    fn a_timed_out_reply_that_arrives_live_is_shown_once_as_sent() {
+        let mut app = open_pane();
+        press(&mut app, "iok<CR>");
+        update(
+            &mut app,
+            Action::SendFailed {
+                room: rid("r-general"),
+                id: "local-1".to_string(),
+                error: ApiError::Timeout,
+            },
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert_eq!(
+            pane.messages.last().expect("row").send,
+            SendState::Unconfirmed
+        );
+        update(
+            &mut app,
+            Action::RtMessage(Message {
+                id: "local-1".to_string(),
+                ..server_copy("local-1", false)
+            }),
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert_eq!(
+            pane.messages.iter().filter(|m| m.id == "local-1").count(),
+            1
+        );
+        assert_eq!(pane.messages.last().expect("row").send, SendState::Sent);
+    }
+
+    #[test]
+    fn the_first_reply_raises_the_parents_count() {
+        let mut app = app_with_thread_less_parent();
+        press(&mut app, "gt");
+        assert!(app.thread.is_none(), "no thread yet");
+        // The reducer path of `reply_in_thread` opens the pane; here it is opened by hand.
+        let mut pane_app = app;
+        pane_app.thread = Some(ThreadPane {
+            room: rid("r-general"),
+            parent_id: "p-0".to_string(),
+            origin: "p-0".to_string(),
+            messages: vec![msg("p-0", 100)],
+            view: MsgView::default(),
+            load: ThreadLoad::Loaded,
+            total: 0,
+            next_offset: 0,
+            loading_more: false,
+        });
+        pane_app.focus = Focus::Thread;
+        press(&mut pane_app, "ihi<CR>");
+        update(
+            &mut pane_app,
+            Action::MessageSent {
+                room: rid("r-general"),
+                id: "local-1".to_string(),
+                message: Message {
+                    id: "local-1".to_string(),
+                    ..reply("local-1", 130, "p-0", false)
+                },
+            },
+        );
+        let parent = pane_app.messages[&rid("r-general")]
+            .iter()
+            .find(|m| m.id == "p-0")
+            .expect("parent");
+        assert_eq!(parent.tcount, 1);
+    }
+
+    fn app_with_thread_less_parent() -> App {
+        app_with(vec![msg("p-0", 100)])
+    }
+
+    #[test]
+    fn closing_the_pane_keeps_an_unsent_reply_and_it_comes_back_on_reopen() {
+        let mut app = open_pane();
+        press(&mut app, "iok<CR><Esc>");
+        press(&mut app, "<Esc>");
+        assert!(app.thread.is_none());
+        assert_eq!(app.outbox.len(), 1);
+        assert_eq!(app.undelivered_count(), 1);
+        press(&mut app, "gt");
+        assert!(app.outbox.is_empty());
+        assert!(ids(&app).contains(&"local-1"));
+        assert_eq!(app.undelivered_count(), 1);
+    }
+
+    #[test]
+    fn gr_on_a_message_without_replies_starts_the_first_reply() {
+        let mut app = app_with(vec![msg("p-0", 100)]);
+        press(&mut app, "gR");
+        let pane = app.thread.as_ref().expect("the thread pane opens");
+        assert_eq!(pane.parent_id, "p-0");
+        assert_eq!(pane.load, ThreadLoad::Loaded, "nothing to fetch");
+        assert!(thread_effects(&app).is_empty());
+        assert_eq!(app.mode, Mode::Insert);
+        assert_eq!(app.focus, Focus::Input);
+        assert_eq!(app.input_target, InputTarget::thread("p-0".to_string()));
+
+        press(&mut app, "hi<CR>");
+        assert_eq!(
+            sends(&app),
+            vec![("local-1".to_string(), Some("p-0".to_string()), false)]
+        );
+    }
+
+    #[test]
+    fn gr_on_a_message_with_replies_opens_its_thread_and_loads_it() {
+        let mut app = app_with(vec![parent("p-1", 100, 2)]);
+        press(&mut app, "gR");
+        assert_eq!(thread_effects(&app).len(), 1);
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn gr_on_a_reply_shown_in_the_channel_acts_on_its_parent() {
+        let mut app = app_with(vec![parent("p-1", 100, 1), reply("r-1", 110, "p-1", true)]);
+        press(&mut app, "G");
+        press(&mut app, "gR");
+        assert_eq!(app.thread.as_ref().expect("open").parent_id, "p-1");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+    }
+
+    #[test]
+    fn gr_refuses_system_and_deleted_messages() {
+        for kind in [MessageKind::System, MessageKind::Deleted] {
+            let mut app = app_with(vec![Message {
+                kind,
+                ..msg("m-1", 100)
+            }]);
+            press(&mut app, "gR");
+            assert!(app.thread.is_none(), "{kind:?}");
+            assert_eq!(app.mode, Mode::Normal, "{kind:?}");
+            assert!(app.status_msg.is_some(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn gr_refuses_in_an_encrypted_room() {
+        let mut app = app_with(vec![msg("m-1", 100)]);
+        for room in &mut app.rooms {
+            room.encrypted = true;
+        }
+        press(&mut app, "gR");
+        assert!(app.thread.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
+    }
+
+    #[test]
+    fn gr_from_the_thread_pane_replies_to_the_open_thread() {
+        let mut app = open_pane();
+        press(&mut app, "gR");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn the_toggle_flips_only_for_a_thread_reply_and_resets_with_the_target() {
+        let mut app = open_pane();
+        press(&mut app, "i<C-b>");
+        assert_eq!(
+            app.input_target,
+            InputTarget::Thread {
+                parent_id: "p-1".to_string(),
+                also_in_channel: true
+            }
+        );
+        press(&mut app, "<C-b>");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        press(&mut app, "<C-b>x<CR>");
+        assert_eq!(
+            sends(&app),
+            vec![("local-1".to_string(), Some("p-1".to_string()), true)]
+        );
+        assert_eq!(
+            app.input_target,
+            InputTarget::thread("p-1".to_string()),
+            "off after a send"
+        );
+
+        let mut room = app_with(vec![msg("m-1", 100)]);
+        press(&mut room, "i<C-b>");
+        assert_eq!(room.input_target, InputTarget::Room);
+    }
+
+    /// The pane of `open_pane` with the user being `alice`, the cursor on the last reply (`r-2`).
+    fn own_pane() -> App {
+        let mut app = open_pane();
+        app.own_username = Some("alice".to_string());
+        press(&mut app, "G");
+        assert_eq!(view(&app).cursor, 2);
+        app
+    }
+
+    #[test]
+    fn e_in_the_pane_edits_an_own_reply_in_the_panes_bar() {
+        let mut app = own_pane();
+        press(&mut app, "e");
+        assert_eq!(app.mode, Mode::Insert);
+        assert_eq!(app.input.text(), "body of r-2");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        press(&mut app, "!<CR>");
+        assert!(app.effects.iter().any(|e| matches!(
+            e,
+            Effect::EditMessage { id, .. } if id == "r-2"
+        )));
+        let copy = Message {
+            body: "body of r-2!".to_string(),
+            edited: true,
+            ..reply("r-2", 120, "p-1", false)
+        };
+        update(
+            &mut app,
+            Action::EditDone {
+                room: rid("r-general"),
+                id: "r-2".to_string(),
+                message: copy,
+            },
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert_eq!(pane.messages[2].body, "body of r-2!");
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.focus, Focus::Thread);
+    }
+
+    #[test]
+    fn e_on_someone_elses_reply_does_nothing() {
+        let mut app = own_pane();
+        app.own_username = Some("carol".to_string());
+        press(&mut app, "e");
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.editing.is_none());
+        assert!(
+            app.effects
+                .iter()
+                .all(|e| !matches!(e, Effect::EditMessage { .. }))
+        );
+    }
+
+    #[test]
+    fn dd_in_the_pane_asks_then_deletes_an_own_reply() {
+        let mut app = own_pane();
+        press(&mut app, "dd");
+        assert!(app.confirm.is_some());
+        press(&mut app, "y");
+        assert!(app.effects.iter().any(|e| matches!(
+            e,
+            Effect::DeleteMessage { id, .. } if id == "r-2"
+        )));
+        update(
+            &mut app,
+            Action::DeleteDone {
+                room: rid("r-general"),
+                id: "r-2".to_string(),
+            },
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert_eq!(pane.messages[2].kind, MessageKind::Deleted);
+    }
+
+    #[test]
+    fn dd_on_someone_elses_reply_asks_nothing() {
+        let mut app = own_pane();
+        app.own_username = Some("carol".to_string());
+        press(&mut app, "dd");
+        assert!(app.confirm.is_none());
+    }
+
+    #[test]
+    fn plus_in_the_pane_opens_the_picker_on_the_reply() {
+        let mut app = own_pane();
+        press(&mut app, "+");
+        let picker = app.react_picker.as_ref().expect("the picker opens");
+        assert_eq!(picker.id, "r-2");
+        assert!(crate::app::react::view(&app).is_some());
     }
 }

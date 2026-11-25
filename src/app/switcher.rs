@@ -686,7 +686,9 @@ mod tests {
         assert_ne!(app.current_room, Some(general.clone()));
         assert!(app.input.is_empty());
         assert_eq!(
-            app.drafts.get(&general).map(|d| d.text()),
+            app.drafts
+                .get(&crate::app::DraftKey::room(general.clone()))
+                .map(|d| d.text()),
             Some("half a thought".to_string())
         );
     }

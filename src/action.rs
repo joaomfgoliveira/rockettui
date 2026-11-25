@@ -76,6 +76,11 @@ pub enum Action {
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
+    /// Normal mode, messages or thread pane focused (`gR`): start a reply to the message under the
+    /// cursor, opening its thread (empty when it has no replies yet).
+    ReplyInThread,
+    /// Insert mode (`<C-b>`), reply to a thread: toggle whether it is also shown in the channel.
+    ToggleReplyToChannel,
     /// Close the thread pane (`Esc` with the pane focused; no default key otherwise).
     CloseThread,
     /// Open the help overlay (no default key; `?` then `?` or `:help`); while it is open, close it.
@@ -321,6 +326,8 @@ impl std::fmt::Debug for Action {
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
+            Action::ReplyInThread => write!(f, "ReplyInThread"),
+            Action::ToggleReplyToChannel => write!(f, "ToggleReplyToChannel"),
             Action::CloseThread => write!(f, "CloseThread"),
             Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ShowContext => write!(f, "ShowContext"),

@@ -43,6 +43,7 @@ pub fn view(frame: &mut Frame, app: &App) {
         area,
         app.settings.sidebar_width,
         app.input_rows(),
+        app.thread_input_rows(),
         app.thread.is_some(),
     );
     sidebar::render(frame, areas.sidebar, app);
@@ -54,6 +55,9 @@ pub fn view(frame: &mut Frame, app: &App) {
         thread::render(frame, pane, app);
     }
     input::render(frame, areas.input, app);
+    if let Some(bar) = areas.thread_input {
+        input::render_thread(frame, bar, app);
+    }
     results::render(frame, areas.messages, app);
     help::render(frame, areas.messages, app);
     context::render(frame, &areas, app);

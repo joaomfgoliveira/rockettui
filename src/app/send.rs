@@ -23,7 +23,7 @@
 //!   own, on a timer, on `:reconnect` or when the next message is sent (D-08).
 
 use crate::api::ApiError;
-use crate::app::{App, Focus, LOCAL_AUTHOR, Mode, StatusMsg, messages};
+use crate::app::{App, Focus, InputTarget, LOCAL_AUTHOR, Mode, StatusMsg, messages, thread};
 use crate::config::settings::FollowOnSend;
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, SendText};
@@ -50,13 +50,31 @@ pub fn submit(app: &mut App) {
         app.status_msg = Some(StatusMsg::Error("encrypted, not supported".into()));
         return;
     }
+    // A reply goes to the thread the input bar is aimed at, when that thread is still open.
+    let (tmid, tshow) = match &app.input_target {
+        InputTarget::Room => (None, false),
+        InputTarget::Thread {
+            parent_id,
+            also_in_channel,
+        } if app
+            .thread
+            .as_ref()
+            .is_some_and(|p| p.room == room && &p.parent_id == parent_id) =>
+        {
+            (Some(parent_id.clone()), *also_in_channel)
+        }
+        InputTarget::Thread { .. } => {
+            app.status_msg = Some(StatusMsg::Error("The thread is not open".into()));
+            return;
+        }
+    };
     let body = app.input.take();
     app.local_seq += 1;
     let message = Message {
         edited: false,
         plain_text: true,
-        tmid: None,
-        tshow: false,
+        tmid: tmid.clone(),
+        tshow,
         tcount: 0,
         tlm: None,
         reactions: Vec::new(),
@@ -71,6 +89,21 @@ pub fn submit(app: &mut App) {
         kind: MessageKind::Normal,
         send: SendState::Queued { reconcile: false },
     };
+    if tmid.is_some() {
+        // The reply is a row of the pane only: the main flow gets it with the server's copy.
+        if let Some(pane) = app.thread.as_mut() {
+            pane.messages.push(message);
+            pane.view.cursor = pane.messages.len() - 1;
+        }
+        if let InputTarget::Thread {
+            also_in_channel, ..
+        } = &mut app.input_target
+        {
+            *also_in_channel = false;
+        }
+        pump(app, &room);
+        return;
+    }
     // Measured before the row is appended: an append shifts no existing index, so leaving
     // `msg_views` alone keeps the pane exactly where it was (D-05).
     let at_bottom = messages::is_at_bottom(app, &room);
@@ -81,26 +114,78 @@ pub fn submit(app: &mut App) {
     pump(app, &room);
 }
 
+/// Every message of `room` that can hold a send state: the main flow, the open thread pane and the
+/// outbox of replies whose pane is closed. A room's sends share one queue over all three.
+fn room_messages<'a>(app: &'a App, room: &'a RoomId) -> impl Iterator<Item = &'a Message> {
+    let pane = app
+        .thread
+        .iter()
+        .filter(move |p| &p.room == room)
+        .flat_map(|p| p.messages.iter());
+    let outbox = app.outbox.iter().filter(move |m| &m.room_id == room);
+    app.messages
+        .get(room)
+        .into_iter()
+        .flatten()
+        .chain(pane)
+        .chain(outbox)
+}
+
+/// The held message `id` of `room`, wherever it is kept.
+fn find_mut<'a>(app: &'a mut App, room: &RoomId, id: &str) -> Option<&'a mut Message> {
+    let App {
+        messages,
+        thread,
+        outbox,
+        ..
+    } = app;
+    if let Some(m) = messages
+        .get_mut(room)
+        .and_then(|held| held.iter_mut().find(|m| m.id == id))
+    {
+        return Some(m);
+    }
+    if let Some(m) = thread
+        .as_mut()
+        .filter(|p| &p.room == room)
+        .and_then(|p| p.messages.iter_mut().find(|m| m.id == id))
+    {
+        return Some(m);
+    }
+    outbox.iter_mut().find(|m| &m.room_id == room && m.id == id)
+}
+
+/// The order a pending message was typed in: the number after the client id prefix.
+fn typed_order(app: &App, message: &Message) -> u64 {
+    message
+        .id
+        .strip_prefix(app.id_prefix.as_str())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(u64::MAX)
+}
+
 /// Start the next send of `room`: nothing while a message of the room is `Sending`; otherwise the
-/// first `Queued` message in order becomes `Sending` and its effect is recorded. `Failed` and
-/// `Unconfirmed` messages are skipped, so a failure never blocks the queue behind it (D-16). Nothing
-/// starts either while `App.awaiting_answer` has an entry for the room: that row was confirmed by a
-/// server copy but its own request has not answered, so the slot is still taken (D-03).
+/// first `Queued` message in typing order becomes `Sending` and its effect is recorded. Room
+/// messages and thread replies share this one queue. `Failed` and `Unconfirmed` messages are
+/// skipped, so a failure never blocks the queue behind it (D-16). Nothing starts either while
+/// `App.awaiting_answer` has an entry for the room: that row was confirmed by a server copy but its
+/// own request has not answered, so the slot is still taken (D-03).
 pub fn pump(app: &mut App, room: &RoomId) {
     // A row confirmed early by a server copy still has its POST outstanding (D-03).
     if app.awaiting_answer.contains_key(room) {
         return;
     }
-    let Some(held) = app.messages.get_mut(room) else {
-        return;
-    };
-    if held.iter().any(|m| m.send == SendState::Sending) {
+    if room_messages(app, room).any(|m| m.send == SendState::Sending) {
         return;
     }
-    let Some(next) = held
-        .iter_mut()
-        .find(|m| matches!(m.send, SendState::Queued { .. }))
+    let Some(next_id) = room_messages(app, room)
+        .filter(|m| matches!(m.send, SendState::Queued { .. }))
+        .min_by_key(|m| typed_order(app, m))
+        .map(|m| m.id.clone())
     else {
+        return;
+    };
+    let Some(next) = find_mut(app, room, &next_id) else {
         return;
     };
     let SendState::Queued { reconcile } = next.send else {
@@ -112,30 +197,52 @@ pub fn pump(app: &mut App, room: &RoomId) {
         id: next.id.clone(),
         text: SendText::new(next.body.clone()),
         reconcile,
+        tmid: next.tmid.clone(),
+        tshow: next.tshow,
     };
     app.effects.push(effect);
 }
 
-/// The room and index of the message under the messages-pane cursor when it is `Failed` or
+/// Where an unsent message under the cursor is held.
+pub(crate) enum Unsent {
+    /// In the room's main flow, at this index.
+    Main(RoomId, usize),
+    /// In the thread pane, at this index.
+    Pane(RoomId, usize),
+}
+
+/// The message under the cursor of the focused messages or thread pane when it is `Failed` or
 /// `Unconfirmed`: the one guard `retry` and `discard` share. `None` for any other message, for any
 /// other pane and when no room is open or it holds nothing, so both keys are silent no-ops there.
-/// The cursor is read from `messages::view` on every call, so a counted repeat acts on whichever
-/// message sits under the cursor then.
-pub(crate) fn unsent_under_cursor(app: &App) -> Option<(RoomId, usize)> {
-    if app.focus != Focus::Messages {
-        return None;
-    }
+/// The cursor is read on every call, so a counted repeat acts on whichever message sits under the
+/// cursor then.
+pub(crate) fn unsent_under_cursor(app: &App) -> Option<Unsent> {
     let room = app.current_room.clone()?;
-    let held = app.messages.get(&room)?;
+    let (held, cursor): (&[Message], usize) = match app.focus {
+        Focus::Messages => {
+            let held = app.messages.get(&room)?;
+            (held, messages::view(app, &room).cursor)
+        }
+        Focus::Thread => {
+            let pane = app.thread.as_ref().filter(|p| p.room == room)?;
+            (&pane.messages, thread::view(app).cursor)
+        }
+        _ => return None,
+    };
     if held.is_empty() {
         return None;
     }
-    let cursor = messages::view(app, &room).cursor;
     matches!(
         held.get(cursor)?.send,
         SendState::Failed | SendState::Unconfirmed
     )
-    .then_some((room, cursor))
+    .then(|| {
+        if app.focus == Focus::Thread {
+            Unsent::Pane(room, cursor)
+        } else {
+            Unsent::Main(room, cursor)
+        }
+    })
 }
 
 /// `r` (D-06): put the `Failed` or `Unconfirmed` message under the cursor back in its room's queue
@@ -144,14 +251,26 @@ pub(crate) fn unsent_under_cursor(app: &App) -> Option<(RoomId, usize)> {
 /// whether it already holds the message (D-15). A silent no-op on anything else. It touches no
 /// connection state, no history and no other room (D-08).
 pub fn retry(app: &mut App) {
-    let Some((room, index)) = unsent_under_cursor(app) else {
+    let Some(unsent) = unsent_under_cursor(app) else {
         return;
     };
-    let Some(message) = app
-        .messages
-        .get_mut(&room)
-        .and_then(|held| held.get_mut(index))
-    else {
+    let (room, message) = match unsent {
+        Unsent::Main(room, index) => {
+            let message = app
+                .messages
+                .get_mut(&room)
+                .and_then(|held| held.get_mut(index));
+            (room, message)
+        }
+        Unsent::Pane(room, index) => {
+            let message = app
+                .thread
+                .as_mut()
+                .and_then(|pane| pane.messages.get_mut(index));
+            (room, message)
+        }
+    };
+    let Some(message) = message else {
         return;
     };
     message.send = SendState::Queued {
@@ -163,10 +282,26 @@ pub fn retry(app: &mut App) {
 /// `dd` (D-06): remove the `Failed` or `Unconfirmed` message under the cursor from its room. A
 /// silent no-op on anything else.
 pub fn discard(app: &mut App) {
-    let Some((room, index)) = unsent_under_cursor(app) else {
+    let Some(unsent) = unsent_under_cursor(app) else {
         return;
     };
-    remove_at(app, &room, index);
+    let room = match unsent {
+        Unsent::Main(room, index) => {
+            remove_at(app, &room, index);
+            room
+        }
+        Unsent::Pane(room, index) => {
+            if let Some(pane) = app.thread.as_mut()
+                && index < pane.messages.len()
+            {
+                pane.messages.remove(index);
+                if pane.view.cursor > index {
+                    pane.view.cursor -= 1;
+                }
+            }
+            room
+        }
+    };
     pump(app, &room);
 }
 
@@ -191,23 +326,31 @@ fn remove_at(app: &mut App, room: &RoomId, index: usize) {
 /// queued message of the room (D-03). When `room` no longer holds that id the server's message goes
 /// through `messages::merge_incoming` instead (D-13, D-21), and the answer releases the room's
 /// `awaiting_answer` entry when it names this id.
+///
+/// A thread reply is confirmed in the pane (or the outbox) the same way; one that is also shown in
+/// the channel joins the main flow, and the first reply of a thread raises its parent's reply count
+/// until the server's own update of the parent corrects it.
 pub fn on_sent(app: &mut App, room: RoomId, id: String, message: Message) {
-    let slot = app
-        .messages
-        .get_mut(&room)
-        .and_then(|held| held.iter_mut().find(|m| m.id == id));
-    match slot {
+    let reply = message.tmid.clone();
+    match find_mut(app, &room, &id) {
         Some(slot) => {
             *slot = Message {
                 send: SendState::Sent,
-                ..message
+                ..message.clone()
             };
         }
         // The row is gone (discarded meanwhile): the server holds the message, so it goes through
-        // the one append path, which also keeps a repeated answer from adding it twice (D-13).
+        // the one append path, which also keeps a repeated answer from adding it twice (D-13). A
+        // reply that is not shown in the channel is not a main-flow message: the open pane takes it
+        // when it is its thread, otherwise it is on the server.
+        None if reply.is_some() => thread::on_live_message(app, &message),
         None => {
-            messages::merge_incoming(app, &room, message);
+            messages::merge_incoming(app, &room, message.clone());
         }
+    }
+    if let Some(parent) = reply {
+        app.outbox.retain(|m| m.send.is_unsent());
+        thread::on_reply_sent(app, &room, &parent, &message);
     }
     // This answer is the end of the request that kept the in-flight slot of a row confirmed early
     // by a server copy (D-03).
@@ -234,13 +377,7 @@ pub fn on_failed(app: &mut App, room: RoomId, id: String, error: ApiError) {
     }
     let unconfirmed = error.outcome_unknown();
     app.status_msg = Some(StatusMsg::Error(send_error_text(error, unconfirmed)));
-    let Some(held) = app.messages.get_mut(&room) else {
-        return;
-    };
-    if let Some(slot) = held
-        .iter_mut()
-        .find(|m| m.id == id && m.send == SendState::Sending)
-    {
+    if let Some(slot) = find_mut(app, &room, &id).filter(|m| m.send == SendState::Sending) {
         slot.send = if unconfirmed {
             SendState::Unconfirmed
         } else {
@@ -335,6 +472,7 @@ mod tests {
                     id,
                     text,
                     reconcile,
+                    ..
                 } => Some((
                     room.0.clone(),
                     id.clone(),
@@ -374,6 +512,8 @@ mod tests {
                 id: "local-1".to_string(),
                 text: SendText::new("hi there".to_string()),
                 reconcile: false,
+                tmid: None,
+                tshow: false,
             }]
         );
         assert!(app.input.is_empty());

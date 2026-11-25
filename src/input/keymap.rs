@@ -112,6 +112,10 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.
         (Mode::Normal, "gt", Action::OpenThread),
+        // `gR` (`reply_in_thread`) starts a reply to the message under the cursor, opening its
+        // thread even when it has no replies yet. `<C-b>` (`toggle_reply_to_channel`) in Insert
+        // mode marks the reply to be shown in the channel too.
+        (Mode::Normal, "gR", Action::ReplyInThread),
         // `+` (`react_message`) opens the reaction picker for the message under the cursor.
         (Mode::Normal, "+", Action::ReactMessage),
         // `<C-k>` (`switch_room`) opens the room switcher from any pane.
@@ -133,6 +137,7 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Insert, "<CR>", Action::SubmitInput),
         (Mode::Insert, "<A-CR>", Action::InsertNewline),
         (Mode::Insert, "<C-j>", Action::InsertNewline),
+        (Mode::Insert, "<C-b>", Action::ToggleReplyToChannel),
         (Mode::Insert, "<BS>", Action::DeleteBack),
         (Mode::Insert, "<C-w>", Action::DeleteWordBack),
         (Mode::Insert, "<C-u>", Action::DeleteToLineStart),

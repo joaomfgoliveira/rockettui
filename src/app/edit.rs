@@ -20,7 +20,7 @@
 
 use crate::api::ApiError;
 use crate::app::input_buf::InputBuffer;
-use crate::app::{App, Focus, Mode, StatusMsg, messages, send};
+use crate::app::{App, Focus, Mode, StatusMsg, messages, send, thread};
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, SendText};
 use crate::input::key::Chord;
@@ -62,15 +62,22 @@ pub fn is_own_plain(app: &App, room: &RoomId, message: &Message) -> bool {
         && app.rooms.iter().any(|r| &r.id == room && !r.encrypted)
 }
 
-/// The id of the message under the messages-pane cursor when `is_own_plain` allows it. `None` for
-/// any other pane or mode, with no room open, an empty room, or any message the rule excludes.
+/// The id of the message under the cursor of the messages pane or the thread pane when
+/// `is_own_plain` allows it. `None` for any other pane or mode, with no room open, an empty room,
+/// or any message the rule excludes.
 pub(crate) fn own_under_cursor(app: &App) -> Option<(RoomId, String)> {
-    if app.mode != Mode::Normal || app.focus != Focus::Messages {
+    if app.mode != Mode::Normal {
         return None;
     }
     let room = app.current_room.clone()?;
-    let held = app.messages.get(&room)?;
-    let message = held.get(messages::view(app, &room).cursor)?;
+    let message = match app.focus {
+        Focus::Messages => app
+            .messages
+            .get(&room)?
+            .get(messages::view(app, &room).cursor)?,
+        Focus::Thread => thread::under_pane_cursor(app, &room)?,
+        _ => return None,
+    };
     is_own_plain(app, &room, message).then(|| (room, message.id.clone()))
 }
 
@@ -83,14 +90,11 @@ pub fn start(app: &mut App) {
     let Some((room, id)) = own_under_cursor(app) else {
         return;
     };
-    let Some(body) = app
-        .messages
-        .get(&room)
-        .and_then(|held| held.iter().find(|m| m.id == id))
-        .map(|m| m.body.clone())
-    else {
+    let Some(body) = thread::held_message(app, &room, &id).map(|m| m.body.clone()) else {
         return;
     };
+    // Editing a message of the pane happens in the pane's own bar.
+    thread::retarget(app, thread::target_for_focus(app));
     let mut text = InputBuffer::new();
     text.insert_str(&body);
     let stash = std::mem::replace(&mut app.input, text);
@@ -152,6 +156,7 @@ pub fn save(app: &mut App) {
 /// The server accepted the edit of message `id` of `room`: show the stored copy in place (a no-op
 /// when the live stream already did) and end the edit when it is the one being edited.
 pub fn on_edit_done(app: &mut App, room: RoomId, id: String, message: Message) {
+    thread::on_live_message(app, &message);
     messages::replace_updated(app, &room, message);
     if app
         .editing
@@ -203,11 +208,8 @@ pub fn on_confirm_key(app: &mut App, confirm: Confirm, chord: Chord) {
         return;
     }
     let Confirm::Delete { room, id } = confirm;
-    let still_own = app
-        .messages
-        .get(&room)
-        .and_then(|held| held.iter().find(|m| m.id == id))
-        .is_some_and(|m| is_own_plain(app, &room, m));
+    let still_own =
+        thread::held_message(app, &room, &id).is_some_and(|m| is_own_plain(app, &room, m));
     if still_own {
         app.effects.push(Effect::DeleteMessage { room, id });
     }
@@ -216,6 +218,7 @@ pub fn on_confirm_key(app: &mut App, confirm: Confirm, chord: Chord) {
 /// The server accepted the delete: the row becomes the deleted line at once (the later stream
 /// event finds nothing to do).
 pub fn on_delete_done(app: &mut App, room: &RoomId, id: &str) {
+    thread::on_deleted(app, room, id);
     messages::tombstone(app, room, id);
 }
 
@@ -589,7 +592,10 @@ mod tests {
         app.open_room(RoomId("random".to_string()));
         assert!(app.editing.is_none());
         assert!(app.input.is_empty(), "random has no draft");
-        assert_eq!(app.drafts[&general()].text(), "half typed");
+        assert_eq!(
+            app.drafts[&crate::app::DraftKey::room(general())].text(),
+            "half typed"
+        );
         app.open_room(general());
         assert_eq!(app.input.text(), "half typed");
     }

@@ -11,11 +11,11 @@ expression: "render_to_string(&app, 80, 24)"
 │  ▾ Work (1)              │┃                                                  ┃
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┃                                                  ┃
-│  ▾ People (1)            │┃                                                  ┃
-│  Recent                  │┌ ? ───────────────────────────────────────────────┐
-│    #random               ││Your message                                      │
-│    &secrets [e2e]        ││e   edit the message                              │
-│    #quiet                ││dd  delete the message                            │
+│  ▾ People (1)            │┌ ? ───────────────────────────────────────────────┐
+│  Recent                  ││Your message                                      │
+│    #random               ││e   edit the message                              │
+│    &secrets [e2e]        ││dd  delete the message                            │
+│    #quiet                ││gR  reply in its thread                           │
 │                          ││+   add or remove your reaction                   │
 │                          ││gg  jump to the oldest message                    │
 │                          ││G   jump to the newest message                    │

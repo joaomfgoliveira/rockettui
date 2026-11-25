@@ -253,6 +253,8 @@ fn sentinel_sweep() {
         id: "rt-test-1".to_string(),
         text: SendText::new(BODY.to_string()),
         reconcile: true,
+        tmid: None,
+        tshow: false,
     };
     no_sentinel("Effect::SendMessage", &format!("{send:?}"));
     // Edit and delete: the new text, their effects and every result Action.

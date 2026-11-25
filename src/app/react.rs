@@ -6,7 +6,7 @@
 //! Pure: no I/O and no `Frame`.
 
 use crate::api::ApiError;
-use crate::app::{App, Focus, MAX_CMDLINE, Mode, StatusMsg, emoji, jump, messages, send};
+use crate::app::{App, Focus, MAX_CMDLINE, Mode, StatusMsg, emoji, jump, messages, send, thread};
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, EmojiName};
 use crate::input::key::Chord;
@@ -210,16 +210,25 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
 /// popup checks before it lists the react action. Does not look at the detached state or the own
 /// username, which `open` refuses with a status line of their own.
 pub fn reactable_under_cursor(app: &App) -> bool {
-    if app.mode != Mode::Normal || app.focus != Focus::Messages {
+    if app.mode != Mode::Normal {
         return false;
     }
     let Some(room) = app.current_room.as_ref() else {
         return false;
     };
-    app.messages
-        .get(room)
-        .and_then(|held| held.get(messages::view(app, room).cursor))
-        .is_some_and(reactable)
+    under_cursor(app, room).is_some_and(reactable)
+}
+
+/// The message under the cursor of the focused messages pane or thread pane.
+fn under_cursor<'a>(app: &'a App, room: &RoomId) -> Option<&'a Message> {
+    match app.focus {
+        Focus::Messages => app
+            .messages
+            .get(room)
+            .and_then(|held| held.get(messages::view(app, room).cursor)),
+        Focus::Thread => thread::under_pane_cursor(app, room),
+        _ => None,
+    }
 }
 
 /// What the status line says when the picker is refused because the own username has not arrived:
@@ -266,10 +275,7 @@ pub struct View {
 
 /// The message the picker was opened on, while the room still holds it.
 fn held<'a>(app: &'a App, picker: &ReactPicker) -> Option<&'a Message> {
-    app.messages
-        .get(&picker.room)?
-        .iter()
-        .find(|m| m.id == picker.id)
+    thread::held_message(app, &picker.room, &picker.id)
 }
 
 /// The picker's content now, `None` when it is closed or its message is gone.
@@ -293,17 +299,13 @@ pub fn view(app: &App) -> Option<View> {
 /// status line, and so is an unknown own username. On the first opening of a session the custom
 /// emojis are asked for.
 pub fn open(app: &mut App) {
-    if app.mode != Mode::Normal || app.focus != Focus::Messages {
+    if app.mode != Mode::Normal {
         return;
     }
     let Some(room) = app.current_room.clone() else {
         return;
     };
-    let Some(message) = app
-        .messages
-        .get(&room)
-        .and_then(|held| held.get(messages::view(app, &room).cursor))
-    else {
+    let Some(message) = under_cursor(app, &room) else {
         return;
     };
     if !reactable(message) {

@@ -114,6 +114,9 @@ pub struct RowCtx<'a> {
     /// The id of the message the `unread` divider is drawn above, when this list is the open
     /// room (`App::pane_row_ctx`); `None` for every other list.
     pub unread_before: Option<&'a str>,
+    /// True when the list is the thread pane: every message there is of the thread, so a reply
+    /// shown in the channel carries no `[thread]` tag.
+    pub in_thread: bool,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -202,7 +205,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             let pad = " ".repeat(col - author.width() + 2);
             let prefix_width = time_col + 1 + col + 2;
             let body_width = width
-                .saturating_sub(prefix_width + tag_width(msg))
+                .saturating_sub(prefix_width + tag_width(msg, ctx))
                 .max(MIN_BODY);
             let indent = " ".repeat(prefix_width);
             tag_reply(msg, body_rows(msg, body_width, body_style, ctx), ctx)
@@ -225,7 +228,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
                 .collect()
         }
         MessageLayout::TwoLine => {
-            let body_width = width.saturating_sub(2 + tag_width(msg)).max(MIN_BODY);
+            let body_width = width.saturating_sub(2 + tag_width(msg, ctx)).max(MIN_BODY);
             let mut header = vec![
                 Span::styled(author, name),
                 Span::raw("  "),
@@ -328,8 +331,8 @@ const THREAD_REPLY_TAG: &str = "[thread] ";
 
 /// True when the body of `msg` starts with the thread-reply tag: a reply that is also shown in
 /// the channel.
-fn shows_reply_mark(msg: &Message) -> bool {
-    msg.tmid.is_some() && msg.tshow && msg.kind != MessageKind::Deleted
+fn shows_reply_mark(msg: &Message, ctx: &RowCtx) -> bool {
+    !ctx.in_thread && msg.tmid.is_some() && msg.tshow && msg.kind != MessageKind::Deleted
 }
 
 /// A reply shown in the channel as body rows: the first row starts with `THREAD_REPLY_TAG`, the
@@ -340,7 +343,7 @@ fn tag_reply(
     rows: Vec<Vec<Span<'static>>>,
     ctx: &RowCtx,
 ) -> Vec<Vec<Span<'static>>> {
-    if !shows_reply_mark(msg) {
+    if !shows_reply_mark(msg, ctx) {
         return rows;
     }
     rows.into_iter()
@@ -367,8 +370,8 @@ fn tag_reply(
 }
 
 /// Columns the tag takes from the body of `msg`: 0 unless it is a reply shown in the channel.
-fn tag_width(msg: &Message) -> usize {
-    if shows_reply_mark(msg) {
+fn tag_width(msg: &Message, ctx: &RowCtx) -> usize {
+    if shows_reply_mark(msg, ctx) {
         THREAD_REPLY_TAG.len()
     } else {
         0
@@ -597,6 +600,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         render_rows(m, width, &ctx)
     }
@@ -621,6 +625,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         render_rows(m, width, &ctx)
     }
@@ -682,6 +687,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -714,6 +720,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -1118,6 +1125,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
         for state in [
@@ -1159,6 +1167,7 @@ mod tests {
                 emoji: crate::app::emoji::EmojiView::none(),
                 own_user: None,
                 unread_before: None,
+                in_thread: false,
             };
             for state in [
                 crate::data::SendState::Sending,
@@ -1196,6 +1205,7 @@ mod tests {
                     emoji: crate::app::emoji::EmojiView::none(),
                     own_user: None,
                     unread_before: None,
+                    in_thread: false,
                 };
                 let m = with_state(state, "alice", "hello there");
                 let rows = render_rows(&m, 60, &ctx);
@@ -1317,6 +1327,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
     }
@@ -1427,6 +1438,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         divider_row(msg, prev, width, &ctx)
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -1689,6 +1701,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let with = parent(3, Some(AT_1402));
         let without = msg("alice", "hello");
@@ -1739,6 +1752,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: own,
             unread_before: None,
+            in_thread: false,
         };
         render_rows(m, width, &ctx)
     }
@@ -1767,6 +1781,7 @@ mod tests {
             },
             own_user: Some("me"),
             unread_before: None,
+            in_thread: false,
         };
         render_rows(m, width, &ctx)
     }
@@ -2097,6 +2112,7 @@ mod tests {
             emoji: view,
             own_user: Some("me"),
             unread_before: None,
+            in_thread: false,
         };
         render_rows(m, width, &ctx)
     }
@@ -2441,6 +2457,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let m = msg("alice", &vec![":tada:"; 40].join(" "));
         assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
@@ -2510,6 +2527,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            in_thread: false,
         };
         let plain = msg("alice", "hello");
         let m = reacted(

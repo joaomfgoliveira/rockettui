@@ -138,6 +138,10 @@ pub enum Effect {
         id: String,
         text: SendText,
         reconcile: bool,
+        /// The parent of the thread this message replies to, when it is a thread reply.
+        tmid: Option<String>,
+        /// A thread reply that is also shown in the channel.
+        tshow: bool,
     },
     /// Replace the text of message `id` of `room` with `POST chat.update`. Not a send: it uses no
     /// queue and no `SendState`. Answers `Action::EditDone` or `Action::EditFailed`, addressed by
@@ -361,6 +365,8 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             id,
             text,
             reconcile,
+            tmid,
+            tshow,
         } => {
             // A retry of an Unconfirmed message first asks the server whether it already holds the
             // message (D-15): a lost response must never become a duplicate in the room. Any
@@ -368,7 +374,11 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             if reconcile && let Ok(message) = client.get_message(&room, &id).await {
                 return vec![Action::MessageSent { room, id, message }];
             }
-            match client.send_message(&room, &id, text.as_str()).await {
+            let thread = tmid.as_deref().map(|parent_id| crate::api::ThreadTarget {
+                parent_id,
+                also_in_channel: tshow,
+            });
+            match client.send_message(&room, &id, text.as_str(), thread).await {
                 Ok(message) => vec![Action::MessageSent { room, id, message }],
                 Err(error) => {
                     // The attempt may have landed meanwhile, or a duplicate `_id` was answered
@@ -599,6 +609,8 @@ mod tests {
             id: "rt-test-1".to_string(),
             text: SendText::new(SENTINEL.to_string()),
             reconcile: false,
+            tmid: None,
+            tshow: false,
         }
     }
 
@@ -682,6 +694,8 @@ mod tests {
             id: "rt-test-1".to_string(),
             text: SendText::new(SENTINEL.to_string()),
             reconcile,
+            tmid: None,
+            tshow: false,
         }
     }
 
