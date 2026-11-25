@@ -1,0 +1,43 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "Modal TUI Shell",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Configuration System",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Connect & Read",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Send Messages",
+      "status": "in_progress"
+    },
+    {
+      "number": "5",
+      "name": "Realtime",
+      "status": "pending"
+    },
+    {
+      "number": "6",
+      "name": "Company Server",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 4 of 6 · 50% · executing"
+  },
+  "updated_at": "2026-11-19T19:59:21.549Z"
+}

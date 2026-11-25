@@ -16,7 +16,8 @@
     "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
-    "quick_branch_template": null
+    "quick_branch_template": null,
+    "allow_default_branch_commits": true
   },
   "workflow": {
     "research": true,
@@ -48,7 +49,8 @@
     "post_planning_gaps": true,
     "security_enforcement": true,
     "security_asvs_level": 1,
-    "security_block_on": "high"
+    "security_block_on": "high",
+    "_auto_chain_active": false
   },
   "ship": {
     "pr_body_sections": []
@@ -65,5 +67,16 @@
     "source_grounding_authority": "grep"
   },
   "mode": "interactive",
-  "granularity": "standard"
+  "granularity": "standard",
+  "model_overrides": {
+    "gsd-planner": "sonnet",
+    "gsd-debugger": "sonnet",
+    "gsd-roadmapper": "sonnet",
+    "gsd-security-auditor": "sonnet",
+    "gsd-assumptions-analyzer": "sonnet",
+    "gsd-debug-session-manager": "sonnet",
+    "gsd-eval-planner": "sonnet",
+    "gsd-framework-selector": "sonnet",
+    "gsd-user-profiler": "sonnet"
+  }
 }

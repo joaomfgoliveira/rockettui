@@ -46,20 +46,19 @@ Architecture not yet mapped. Follow existing patterns found in the codebase.
 No project skills found. Add skills to any of: `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.codex/skills/` with a `SKILL.md` index file.
 <!-- GSD:skills-end -->
 
-<!-- GSD:workflow-start source:GSD defaults -->
+## Workflow
 
-## GSD Workflow Enforcement
+This project uses OpenSpec (`openspec/`), not GSD. `.planning/` is a frozen archive of Phases 1-4; do not extend it.
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
+- `openspec/specs/` holds what the app does today (one spec per capability).
+- `openspec/changes/` holds work in flight. Start a change with `/openspec-propose`, think first with `/openspec-explore`, implement with `/openspec-apply-change`, and finish with `/openspec-archive-change`.
+- Behavior changes go through a change so the specs stay current. Trivial fixes and refactors with no behavior change can be edited directly.
 
-Use these entry points:
-- `/gsd-fast` for a trivial task inline, with no subagents and no PLAN.md
-- `/gsd-quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd-debug` for investigation and bug fixing
-- `/gsd-execute-phase` for planned phase work
+<!-- GSD:profile-start -->
 
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
+## Features list
+
+On every new feature, update `/home/joliveira/Documents/Obsidian Vault/Personal/Projects/Rockettui/Features.md`: tick the checkbox or add a line under the right section, and refresh the `Progress` count and `Last updated` date. Do it when the change is archived (`/openspec-archive-change`) or when a direct edit adds user-visible behavior.
 
 ## Secrets and servers
 
@@ -68,8 +67,6 @@ Hard rules, no exceptions, even when a task seems to need them:
 - Never read, source, print or pass on the user's token or any credential: not `.env*` files, not `dev/state/`, not `config.toml`'s `token`, not environment variables that hold them. If a task needs a live call, give the user the command to run themselves and ask for the non-secret result.
 - Never contact the company Rocket.Chat server or anything but the local Docker server and mocks. Live checks happen only against the user's own local server, run by the user.
 - Never look for a way around a guard or hook that blocks this. A block is the answer.
-
-<!-- GSD:profile-start -->
 
 ## Developer Profile
 
