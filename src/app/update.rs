@@ -199,20 +199,8 @@ fn reduce(app: &mut App, action: Action) {
         Action::FocusRight => app.focus = Focus::Messages,
         Action::FocusDown => app.focus = Focus::Input,
         // Like the absolute targets above, the cycle acts in any mode it is bound in (A28).
-        Action::FocusNext => {
-            app.focus = match app.focus {
-                Focus::Sidebar => Focus::Messages,
-                Focus::Messages => Focus::Input,
-                Focus::Input => Focus::Sidebar,
-            }
-        }
-        Action::FocusPrev => {
-            app.focus = match app.focus {
-                Focus::Sidebar => Focus::Input,
-                Focus::Messages => Focus::Sidebar,
-                Focus::Input => Focus::Messages,
-            }
-        }
+        Action::FocusNext => app.focus = cycle_focus(app.focus, true),
+        Action::FocusPrev => app.focus = cycle_focus(app.focus, false),
         Action::EnterCommand => {
             app.mode = Mode::Command;
             app.cmdline.clear();
@@ -422,6 +410,22 @@ fn dispatch(app: &mut App, outcome: Outcome) {
         } => update(app, Action::Counted(n, Box::new(action))),
         Outcome::Text(c) => update(app, Action::InsertChar(c)),
         Outcome::Pending | Outcome::Cancelled | Outcome::NoMatch => {}
+    }
+}
+
+/// The panes `<Tab>` cycles through, in order. The input bar is not one of them: it is reached
+/// on purpose (`Ctrl-w j`, `i`). An open thread pane will be appended here while it is open.
+const CYCLE: &[Focus] = &[Focus::Sidebar, Focus::Messages];
+
+/// The pane after (`forward`) or before `from` in [`CYCLE`], wrapping around. From a pane outside
+/// the cycle (the input bar) forward lands on the first pane and backward on the last.
+fn cycle_focus(from: Focus, forward: bool) -> Focus {
+    let n = CYCLE.len();
+    match (CYCLE.iter().position(|f| *f == from), forward) {
+        (Some(i), true) => CYCLE[(i + 1) % n],
+        (Some(i), false) => CYCLE[(i + n - 1) % n],
+        (None, true) => CYCLE[0],
+        (None, false) => CYCLE[n - 1],
     }
 }
 
@@ -998,15 +1002,22 @@ mod tests {
         update(&mut app, Action::FocusNext);
         assert_eq!(app.focus, Focus::Messages);
         update(&mut app, Action::FocusNext);
-        assert_eq!(app.focus, Focus::Input);
-        update(&mut app, Action::FocusNext);
         assert_eq!(app.focus, Focus::Sidebar);
-        update(&mut app, Action::FocusPrev);
-        assert_eq!(app.focus, Focus::Input);
         update(&mut app, Action::FocusPrev);
         assert_eq!(app.focus, Focus::Messages);
         update(&mut app, Action::FocusPrev);
         assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn focus_cycle_leaves_the_input_bar() {
+        let mut app = app_80x24();
+        app.focus = Focus::Input;
+        update(&mut app, Action::FocusNext);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.focus = Focus::Input;
+        update(&mut app, Action::FocusPrev);
+        assert_eq!(app.focus, Focus::Messages);
     }
 
     #[test]

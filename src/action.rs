@@ -24,9 +24,10 @@ pub enum Action {
     FocusLeft,
     FocusDown,
     FocusRight,
-    /// Cycle focus forward: Sidebar, Messages, Input, Sidebar (vim-extras `<Tab>`, D-14).
+    /// Cycle focus forward through the sidebar and the messages pane, skipping the input bar
+    /// (vim-extras `<Tab>`, D-14).
     FocusNext,
-    /// Cycle focus backward (vim-extras `<S-Tab>`, D-14).
+    /// Cycle focus backward, the reverse of `FocusNext` (vim-extras `<S-Tab>`, D-14).
     FocusPrev,
     EnterCommand,
     Cancel,
