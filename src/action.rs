@@ -67,6 +67,9 @@ pub enum Action {
     /// reaction picker, to add a reaction or take one back. Anything else is a silent no-op, and a
     /// detached room or an unknown own username is refused with a status line.
     ReactMessage,
+    /// Normal mode (`Ctrl-k`): open the room switcher, a search over the joined rooms that opens
+    /// the chosen one. It changes neither the mode, the focus nor the open room.
+    SwitchRoom,
     /// Normal mode, messages pane focused, cursor on a message that has reactions (`gr`): open the
     /// popup that lists who gave each one. Anything else is a silent no-op.
     ShowReactions,
@@ -294,6 +297,7 @@ impl std::fmt::Debug for Action {
             Action::DeleteMessage => write!(f, "DeleteMessage"),
             Action::ShowReactions => write!(f, "ShowReactions"),
             Action::ReactMessage => write!(f, "ReactMessage"),
+            Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ShowContext => write!(f, "ShowContext"),
             Action::SearchStart => write!(f, "SearchStart"),

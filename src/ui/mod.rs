@@ -15,6 +15,7 @@ pub mod results;
 pub mod sanitize;
 pub mod sidebar;
 pub mod status;
+pub mod switcher;
 pub mod timefmt;
 pub mod wrap;
 
@@ -46,6 +47,7 @@ pub fn view(frame: &mut Frame, app: &App) {
     context::render(frame, &areas, app);
     reactions::render(frame, &areas, app);
     picker::render(frame, &areas, app);
+    switcher::render(frame, &areas, app);
     status::render_status(frame, areas.status, app);
     status::render_cmdline(frame, areas.cmdline, app);
 }

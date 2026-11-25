@@ -1,0 +1,27 @@
+---
+source: src/ui/switcher.rs
+expression: out
+---
+┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Messages ────────────────────────────────────────┐
+┃  Recent ┌ Switch room ─────────────────────────────────────────────┐         │
+┃>   #room│>                                                         │         │
+┃    #room│   #room-15                                               │         │
+┃    #room│   #room-16                                               │         │
+┃    #room│   #room-17                                               │         │
+┃    #room│   #room-18                                               │         │
+┃    #room│   #room-19                                               │         │
+┃    #room│   #room-20                                               │         │
+┃    #room│   #room-21                                               │         │
+┃    #room│   #room-22                                               │         │
+┃    #room│   #room-23                                               │         │
+┃    #room│   #room-24                                               │         │
+┃    #room│   #room-25                                               │         │
+┃    #room└───────────────────── C-j/C-k move  Enter open  Esc close ┘         │
+┃    #room-13              ┃│                                                  │
+┃    #room-14              ┃│                                                  │
+┃    #room-15              ┃│                                                  │
+┃    #room-16              ┃└──────────────────────────────────────────────────┘
+┃    #room-17              ┃┌ Input ───────────────────────────────────────────┐
+┃    #room-18              ┃│press i to write                                  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────────────────┘
+ NORMAL  -

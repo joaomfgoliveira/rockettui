@@ -3,7 +3,7 @@
 
 use crate::app::sidebar::{self, SidebarRow};
 use crate::app::{App, Focus};
-use crate::data::RoomKind;
+use crate::data::{Room, RoomKind};
 use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
@@ -62,49 +62,56 @@ fn row_item(app: &App, row: &SidebarRow, width: usize) -> ListItem<'static> {
                 return ListItem::new("");
             };
             let indent = "  ".repeat(usize::from(*indent));
-            // The placeholder is as wide as the unread marker, so read rooms stay aligned.
-            let unread = if room.unread.is_unread() {
-                app.theme.markers.unread.clone()
-            } else {
-                " ".repeat(app.theme.markers.unread.width())
-            };
-            let glyph = app.theme.markers.glyph(room.kind);
-            let name = sanitize_line(&room.name);
-            let tag = if room.encrypted {
-                app.theme.markers.encrypted.as_str()
-            } else {
-                ""
-            };
-            let style = if room.unread.is_unread() {
-                app.theme.sidebar_unread
-            } else {
-                app.theme.sidebar_room
-            };
-            let count = if room.unread.count > 0 {
-                format!(" ({})", capped(room.unread.count))
-            } else {
-                String::new()
-            };
-            let mention = if room.unread.mentions > 0 {
-                format!(" @{}", capped(room.unread.mentions))
-            } else {
-                String::new()
-            };
-            let prefix = format!("{indent}{unread}{glyph}");
-            let fixed = prefix.width() + tag.width() + count.width() + mention.width();
-            let name = if (count.is_empty() && mention.is_empty()) || fixed + name.width() <= width
-            {
-                name.into_owned()
-            } else {
-                truncate_to(&name, width.saturating_sub(fixed))
-            };
-            let mut spans = vec![Span::styled(format!("{prefix}{name}{tag}{count}"), style)];
-            if !mention.is_empty() {
-                spans.push(Span::styled(mention, app.theme.sidebar_mention));
-            }
-            ListItem::new(Line::from(spans))
+            ListItem::new(room_line(app, room, &indent, width))
         }
     }
+}
+
+/// The line of one room: the unread marker, the kind glyph, the sanitized name, the encrypted tag,
+/// the unread count and the mention badge. The sidebar and the room switcher both draw it, so the
+/// two never differ. `width` is the columns the line may use; it only matters for an unread room,
+/// whose name is cut (with `…`) before its count and badge are.
+pub fn room_line(app: &App, room: &Room, indent: &str, width: usize) -> Line<'static> {
+    // The placeholder is as wide as the unread marker, so read rooms stay aligned.
+    let unread = if room.unread.is_unread() {
+        app.theme.markers.unread.clone()
+    } else {
+        " ".repeat(app.theme.markers.unread.width())
+    };
+    let glyph = app.theme.markers.glyph(room.kind);
+    let name = sanitize_line(&room.name);
+    let tag = if room.encrypted {
+        app.theme.markers.encrypted.as_str()
+    } else {
+        ""
+    };
+    let style = if room.unread.is_unread() {
+        app.theme.sidebar_unread
+    } else {
+        app.theme.sidebar_room
+    };
+    let count = if room.unread.count > 0 {
+        format!(" ({})", capped(room.unread.count))
+    } else {
+        String::new()
+    };
+    let mention = if room.unread.mentions > 0 {
+        format!(" @{}", capped(room.unread.mentions))
+    } else {
+        String::new()
+    };
+    let prefix = format!("{indent}{unread}{glyph}");
+    let fixed = prefix.width() + tag.width() + count.width() + mention.width();
+    let name = if (count.is_empty() && mention.is_empty()) || fixed + name.width() <= width {
+        name.into_owned()
+    } else {
+        truncate_to(&name, width.saturating_sub(fixed))
+    };
+    let mut spans = vec![Span::styled(format!("{prefix}{name}{tag}{count}"), style)];
+    if !mention.is_empty() {
+        spans.push(Span::styled(mention, app.theme.sidebar_mention));
+    }
+    Line::from(spans)
 }
 
 /// A count as shown in the sidebar: `99+` over 99.

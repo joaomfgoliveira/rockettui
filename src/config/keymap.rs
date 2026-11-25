@@ -668,6 +668,42 @@ mod tests {
     }
 
     #[test]
+    fn switch_room_default_rebind_unbind_and_unknown_spelling() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        // `<C-k>` in every preset, next to the bindings it must not disturb.
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "<C-k>", Action::SwitchRoom), "{preset:?}");
+            assert!(is(&keymap, "+", Action::ReactMessage), "{preset:?}");
+            assert!(is(&keymap, "<C-d>", Action::HalfPageDown), "{preset:?}");
+        }
+        // Rebind: the new key works and `<C-k>` stays.
+        let src = "[normal]\n\"<C-p>\" = \"switch_room\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "<C-p>", Action::SwitchRoom));
+        assert!(is(&keymap, "<C-k>", Action::SwitchRoom));
+        // Unbind with `none`.
+        let src = "[normal]\n\"<C-k>\" = \"none\"\n";
+        assert!(errors(src).is_empty());
+        assert_eq!(lookup_kind(&built(src), Mode::Normal, "<C-k>"), "none");
+        // A misspelled name is a config error that names it.
+        let found = errors("[normal]\n\"<C-p>\" = \"switch_rooms\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("switch_rooms"), "{found:?}");
+        // The name round-trips.
+        assert_eq!(
+            crate::input::actions::name_of(&Action::SwitchRoom),
+            Some("switch_room")
+        );
+    }
+
+    #[test]
     fn none_unbinds() {
         let keymap = built("[normal]\n\"<C-d>\" = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "<C-d>"), "none");

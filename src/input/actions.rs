@@ -12,6 +12,7 @@
 //! `discard_send` remains a name that only discards. `show_reactions` opens the popup of who reacted
 //! to the message under the cursor (`gr` by default) and does nothing on a message without any.
 //! `react_message` opens the picker to add a reaction or take one back (`+` by default).
+//! `switch_room` opens the room switcher (`<C-k>` by default).
 
 use crate::action::Action;
 
@@ -52,6 +53,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "delete_message",
     "show_reactions",
     "react_message",
+    "switch_room",
     "show_help",
     "show_context",
     "search_start",
@@ -99,6 +101,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "delete_message" => Action::DeleteMessage,
         "show_reactions" => Action::ShowReactions,
         "react_message" => Action::ReactMessage,
+        "switch_room" => Action::SwitchRoom,
         "show_help" => Action::ShowHelp,
         "show_context" => Action::ShowContext,
         "search_start" => Action::SearchStart,
@@ -149,6 +152,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::DeleteMessage => Some("delete_message"),
         Action::ShowReactions => Some("show_reactions"),
         Action::ReactMessage => Some("react_message"),
+        Action::SwitchRoom => Some("switch_room"),
         Action::ShowHelp => Some("show_help"),
         Action::ShowContext => Some("show_context"),
         Action::SearchStart => Some("search_start"),

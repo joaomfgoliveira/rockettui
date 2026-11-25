@@ -66,6 +66,7 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "react_message",
         "add or remove your reaction on the message under the cursor",
     ),
+    ("switch_room", "switch to another room by name"),
     ("show_help", "show or close this help"),
     ("show_context", "show what the selected object can do"),
     ("search_start", "find text in the open room"),
@@ -252,6 +253,19 @@ mod tests {
         press(&mut app, ":help<CR>");
         assert_eq!(app.help, Some(0));
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn the_help_lists_switch_room_with_its_key() {
+        let lines = build(&app_80x24().keymap);
+        let row = lines
+            .iter()
+            .find(|line| format!("{line:?}").contains("switch to another room"))
+            .unwrap_or_else(|| panic!("switch_room is not listed: {lines:?}"));
+        assert!(
+            format!("{row:?}").contains("<C-k>") || format!("{row:?}").contains("C-k"),
+            "{row:?}"
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub mod results;
 pub mod search;
 pub mod send;
 pub mod sidebar;
+pub mod switcher;
 pub mod update;
 
 use crate::data::{Folder, Message, Room, RoomId, SendState};
@@ -170,6 +171,12 @@ pub struct App {
     pub images: emoji::Images,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub react_picker: Option<react::ReactPicker>,
+    /// The room switcher (`app::switcher`), when open. Like `help` it is a state, not a mode. No
+    /// `Debug` of its own beyond a redacting one: it holds the typed query.
+    pub switcher: Option<switcher::Switcher>,
+    /// The rooms opened this session, most recently opened first (`open_room`). In memory only:
+    /// never written to disk. The switcher orders an empty search by it.
+    pub recent_rooms: Vec<RoomId>,
     /// The active find in the open room (`app::search`), if any. No `Debug`: it holds the query.
     pub search: Option<search::Search>,
     /// The text of the open search prompt (`/`), when open. Like `help` it is a state, not a mode.
@@ -254,6 +261,8 @@ impl App {
             images: emoji::Images::default(),
             anim_ms: 0,
             react_picker: None,
+            switcher: None,
+            recent_rooms: Vec::new(),
             search: None,
             search_prompt: None,
             results: None,
@@ -407,6 +416,8 @@ impl App {
                     }
                 }
             }
+            self.recent_rooms.retain(|recent| *recent != id);
+            self.recent_rooms.insert(0, id.clone());
             self.current_room = Some(id);
             read::on_open(self);
             emoji::ensure_loaded(self);

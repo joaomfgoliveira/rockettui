@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, help, history,
-    jump, react, reactions, read, realtime, results, search, send, sidebar,
+    jump, react, reactions, read, realtime, results, search, send, sidebar, switcher,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -18,6 +18,7 @@ pub fn update(app: &mut App, action: Action) {
     // A live change can leave the reactions popup with nothing to show; it closes at once.
     reactions::close_if_stale(app);
     react::close_if_stale(app);
+    switcher::refresh(app);
     // Whatever the action changed, the room on screen may now name a custom emoji not seen yet.
     emoji::request_images(app);
 }
@@ -35,6 +36,12 @@ fn reduce(app: &mut App, action: Action) {
             // An open reaction picker takes every key, so letters are the search (see `app::react`).
             if app.react_picker.is_some() {
                 react::key(app, chord);
+                return;
+            }
+            // An open room switcher takes every key, so letters are the search (see
+            // `app::switcher`).
+            if app.switcher.is_some() {
+                switcher::key(app, chord);
                 return;
             }
             // An open help overlay takes the keys next (see `app::help`).
@@ -72,6 +79,7 @@ fn reduce(app: &mut App, action: Action) {
                 || app.context
                 || app.reactions_popup.is_some()
                 || app.react_picker.is_some()
+                || app.switcher.is_some()
             {
                 return;
             }
@@ -280,6 +288,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowContext => app.context = true,
         Action::ShowReactions => reactions::open(app),
         Action::ReactMessage => react::open(app),
+        Action::SwitchRoom => switcher::open(app),
         Action::SearchStart => search::start(app),
         Action::SearchNext => search::next(app),
         Action::SearchPrev => search::prev(app),
@@ -293,6 +302,7 @@ fn reduce(app: &mut App, action: Action) {
         // A paste is one insert and never a submit (T-01-22).
         Action::Paste(text) if app.search_prompt.is_some() => search::prompt_paste(app, &text),
         Action::Paste(text) if app.react_picker.is_some() => react::paste(app, &text),
+        Action::Paste(text) if app.switcher.is_some() => switcher::paste(app, &text),
         Action::Paste(text) => match app.mode {
             Mode::Insert => edit_input(app, |input| {
                 input.insert_str(&text);

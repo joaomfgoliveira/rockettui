@@ -110,6 +110,8 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "gr", Action::ShowReactions),
         // `+` (`react_message`) opens the reaction picker for the message under the cursor.
         (Mode::Normal, "+", Action::ReactMessage),
+        // `<C-k>` (`switch_room`) opens the room switcher from any pane.
+        (Mode::Normal, "<C-k>", Action::SwitchRoom),
         // `?` opens the context popup; `?` again opens the help overlay, generated from this very
         // keymap. `show_help` has no default key.
         (Mode::Normal, "?", Action::ShowContext),
@@ -144,7 +146,7 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
 }
 
 /// The `vim-extras` preset: [`default_bindings`] plus Tab and Shift-Tab pane focus cycling in
-/// Normal mode (D-14). Nothing else is added; Ctrl-k room switching stays deferred.
+/// Normal mode (D-14). Nothing else is added.
 pub fn vim_extras_bindings() -> Vec<(Mode, &'static str, Action)> {
     let mut rows = default_bindings();
     rows.push((Mode::Normal, "<Tab>", Action::FocusNext));
