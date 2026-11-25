@@ -7,6 +7,7 @@ pub mod command;
 pub mod context;
 pub mod edit;
 pub mod emoji;
+pub mod follow;
 pub mod help;
 pub mod history;
 pub mod input_buf;
@@ -199,6 +200,11 @@ pub struct App {
     /// The user's own username (D-17), set from `GET /api/v1/me` by plan 04-06 and kept in memory
     /// only. While it is `None` a pending row falls back to `LOCAL_AUTHOR`.
     pub own_username: Option<String>,
+    /// The user's own id, from the same answer as `own_username`: what a thread's follower list is
+    /// compared with. In memory only, never drawn or logged.
+    pub own_user_id: Option<String>,
+    /// True from a follow or unfollow request until its answer, so a second press waits.
+    pub follow_pending: bool,
     /// The wait before the open room is marked read (`app::read`).
     pub read: read::ReadState,
     pub status_msg: Option<StatusMsg>,
@@ -312,6 +318,8 @@ impl App {
             local_seq: 0,
             id_prefix: "local-".to_string(),
             own_username: None,
+            own_user_id: None,
+            follow_pending: false,
             status_msg: None,
             editing: None,
             confirm: None,
@@ -434,6 +442,7 @@ impl App {
             aliases: &self.settings.emoji_aliases,
             emoji: self.emoji_view(),
             own_user: self.own_username.as_deref(),
+            own_id: self.own_user_id.as_deref(),
             unread_before: None,
             in_thread: false,
         }
@@ -830,6 +839,7 @@ mod tests {
                     tshow: false,
                     tcount: 0,
                     tlm: None,
+                    followers: None,
                     reactions: Vec::new(),
                     id: format!("u-{n}"),
                     room_id: rid(room),

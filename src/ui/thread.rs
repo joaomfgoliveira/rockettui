@@ -31,7 +31,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let Some(pane) = app.thread.as_ref() else {
         return;
     };
-    let block = block(app, " Thread ");
+    // The header says whether the user follows the thread.
+    let following = app.own_user_id.as_deref().is_some_and(|id| {
+        pane.messages
+            .first()
+            .is_some_and(|m| m.id == pane.parent_id && m.followed_by(id))
+    });
+    let title = if following {
+        " Thread, following "
+    } else {
+        " Thread "
+    };
+    let block = block(app, title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let notice = app.theme.messages_notice;
@@ -117,6 +128,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
         }
     }
 
@@ -132,6 +144,7 @@ mod tests {
                 Message {
                     tcount: 2,
                     tlm: Some(660),
+                    followers: None,
                     ..msg("1", 60, "alice", "deploy plan: who takes the rollback?")
                 },
             ],
@@ -234,6 +247,41 @@ mod tests {
         let out = render_to_string(&app, 160, 24);
         assert!(out.contains("not delivered"), "{out}");
         assert!(out.contains(&app.theme.markers.failed), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    /// The 160-column app with the parent's follower list and the own id set.
+    fn followed_thread_app(followers: Vec<&str>) -> App {
+        let mut app = app_with_thread(160, 24);
+        app.own_user_id = Some("me".to_string());
+        let list: Vec<String> = followers.into_iter().map(str::to_string).collect();
+        for m in app
+            .messages
+            .get_mut(&RoomId("quiet".to_string()))
+            .into_iter()
+            .flatten()
+            .chain(app.thread.iter_mut().flat_map(|p| p.messages.iter_mut()))
+            .filter(|m| m.tcount > 0)
+        {
+            m.followers = Some(list.clone());
+        }
+        app
+    }
+
+    #[test]
+    fn a_followed_thread_says_following_in_the_marker_row_and_the_header() {
+        let app = followed_thread_app(vec!["me"]);
+        let out = render_to_string(&app, 160, 24);
+        assert!(out.contains("Thread, following"), "{out}");
+        assert!(out.contains("replies, last 00:11, following"), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn an_unfollowed_thread_has_no_follow_text() {
+        let app = followed_thread_app(vec!["other"]);
+        let out = render_to_string(&app, 160, 24);
+        assert!(!out.contains("following"), "{out}");
         insta::assert_snapshot!(out);
     }
 

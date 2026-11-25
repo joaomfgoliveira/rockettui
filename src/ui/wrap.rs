@@ -117,6 +117,8 @@ pub struct RowCtx<'a> {
     /// True when the list is the thread pane: every message there is of the thread, so a reply
     /// shown in the channel carries no `[thread]` tag.
     pub in_thread: bool,
+    /// The user's own id, to tell whether they follow a thread (`None` until known).
+    pub own_id: Option<&'a str>,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -311,17 +313,23 @@ fn body_rows(
 }
 
 /// The text of the thread marker row of a message with replies: `-> 3 replies, last 14:02`, or
-/// `-> 1 reply, last 14:02`; without a last-reply time just the count. Plain ASCII, so the row is
+/// `-> 1 reply, last 14:02`; without a last-reply time just the count. A thread the user follows
+/// ends with `, following`. Plain ASCII, so the row is
 /// one cell per character.
 fn thread_marker_text(msg: &Message, ctx: &RowCtx) -> String {
     let count = msg.tcount;
     let noun = if count == 1 { "reply" } else { "replies" };
+    let following = if ctx.own_id.is_some_and(|id| msg.followed_by(id)) {
+        ", following"
+    } else {
+        ""
+    };
     match msg.tlm {
         Some(tlm) => format!(
-            "-> {count} {noun}, last {}",
+            "-> {count} {noun}, last {}{following}",
             format_ts(ctx.time_format, tlm, ctx.zone)
         ),
-        None => format!("-> {count} {noun}"),
+        None => format!("-> {count} {noun}{following}"),
     }
 }
 
@@ -568,6 +576,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
@@ -601,6 +610,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -626,6 +636,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -688,6 +699,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -721,6 +733,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -1126,6 +1139,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
         for state in [
@@ -1168,6 +1182,7 @@ mod tests {
                 own_user: None,
                 unread_before: None,
                 in_thread: false,
+                own_id: None,
             };
             for state in [
                 crate::data::SendState::Sending,
@@ -1206,6 +1221,7 @@ mod tests {
                     own_user: None,
                     unread_before: None,
                     in_thread: false,
+                    own_id: None,
                 };
                 let m = with_state(state, "alice", "hello there");
                 let rows = render_rows(&m, 60, &ctx);
@@ -1268,6 +1284,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             ..msg(author, body)
         }
@@ -1328,6 +1345,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
     }
@@ -1359,6 +1377,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             ..deleted("alice")
         };
@@ -1412,6 +1431,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: format!("m{ts}"),
             room_id: RoomId("r".to_string()),
@@ -1439,6 +1459,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         divider_row(msg, prev, width, &ctx)
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -1702,6 +1723,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let with = parent(3, Some(AT_1402));
         let without = msg("alice", "hello");
@@ -1753,6 +1775,7 @@ mod tests {
             own_user: own,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -1782,6 +1805,7 @@ mod tests {
             own_user: Some("me"),
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -2113,6 +2137,7 @@ mod tests {
             own_user: Some("me"),
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -2458,6 +2483,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let m = msg("alice", &vec![":tada:"; 40].join(" "));
         assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
@@ -2528,6 +2554,7 @@ mod tests {
             own_user: None,
             unread_before: None,
             in_thread: false,
+            own_id: None,
         };
         let plain = msg("alice", "hello");
         let m = reacted(

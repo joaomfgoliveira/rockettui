@@ -11,10 +11,10 @@ expression: out
 │  ▾ Work (1)              │┃                                                  ┃
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┃                                                  ┃
-│  ▾ People (1)            │┃                                                  ┃
-│  Recent                  │┌ ? ───────────────────────────────────────────────┐
-│    #random               ││Message                                           │
-│    &secrets [e2e]        ││gt  open the thread                               │
+│  ▾ People (1)            │┌ ? ───────────────────────────────────────────────┐
+│  Recent                  ││Message                                           │
+│    #random               ││gt  open the thread                               │
+│    &secrets [e2e]        ││gf  follow or unfollow the thread                 │
 │    #quiet                ││gR  reply in its thread                           │
 │                          ││+   add or remove your reaction                   │
 │                          ││gg  jump to the oldest message                    │

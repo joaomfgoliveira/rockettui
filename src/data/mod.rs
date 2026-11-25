@@ -188,9 +188,20 @@ pub struct Message {
     pub tcount: u32,
     /// On a thread parent, unix seconds of the last reply (`tlm`).
     pub tlm: Option<i64>,
+    /// On a thread parent, the ids of the users who follow the thread (`replies`); `None` when the
+    /// server did not say. Private: only compared with the own user id, never drawn or logged.
+    pub followers: Option<Vec<String>>,
 }
 
 impl Message {
+    /// True when the thread of this parent is followed by the user with id `own_id`. A parent
+    /// whose follower list is unknown counts as not followed.
+    pub fn followed_by(&self, own_id: &str) -> bool {
+        self.followers
+            .as_ref()
+            .is_some_and(|f| f.iter().any(|id| id == own_id))
+    }
+
     /// True when the main message flow draws and counts this message: everything but a thread
     /// reply that was not also sent to the channel.
     pub fn in_main_flow(&self) -> bool {
@@ -278,6 +289,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: vec![Reaction {
                 name: "SENTINEL-REACTION-5c1e".to_string(),
                 users: vec!["SENTINEL-USER-9a4d".to_string(), "other".to_string()],
@@ -308,6 +320,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),

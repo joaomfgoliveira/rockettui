@@ -279,6 +279,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
         }
     }
@@ -389,6 +390,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             ..row("x", OWN, "see [attachment: a.pdf]")
         };

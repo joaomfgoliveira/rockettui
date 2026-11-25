@@ -121,6 +121,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "hostile-0".to_string(),
                 room_id: RoomId(id.0.clone()),

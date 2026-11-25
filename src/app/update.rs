@@ -5,8 +5,9 @@
 use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, help, history,
-    jump, react, reactions, read, realtime, results, search, send, sidebar, switcher, thread,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, follow, help,
+    history, jump, react, reactions, read, realtime, results, search, send, sidebar, switcher,
+    thread,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -118,6 +119,14 @@ fn reduce(app: &mut App, action: Action) {
         }
         Action::LoadFailed(err) => app.conn = ConnState::Failed(err),
         Action::MeLoaded(name) => own_username_loaded(app, name),
+        Action::OwnIdLoaded(id) => app.own_user_id = Some(id),
+        Action::ToggleFollowThread => follow::toggle(app),
+        Action::FollowDone {
+            room,
+            parent_id,
+            follow,
+        } => follow::on_done(app, &room, &parent_id, follow),
+        Action::FollowFailed { follow, error } => follow::on_failed(app, follow, error),
         Action::MarkReadDue => read::on_due(app),
         Action::MarkReadDone { room } => read::on_done(app, &room),
         Action::FoldersLoaded(folders) => {
@@ -1103,6 +1112,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: RoomId(room.to_string()),

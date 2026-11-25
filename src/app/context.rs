@@ -108,6 +108,7 @@ impl Kind {
             Kind::Thread => &[
                 ("close_thread", "close the thread"),
                 ("reply_in_thread", "reply in this thread"),
+                ("toggle_follow_thread", "follow or unfollow the thread"),
                 ("move_down", "next message"),
                 ("move_up", "previous message"),
                 ("goto_top", "first message"),
@@ -134,6 +135,10 @@ impl Kind {
 /// channel), first among the actions that depend on the message (`lines` places it). A test checks
 /// the name is a real action.
 const THREAD_ACTION: (&str, &str) = ("open_thread", "open the thread");
+
+/// The follow action: listed on a message that has a thread, right after the thread action. A test
+/// checks the name is a real action.
+const FOLLOW_ACTION: (&str, &str) = ("toggle_follow_thread", "follow or unfollow the thread");
 
 /// The reply action: listed on a message that can be replied to (not a system message, not a
 /// deleted one, not one still being sent), right after the thread action. A test checks the name is
@@ -238,6 +243,7 @@ pub fn lines(app: &App) -> Context {
     let mut message_actions: Vec<(&str, &str)> = Vec::new();
     if is_message && thread::under_cursor(app).is_some() {
         message_actions.push(THREAD_ACTION);
+        message_actions.push(FOLLOW_ACTION);
     }
     if is_message && thread::replyable_under_cursor(app) {
         message_actions.push(REPLY_ACTION);
@@ -678,7 +684,7 @@ mod tests {
         let (name, desc) = THREAD_ACTION;
         assert!(ACTION_NAMES.contains(&name));
         assert!(!desc.is_empty());
-        for name in [name, REPLY_ACTION.0, "close_thread"] {
+        for name in [name, REPLY_ACTION.0, FOLLOW_ACTION.0, "close_thread"] {
             assert!(
                 crate::app::help::DESCRIPTIONS
                     .iter()

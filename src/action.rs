@@ -81,6 +81,9 @@ pub enum Action {
     ReplyInThread,
     /// Insert mode (`<C-b>`), reply to a thread: toggle whether it is also shown in the channel.
     ToggleReplyToChannel,
+    /// Normal mode, messages or thread pane focused (`gf`): follow the thread of the message under
+    /// the cursor, or the open thread, or unfollow it when it is already followed.
+    ToggleFollowThread,
     /// Close the thread pane (`Esc` with the pane focused; no default key otherwise).
     CloseThread,
     /// Open the help overlay (no default key; `?` then `?` or `:help`); while it is open, close it.
@@ -109,6 +112,9 @@ pub enum Action {
     MessagesLoaded(RoomId, Vec<Message>),
     /// The user's own username from `GET /api/v1/me` (D-17). Its `Debug` never prints it.
     MeLoaded(String),
+    /// The user's own id from the same answer, to tell their follows from the others'. Its `Debug`
+    /// never prints it.
+    OwnIdLoaded(String),
     /// The wait before the open room is marked read is over (the loop's timer fired).
     MarkReadDue,
     /// The server marked `room` read.
@@ -224,6 +230,17 @@ pub enum Action {
     /// A reaction could not be sent; the error is a fixed kind with no payload text. A reaction
     /// that was sent produces no action: the server streams the reacted message back.
     ReactFailed {
+        error: crate::api::ApiError,
+    },
+    /// The server accepted a follow (`follow`) or unfollow of thread `parent_id` of `room`.
+    FollowDone {
+        room: RoomId,
+        parent_id: String,
+        follow: bool,
+    },
+    /// A follow or unfollow request failed; the error is a fixed kind with no payload text.
+    FollowFailed {
+        follow: bool,
         error: crate::api::ApiError,
     },
     /// The server's custom emojis arrived (`Effect::LoadCustomEmojis`).
@@ -354,6 +371,12 @@ impl std::fmt::Debug for Action {
                 )
             }
             Action::MeLoaded(_) => write!(f, "MeLoaded(..)"),
+            Action::OwnIdLoaded(_) => write!(f, "OwnIdLoaded(..)"),
+            Action::ToggleFollowThread => write!(f, "ToggleFollowThread"),
+            Action::FollowDone { follow, .. } => write!(f, "FollowDone({follow})"),
+            Action::FollowFailed { follow, error } => {
+                write!(f, "FollowFailed({follow}, {error:?})")
+            }
             Action::MarkReadDue => write!(f, "MarkReadDue"),
             Action::MarkReadDone { room } => write!(f, "MarkReadDone({room:?})"),
             Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
@@ -485,6 +508,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
@@ -527,6 +551,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
@@ -569,6 +594,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),

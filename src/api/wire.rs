@@ -132,6 +132,9 @@ pub struct WireCategory {
 pub struct MeResp {
     #[serde(default)]
     pub username: Option<String>,
+    /// The user's own id, to tell their follows from the others'.
+    #[serde(default, rename = "_id")]
+    pub id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +198,10 @@ pub struct WireMsg {
     /// On a thread parent: the time of the last reply, ISO string (REST) or `$date` (stream).
     #[serde(default)]
     pub tlm: Option<ApiDate>,
+    /// On a thread parent: the ids of the users who follow the thread. Anything that is not a list
+    /// of strings is read as absent.
+    #[serde(default)]
+    pub replies: Option<serde_json::Value>,
 }
 
 /// One reaction of a message: the shortcode as the server writes it (`:+1:`, with the colons) and

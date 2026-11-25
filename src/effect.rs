@@ -162,6 +162,13 @@ pub enum Effect {
         emoji: EmojiName,
         add: bool,
     },
+    /// Follow (`follow`) or unfollow thread `parent_id` of `room` with `POST chat.followMessage` or
+    /// `chat.unfollowMessage`. Answers `Action::FollowDone` or `Action::FollowFailed`.
+    FollowThread {
+        room: RoomId,
+        parent_id: String,
+        follow: bool,
+    },
     /// Fetch the server's custom emojis with `GET emoji-custom.list`. Answers
     /// `Action::CustomEmojisLoaded` or `Action::CustomEmojisFailed`.
     LoadCustomEmojis,
@@ -229,6 +236,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::EditMessage { room, id, .. } => Action::EditFailed { room, id, error },
                 Effect::DeleteMessage { room, id } => Action::DeleteFailed { room, id, error },
                 Effect::React { .. } => Action::ReactFailed { error },
+                Effect::FollowThread { follow, .. } => Action::FollowFailed { follow, error },
                 Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
                 Effect::FetchEmojiImage(emoji) => Action::EmojiImageFailed(emoji),
             }];
@@ -242,8 +250,10 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             ],
             Err(error) => vec![Action::LoadFailed(error)],
         },
-        Effect::LoadMe => match client.me().await {
-            Ok(Some(name)) => vec![Action::MeLoaded(name)],
+        Effect::LoadMe => match client.me_with_id().await {
+            Ok(Some((name, id))) => std::iter::once(Action::MeLoaded(name))
+                .chain(id.map(Action::OwnIdLoaded))
+                .collect(),
             Ok(None) | Err(_) => Vec::new(),
         },
         Effect::LoadHistory {
@@ -404,6 +414,25 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             Ok(()) => Vec::new(),
             Err(error) => vec![Action::ReactFailed { error }],
         },
+        Effect::FollowThread {
+            room,
+            parent_id,
+            follow,
+        } => {
+            let done = if follow {
+                client.follow_thread(&parent_id).await
+            } else {
+                client.unfollow_thread(&parent_id).await
+            };
+            match done {
+                Ok(()) => vec![Action::FollowDone {
+                    room,
+                    parent_id,
+                    follow,
+                }],
+                Err(error) => vec![Action::FollowFailed { follow, error }],
+            }
+        }
         Effect::MarkRead { room } => match client.mark_read(&room).await {
             Ok(()) => vec![Action::MarkReadDone { room }],
             Err(_) => Vec::new(),
@@ -573,7 +602,13 @@ mod tests {
         )
         .await;
         let actions = run(Ok(client_for(&server)), Effect::LoadMe).await;
-        assert_eq!(actions, [Action::MeLoaded("smoke".to_string())]);
+        assert_eq!(
+            actions,
+            [
+                Action::MeLoaded("smoke".to_string()),
+                Action::OwnIdLoaded("u1".to_string())
+            ]
+        );
 
         let server = serve(401, "{\"success\":false}").await;
         assert_eq!(run(Ok(client_for(&server)), Effect::LoadMe).await, []);
@@ -1081,6 +1116,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: "rt-test-1".to_string(),
             room_id: general(),

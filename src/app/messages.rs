@@ -281,6 +281,7 @@ pub fn changed(held: &Message, message: &Message) -> bool {
         || held.reactions != message.reactions
         || held.tcount != message.tcount
         || held.tlm != message.tlm
+        || (message.followers.is_some() && held.followers != message.followers)
 }
 
 /// True when `room` holds a message with this id.
@@ -294,10 +295,15 @@ pub fn holds(app: &App, room: &RoomId, id: &str) -> bool {
 /// the original author and time stay.
 pub fn replace_slot(slot: &mut Message, message: Message) {
     let keep = (message.kind == MessageKind::Deleted).then(|| (slot.author.clone(), slot.ts));
+    // A copy that does not say who follows keeps what was last known.
+    let followers = slot.followers.take();
     *slot = Message {
         send: SendState::Sent,
         ..message
     };
+    if slot.followers.is_none() {
+        slot.followers = followers;
+    }
     if let Some((author, ts)) = keep {
         slot.author = author;
         slot.ts = ts;
@@ -697,6 +703,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
@@ -796,6 +803,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),

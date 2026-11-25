@@ -54,6 +54,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "show_reactions",
     "react_message",
     "open_thread",
+    "toggle_follow_thread",
     "close_thread",
     "reply_in_thread",
     "toggle_reply_to_channel",
@@ -106,6 +107,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "show_reactions" => Action::ShowReactions,
         "react_message" => Action::ReactMessage,
         "open_thread" => Action::OpenThread,
+        "toggle_follow_thread" => Action::ToggleFollowThread,
         "reply_in_thread" => Action::ReplyInThread,
         "toggle_reply_to_channel" => Action::ToggleReplyToChannel,
         "close_thread" => Action::CloseThread,
@@ -161,6 +163,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::ShowReactions => Some("show_reactions"),
         Action::ReactMessage => Some("react_message"),
         Action::OpenThread => Some("open_thread"),
+        Action::ToggleFollowThread => Some("toggle_follow_thread"),
         Action::ReplyInThread => Some("reply_in_thread"),
         Action::ToggleReplyToChannel => Some("toggle_reply_to_channel"),
         Action::CloseThread => Some("close_thread"),
@@ -182,6 +185,9 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::RoomsLoaded(_)
         | Action::FoldersLoaded(_)
         | Action::MeLoaded(_)
+        | Action::OwnIdLoaded(_)
+        | Action::FollowDone { .. }
+        | Action::FollowFailed { .. }
         | Action::MarkReadDue
         | Action::MarkReadDone { .. }
         | Action::MessagesLoaded(..)

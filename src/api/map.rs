@@ -221,6 +221,14 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         msg.tcount.unwrap_or(0),
         msg.tlm.as_ref().and_then(ApiDate::secs),
     );
+    let followers = match msg.replies {
+        Some(serde_json::Value::Array(ids)) => Some(
+            ids.into_iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    };
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -236,6 +244,7 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         tshow,
         tcount,
         tlm,
+        followers,
     }
 }
 
@@ -1201,6 +1210,32 @@ mod tests {
             assert_eq!(live_reply.tmid.as_deref(), Some(parent.id.as_str()));
             assert!(!live_reply.in_main_flow());
         }
+    }
+
+    #[test]
+    fn the_follower_list_of_a_parent_is_read_and_compared_with_the_own_id() {
+        let parse = |extra: &str| {
+            let json = format!(
+                r#"{{"_id":"m1","rid":"r","msg":"x","ts":"2026-11-17T10:00:00.123Z","u":{{"username":"a"}},"tcount":1{extra}}}"#
+            );
+            message(
+                &RoomId("r".to_string()),
+                serde_json::from_str(&json).unwrap(),
+            )
+        };
+        let followed = parse(r#","replies":["u1","u2"]"#);
+        assert!(followed.followed_by("u2"));
+        assert!(!followed.followed_by("u3"));
+        let nobody = parse(r#","replies":[]"#);
+        assert_eq!(nobody.followers, Some(Vec::new()));
+        assert!(!nobody.followed_by("u1"));
+        let absent = parse("");
+        assert_eq!(absent.followers, None, "absent means unknown");
+        assert!(!absent.followed_by("u1"));
+        let odd = parse(r#","replies":"u1""#);
+        assert_eq!(odd.followers, None);
+        let mixed = parse(r#","replies":["u1",7,null]"#);
+        assert_eq!(mixed.followers, Some(vec!["u1".to_string()]));
     }
 
     #[test]

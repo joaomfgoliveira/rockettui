@@ -161,6 +161,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid(room),
@@ -401,6 +402,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
             reactions: Vec::new(),
             ..msg(room, id, ts)
         }

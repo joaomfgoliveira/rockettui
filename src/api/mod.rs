@@ -259,6 +259,12 @@ struct ReactBody<'a> {
     should_react: bool,
 }
 
+/// The body of `chat.followMessage` and `chat.unfollowMessage`: the id of the thread's parent.
+#[derive(serde::Serialize)]
+struct FollowBody<'a> {
+    mid: &'a str,
+}
+
 /// The joined rooms and the sidebar folders built from one load.
 pub struct RoomList {
     pub rooms: Vec<Room>,
@@ -468,8 +474,18 @@ impl Client {
     /// The user's own username from `GET /api/v1/me` (D-17), `None` when the answer holds none or
     /// an empty one. Best effort: the caller ignores every error and keeps its fallback author.
     pub async fn me(&self) -> Result<Option<String>, ApiError> {
+        Ok(self.me_with_id().await?.map(|(name, _)| name))
+    }
+
+    /// The same `GET /api/v1/me` with the user's own id as well, which is what a thread's follower
+    /// list is compared with. The id is `None` when the server does not send it.
+    pub async fn me_with_id(&self) -> Result<Option<(String, Option<String>)>, ApiError> {
         let resp: wire::MeResp = self.get_json("me", &[]).await?;
-        Ok(resp.username.filter(|name| !name.is_empty()))
+        let id = resp.id.filter(|id| !id.is_empty());
+        Ok(resp
+            .username
+            .filter(|name| !name.is_empty())
+            .map(|name| (name, id)))
     }
 
     /// Ask the server for message `id` of `room` with `GET chat.getMessage` (D-15): the reconcile
@@ -842,6 +858,25 @@ impl Client {
             should_react: add,
         };
         let request = self.http.post(self.endpoint("chat.react")).json(&body);
+        let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
+        Ok(())
+    }
+
+    /// Follow thread `mid` (the id of its parent message) with `POST chat.followMessage`. The
+    /// answer body is not read beyond being valid JSON; a refusal is `ApiError::Rejected` and no
+    /// server text reaches the error.
+    pub async fn follow_thread(&self, mid: &str) -> Result<(), ApiError> {
+        self.follow_call("chat.followMessage", mid).await
+    }
+
+    /// Stop following thread `mid` with `POST chat.unfollowMessage`, answered like `follow_thread`.
+    pub async fn unfollow_thread(&self, mid: &str) -> Result<(), ApiError> {
+        self.follow_call("chat.unfollowMessage", mid).await
+    }
+
+    async fn follow_call(&self, endpoint: &str, mid: &str) -> Result<(), ApiError> {
+        let body = FollowBody { mid };
+        let request = self.http.post(self.endpoint(endpoint)).json(&body);
         let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
         Ok(())
     }
@@ -1680,6 +1715,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn follow_and_unfollow_contract() {
+        for (follow, endpoint) in [
+            (true, "chat.followMessage"),
+            (false, "chat.unfollowMessage"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path(format!("/api/v1/{endpoint}")))
+                .and(header("X-User-Id", USER))
+                .and(header("X-Auth-Token", TOKEN))
+                .and(wiremock::matchers::body_json(
+                    serde_json::json!({"mid": "parent-1"}),
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw("{\"success\":true}", "application/json"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = client_for(&server);
+            if follow {
+                client.follow_thread("parent-1").await.expect("follows");
+            } else {
+                client.unfollow_thread("parent-1").await.expect("unfollows");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn follow_error_kinds_carry_no_server_text() {
+        for (status, want) in [
+            (400, ApiError::Rejected),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw(
+                    "{\"success\":false,\"error\":\"SENTINEL-TEXT\"}",
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .follow_thread("parent-1")
+                .await
+                .expect_err("refused");
+            assert_eq!(error, want, "status {status}");
+            let shown = format!("{error:?} {error}");
+            assert!(!shown.contains("SENTINEL"), "{shown}");
+        }
+        // A slow server is a timeout, whose outcome is unknown.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw("{\"success\":true}", "application/json")
+                    .set_delay(Duration::from_millis(1500)),
+            )
+            .mount(&server)
+            .await;
+        let error = quick_client(&server.uri())
+            .unfollow_thread("parent-1")
+            .await
+            .expect_err("times out");
+        assert!(error.outcome_unknown(), "{error:?}");
+    }
+
+    #[tokio::test]
     async fn react_error_kinds() {
         // Measured on 8.9.1: a name the server does not know is a 400 and is Rejected; the other
         // statuses keep their kinds, and no error holds the emoji name or any server text.
@@ -2225,6 +2331,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r".to_string()),
@@ -2622,6 +2729,7 @@ mod tests {
                 tshow: false,
                 tcount: 0,
                 tlm: None,
+                followers: None,
                 reactions: Vec::new(),
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),

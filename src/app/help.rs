@@ -78,6 +78,10 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "toggle_reply_to_channel",
         "also show the thread reply in the channel",
     ),
+    (
+        "toggle_follow_thread",
+        "follow or unfollow the thread of the message under the cursor",
+    ),
     ("close_thread", "close the thread pane"),
     ("switch_room", "switch to another room by name"),
     ("show_help", "show or close this help"),

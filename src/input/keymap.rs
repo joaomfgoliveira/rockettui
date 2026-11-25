@@ -112,6 +112,9 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.
         (Mode::Normal, "gt", Action::OpenThread),
+        // `gf` (`toggle_follow_thread`) follows the thread of the message under the cursor, or
+        // unfollows it when it is already followed. A fifth continuation of the `g` prefix.
+        (Mode::Normal, "gf", Action::ToggleFollowThread),
         // `gR` (`reply_in_thread`) starts a reply to the message under the cursor, opening its
         // thread even when it has no replies yet. `<C-b>` (`toggle_reply_to_channel`) in Insert
         // mode marks the reply to be shown in the channel too.

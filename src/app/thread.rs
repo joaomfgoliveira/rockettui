@@ -614,6 +614,7 @@ mod tests {
             tshow: false,
             tcount: 0,
             tlm: None,
+            followers: None,
         }
     }
 
@@ -621,6 +622,7 @@ mod tests {
         Message {
             tcount: replies,
             tlm: Some(ts + 10),
+            followers: None,
             ..msg(id, ts)
         }
     }
@@ -1052,6 +1054,7 @@ mod tests {
             &mut app,
             Message {
                 tlm: Some(300),
+                followers: None,
                 ..parent("p", 110, 3)
             },
         );
@@ -1882,5 +1885,164 @@ mod tests {
         let picker = app.react_picker.as_ref().expect("the picker opens");
         assert_eq!(picker.id, "r-2");
         assert!(crate::app::react::view(&app).is_some());
+    }
+
+    fn follow_effects(app: &App) -> Vec<(String, bool)> {
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::FollowThread {
+                    parent_id, follow, ..
+                } => Some((parent_id.clone(), *follow)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn follower_app(followers: Option<Vec<&str>>) -> App {
+        let mut p = parent("p-1", 100, 2);
+        p.followers = followers.map(|f| f.into_iter().map(str::to_string).collect());
+        let mut app = app_with(vec![p]);
+        app.own_user_id = Some("me".to_string());
+        app
+    }
+
+    fn followed(app: &App) -> bool {
+        app.messages[&rid("r-general")][0].followed_by("me")
+    }
+
+    #[test]
+    fn gf_follows_an_unfollowed_thread_when_the_server_accepts() {
+        let mut app = follower_app(Some(vec!["other"]));
+        press(&mut app, "gf");
+        assert_eq!(follow_effects(&app), vec![("p-1".to_string(), true)]);
+        assert!(!followed(&app), "nothing changes before the answer");
+        update(
+            &mut app,
+            Action::FollowDone {
+                room: rid("r-general"),
+                parent_id: "p-1".to_string(),
+                follow: true,
+            },
+        );
+        assert!(followed(&app));
+        assert!(app.messages[&rid("r-general")][0].followed_by("other"));
+        assert!(!app.follow_pending);
+    }
+
+    #[test]
+    fn gf_unfollows_a_followed_thread() {
+        let mut app = follower_app(Some(vec!["me", "other"]));
+        press(&mut app, "gf");
+        assert_eq!(follow_effects(&app), vec![("p-1".to_string(), false)]);
+        update(
+            &mut app,
+            Action::FollowDone {
+                room: rid("r-general"),
+                parent_id: "p-1".to_string(),
+                follow: false,
+            },
+        );
+        assert!(!followed(&app));
+        assert!(app.messages[&rid("r-general")][0].followed_by("other"));
+    }
+
+    #[test]
+    fn a_rejected_follow_changes_nothing_and_says_so_without_text() {
+        let mut app = follower_app(Some(vec![]));
+        press(&mut app, "gf");
+        update(
+            &mut app,
+            Action::FollowFailed {
+                follow: true,
+                error: ApiError::Rejected,
+            },
+        );
+        assert!(!followed(&app));
+        assert!(!app.follow_pending);
+        let Some(StatusMsg::Error(line)) = &app.status_msg else {
+            panic!("a status line");
+        };
+        assert!(line.starts_with("thread not followed"), "{line}");
+        update(
+            &mut app,
+            Action::FollowFailed {
+                follow: false,
+                error: ApiError::Timeout,
+            },
+        );
+        let Some(StatusMsg::Error(line)) = &app.status_msg else {
+            panic!("a status line");
+        };
+        assert!(
+            line.starts_with("thread may not have been unfollowed"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_second_press_waits_for_the_first_answer() {
+        let mut app = follower_app(Some(vec![]));
+        press(&mut app, "gf");
+        press(&mut app, "gf");
+        assert_eq!(follow_effects(&app).len(), 1);
+    }
+
+    #[test]
+    fn gf_on_a_message_with_no_thread_says_so() {
+        let mut app = app_with(vec![msg("m-1", 100)]);
+        app.own_user_id = Some("me".to_string());
+        press(&mut app, "gf");
+        assert!(follow_effects(&app).is_empty());
+        assert!(matches!(app.status_msg, Some(StatusMsg::Info(_))));
+    }
+
+    #[test]
+    fn gf_waits_for_the_own_id() {
+        let mut app = follower_app(Some(vec![]));
+        app.own_user_id = None;
+        press(&mut app, "gf");
+        assert!(follow_effects(&app).is_empty());
+        assert!(matches!(app.status_msg, Some(StatusMsg::Error(_))));
+    }
+
+    #[test]
+    fn gf_in_the_pane_toggles_the_open_thread_and_updates_the_pane_copy() {
+        let mut app = follower_app(Some(vec![]));
+        press(&mut app, "gt");
+        loaded(&mut app, "p-1", 0, None, page(&[("r-1", 110)], "p-1", 1));
+        press(&mut app, "gf");
+        assert_eq!(follow_effects(&app), vec![("p-1".to_string(), true)]);
+        update(
+            &mut app,
+            Action::FollowDone {
+                room: rid("r-general"),
+                parent_id: "p-1".to_string(),
+                follow: true,
+            },
+        );
+        let pane = app.thread.as_ref().expect("open");
+        assert!(pane.messages[0].followed_by("me"));
+    }
+
+    #[test]
+    fn the_parents_live_update_carries_the_follow_state_from_another_client() {
+        let mut app = follower_app(Some(vec!["me"]));
+        let mut update_copy = parent("p-1", 100, 2);
+        update_copy.followers = Some(vec![]);
+        update(&mut app, Action::RtMessage(update_copy));
+        assert!(!followed(&app), "unfollowed from the web client");
+        // A copy that does not say keeps what is known.
+        let mut app = follower_app(Some(vec!["me"]));
+        update(&mut app, Action::RtMessage(parent("p-1", 100, 3)));
+        assert!(followed(&app));
+        assert_eq!(app.messages[&rid("r-general")][0].tcount, 3);
+    }
+
+    #[test]
+    fn the_own_id_arrives_with_the_me_answer() {
+        let mut app = app_with(vec![]);
+        update(&mut app, Action::OwnIdLoaded("u1".to_string()));
+        assert_eq!(app.own_user_id.as_deref(), Some("u1"));
     }
 }
