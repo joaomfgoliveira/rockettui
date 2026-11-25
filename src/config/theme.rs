@@ -41,6 +41,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.author",
     "messages.body",
     "messages.notice",
+    "messages.unread_divider",
     "messages.pending",
     "messages.failed",
     "messages.edited",
@@ -242,6 +243,8 @@ pub struct Theme {
     pub messages_edited: Style,
     /// The whole line of a deleted message: author, time and `message deleted`.
     pub messages_deleted: Style,
+    /// The `unread` divider above the first message that was unread when the room was opened.
+    pub messages_unread_divider: Style,
     /// The reaction row under a message: each reaction and its count.
     pub messages_reactions: Style,
     /// The reactions the user gave, in the reaction row.
@@ -324,6 +327,7 @@ impl Default for Theme {
             messages_failed: plain.fg(Color::Red),
             messages_edited: plain.add_modifier(Modifier::DIM),
             messages_deleted: plain.add_modifier(Modifier::DIM),
+            messages_unread_divider: plain.fg(Color::Red),
             messages_reactions: plain.add_modifier(Modifier::DIM),
             messages_reactions_own: plain.add_modifier(Modifier::BOLD),
             messages_custom_emoji: plain.add_modifier(Modifier::ITALIC),
@@ -386,6 +390,7 @@ impl Theme {
             ("messages", "author") => Some(&mut self.messages_author),
             ("messages", "body") => Some(&mut self.messages_body),
             ("messages", "notice") => Some(&mut self.messages_notice),
+            ("messages", "unread_divider") => Some(&mut self.messages_unread_divider),
             ("messages", "pending") => Some(&mut self.messages_pending),
             ("messages", "failed") => Some(&mut self.messages_failed),
             ("messages", "edited") => Some(&mut self.messages_edited),
@@ -949,8 +954,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            54,
-            "16 chrome and border paths, the thirteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            55,
+            "16 chrome and border paths, the fourteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -999,6 +1004,17 @@ mod tests {
         // Untouched elements keep their built-in style.
         assert_eq!(theme.reactions_border, t.reactions_border);
         assert_eq!(theme.messages_reactions_own, t.messages_reactions_own);
+    }
+
+    #[test]
+    fn the_unread_divider_is_red_by_default_and_themeable() {
+        let t = Theme::default();
+        assert_eq!(t.messages_unread_divider, Style::default().fg(Color::Red));
+        assert_ne!(t.messages_unread_divider, t.messages_notice);
+        let (theme, out) = parse_str("[messages.unread_divider]\nfg = \"yellow\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_unread_divider.fg, Some(Color::Yellow));
+        assert_eq!(theme.messages_notice, t.messages_notice);
     }
 
     #[test]

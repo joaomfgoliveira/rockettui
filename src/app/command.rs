@@ -188,6 +188,7 @@ mod tests {
             encrypted: false,
             private: false,
             unread: false,
+            last_seen: None,
             last_activity: 0,
         }
     }

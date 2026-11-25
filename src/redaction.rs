@@ -373,6 +373,7 @@ fn sentinel_sweep() {
             encrypted: false,
             private: false,
             unread: false,
+            last_seen: None,
             last_activity: 0,
         }]),
         Action::FoldersLoaded(vec![Folder {
@@ -466,6 +467,7 @@ fn hostile_server_text() {
                 encrypted: false,
                 private: false,
                 unread: true,
+                last_seen: None,
                 last_activity: 1,
             }]),
         );

@@ -34,6 +34,9 @@ pub struct Room {
     /// always `p`, discussions and teams can be either.
     pub private: bool,
     pub unread: bool,
+    /// Unix seconds when the user last read the room (`ls` of the subscription); `None` when the
+    /// server has none (a room never read). Only the unread divider uses it.
+    pub last_seen: Option<i64>,
     /// Unix seconds of the last activity in the room.
     pub last_activity: i64,
 }

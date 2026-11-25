@@ -220,6 +220,12 @@ struct UpdateBody<'a> {
     text: &'a str,
 }
 
+/// The body of `subscriptions.read`: the room id.
+#[derive(serde::Serialize)]
+struct ReadBody<'a> {
+    rid: &'a str,
+}
+
 /// The body of `chat.delete`: the room id and the message id.
 #[derive(serde::Serialize)]
 struct DeleteBody<'a> {
@@ -699,6 +705,19 @@ impl Client {
             msg_id: id,
         };
         let request = self.http.post(self.endpoint("chat.delete")).json(&body);
+        let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
+        Ok(())
+    }
+
+    /// Mark `room` read for the user with `POST subscriptions.read`, the call the official clients
+    /// make. The answer body is not read beyond being valid JSON; any failure is an `ApiError`
+    /// and the caller ignores it (the room just stays unread).
+    pub async fn mark_read(&self, room: &RoomId) -> Result<(), ApiError> {
+        let body = ReadBody { rid: &room.0 };
+        let request = self
+            .http
+            .post(self.endpoint("subscriptions.read"))
+            .json(&body);
         let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
         Ok(())
     }
@@ -1287,6 +1306,47 @@ mod tests {
             .delete_message(&room_general(), "m1")
             .await
             .expect("delete works");
+    }
+
+    #[tokio::test]
+    async fn mark_read_contract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/subscriptions.read"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"rid": "r-general"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("{\"success\":true}", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .mark_read(&room_general())
+            .await
+            .expect("mark read works");
+    }
+
+    #[tokio::test]
+    async fn mark_read_errors_carry_no_server_text() {
+        for status in [400u16, 401, 500] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_string("{\"success\":false,\"error\":\"SENTINEL-SERVER-TEXT\"}"),
+                )
+                .mount(&server)
+                .await;
+            let err = client_for(&server)
+                .mark_read(&room_general())
+                .await
+                .expect_err("an error status fails");
+            assert!(!format!("{err:?} {err}").contains("SENTINEL"), "{status}");
+        }
     }
 
     /// The error of `chat.update` and of `chat.delete` for a POST answered with `status`.

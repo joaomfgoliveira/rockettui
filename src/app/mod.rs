@@ -14,6 +14,7 @@ pub mod jump;
 pub mod messages;
 pub mod react;
 pub mod reactions;
+pub mod read;
 pub mod realtime;
 pub mod results;
 pub mod search;
@@ -139,6 +140,8 @@ pub struct App {
     /// The user's own username (D-17), set from `GET /api/v1/me` by plan 04-06 and kept in memory
     /// only. While it is `None` a pending row falls back to `LOCAL_AUTHOR`.
     pub own_username: Option<String>,
+    /// The wait before the open room is marked read (`app::read`).
+    pub read: read::ReadState,
     pub status_msg: Option<StatusMsg>,
     /// The message being edited through the input bar, if any (`app::edit`). While it is set the
     /// input holds the edit text and the room's draft is stashed inside it.
@@ -227,6 +230,7 @@ impl App {
             messages: HashMap::new(),
             history: HashMap::new(),
             current_room: None,
+            read: read::ReadState::default(),
             msg_views: HashMap::new(),
             message_layout: config.settings.message_layout,
             settings: config.settings,
@@ -319,7 +323,17 @@ impl App {
             aliases: &self.settings.emoji_aliases,
             emoji: self.emoji_view(),
             own_user: self.own_username.as_deref(),
+            unread_before: None,
         }
+    }
+
+    /// `row_ctx` for the messages pane of `room`: the same, plus the message the `unread` divider
+    /// sits above. Every list that is the open room's own (the pane and its row model) builds its
+    /// context here, so the renderer and the row model agree on the divider's row.
+    pub fn pane_row_ctx(&self, room: &RoomId, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
+        let mut ctx = self.row_ctx(msgs);
+        ctx.unread_before = read::divider_before(self, room);
+        ctx
     }
 
     /// Display width of the widest marker an unsent message of `msgs` shows where its time would
@@ -394,6 +408,7 @@ impl App {
                 }
             }
             self.current_room = Some(id);
+            read::on_open(self);
             emoji::ensure_loaded(self);
             let (width, height) = self.input_viewport();
             self.input.settle(width, height);
@@ -405,6 +420,11 @@ impl App {
     /// (D-12; Phase 1 D-06 fixed it at one second).
     pub fn key_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.settings.key_timeout_ms)
+    }
+
+    /// How long a room stays open before it is marked read: config.toml `mark_read_delay_ms`.
+    pub fn mark_read_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.settings.mark_read_delay_ms)
     }
 
     /// True while a count or the start of a key sequence is waiting for more keys.

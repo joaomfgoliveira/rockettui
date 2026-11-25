@@ -9,7 +9,7 @@
 //!   marked stale (`App.stale`), refetched when it is next opened (`history::on_open`).
 
 use crate::app::history::{self, HistoryState};
-use crate::app::{App, RtState, messages, sidebar};
+use crate::app::{App, RtState, messages, read, sidebar};
 use crate::data::{Message, RoomId};
 
 /// A new message arrived live. It joins the room only when the room's history is Loaded, through
@@ -32,8 +32,13 @@ pub fn on_message(app: &mut App, message: Message) {
         return;
     }
     let at_bottom = messages::is_at_bottom(app, &room);
-    if messages::merge_incoming(app, &room, message) == messages::Merge::Appended && at_bottom {
-        messages::follow_newest(app, &room);
+    let author = message.author.clone();
+    let id = message.id.clone();
+    if messages::merge_incoming(app, &room, message) == messages::Merge::Appended {
+        read::on_live_message(app, &room, &id, &author);
+        if at_bottom {
+            messages::follow_newest(app, &room);
+        }
     }
 }
 
@@ -55,6 +60,9 @@ pub fn on_subscription(app: &mut App, room: &RoomId, unread: bool) {
         return;
     }
     held.unread = unread;
+    if unread {
+        read::on_unread(app, room);
+    }
     let moved = selected.and_then(|id| {
         sidebar::rows(app).iter().position(
             |row| matches!(row, sidebar::SidebarRow::Room { id: row_id, .. } if *row_id == id),
@@ -862,9 +870,142 @@ mod tests {
         assert_eq!(sidebar::selected_room(&app), Some(before));
     }
 
+    // ---- mark read after a delay (`app::read`)
+
+    fn marks(app: &App) -> Vec<&RoomId> {
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::MarkRead { room } => Some(room),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A listed room that is not unread and is not `r-general`.
+    fn read_room(app: &App) -> RoomId {
+        app.rooms
+            .iter()
+            .find(|r| r.id != rid("r-general") && !r.encrypted && !r.unread)
+            .map(|r| r.id.clone())
+            .expect("a read room")
+    }
+
+    fn is_unread(app: &App, room: &str) -> bool {
+        app.rooms.iter().find(|r| r.id == rid(room)).unwrap().unread
+    }
+
     #[test]
-    fn open_room_stays_flagged_and_opening_does_not_mark_read() {
+    fn opening_an_unread_room_waits_then_marks_it_read() {
         let mut app = open_general(1);
+        assert!(is_unread(&app, "r-general"));
+        // Opening itself sends nothing but the history fetch: the mark waits for its timer.
+        assert!(marks(&app).is_empty());
+        assert_eq!(
+            app.read.pending.as_ref().map(|p| p.room.clone()),
+            Some(rid("r-general"))
+        );
+        update(&mut app, Action::MarkReadDue);
+        assert_eq!(marks(&app), [&rid("r-general")]);
+        assert!(app.read.pending.is_none());
+        // The room leaves Unread when the server confirms, even with no realtime update.
+        update(
+            &mut app,
+            Action::MarkReadDone {
+                room: rid("r-general"),
+            },
+        );
+        assert!(!is_unread(&app, "r-general"));
+    }
+
+    #[test]
+    fn leaving_before_the_delay_cancels_the_mark() {
+        let mut app = open_general(1);
+        let other = read_room(&app);
+        app.open_room(other);
+        assert!(app.read.pending.is_none());
+        update(&mut app, Action::MarkReadDue);
+        assert!(marks(&app).is_empty());
+        assert!(is_unread(&app, "r-general"));
+    }
+
+    #[test]
+    fn a_stale_timer_for_a_room_that_was_left_sends_nothing() {
+        let mut app = open_general(1);
+        let pending = app.read.pending.clone().expect("pending");
+        // The room was switched without the reducer seeing the pending mark go (as if the timer
+        // had been about to fire): the room check still refuses it.
+        app.current_room = Some(second_room(&app));
+        app.read.pending = Some(pending);
+        update(&mut app, Action::MarkReadDue);
+        assert!(marks(&app).is_empty());
+    }
+
+    #[test]
+    fn opening_a_read_room_sends_nothing() {
+        let mut app = fixture_app();
+        let quiet = read_room(&app);
+        app.open_room(quiet);
+        assert!(app.read.pending.is_none());
+        update(&mut app, Action::MarkReadDue);
+        assert!(marks(&app).is_empty());
+    }
+
+    #[test]
+    fn a_zero_delay_marks_the_room_at_once() {
+        let mut app = fixture_app();
+        app.settings.mark_read_delay_ms = 0;
+        press(&mut app, "<CR>");
+        assert_eq!(marks(&app), [&rid("r-general")]);
+        assert!(app.read.pending.is_none());
+    }
+
+    #[test]
+    fn a_live_message_from_someone_else_restarts_the_wait() {
+        let mut app = open_general(1);
+        let first = app.read.pending.clone().expect("pending");
+        update(&mut app, Action::RtMessage(msg("r-general", "live-1", 200)));
+        let second = app.read.pending.clone().expect("pending");
+        assert_eq!(second.room, first.room);
+        assert_ne!(second.generation, first.generation);
+        // The room is still flagged; nothing was sent yet.
+        assert!(is_unread(&app, "r-general"));
+        assert!(marks(&app).is_empty());
+    }
+
+    #[test]
+    fn own_messages_and_other_rooms_do_not_restart_the_wait() {
+        let mut app = open_general(1);
+        app.own_username = Some("alice".to_string());
+        let before = app.read.pending.clone();
+        update(&mut app, Action::RtMessage(msg("r-general", "mine", 200)));
+        assert_eq!(app.read.pending, before);
+        let other = second_room(&app);
+        load(
+            &mut app,
+            other.0.as_str(),
+            vec![msg(other.0.as_str(), "o1", 100)],
+        );
+        app.own_username = None;
+        update(
+            &mut app,
+            Action::RtMessage(msg(other.0.as_str(), "o2", 200)),
+        );
+        assert_eq!(app.read.pending, before);
+    }
+
+    #[test]
+    fn the_flag_arriving_after_the_message_starts_the_wait() {
+        let mut app = open_general(1);
+        // Read by another client, then a new message: the unread flag comes after the message.
+        update(
+            &mut app,
+            Action::RtSubscription {
+                room: rid("r-general"),
+                unread: false,
+            },
+        );
+        app.read.pending = None;
         update(
             &mut app,
             Action::RtSubscription {
@@ -872,20 +1013,122 @@ mod tests {
                 unread: true,
             },
         );
-        update(&mut app, Action::RtMessage(msg("r-general", "live-1", 200)));
-        assert!(
-            app.rooms
-                .iter()
-                .find(|r| r.id == rid("r-general"))
-                .unwrap()
-                .unread
+        assert!(app.read.pending.is_some());
+    }
+
+    #[test]
+    fn a_failed_mark_leaves_the_room_unread_and_the_next_message_tries_again() {
+        let mut app = open_general(1);
+        update(&mut app, Action::MarkReadDue);
+        app.effects.clear();
+        // The failure reports nothing (see the effect tests), so the room is still unread; a new
+        // live message from someone else starts the wait again.
+        assert!(is_unread(&app, "r-general"));
+        update(&mut app, Action::RtMessage(msg("r-general", "live-2", 300)));
+        assert!(app.read.pending.is_some());
+        update(&mut app, Action::MarkReadDue);
+        assert_eq!(marks(&app), [&rid("r-general")]);
+    }
+
+    // ---- the unread divider (`app::read`)
+
+    /// Like `open_general`, with `r-general` last seen at `last_seen` (m0 is at 100, m1 at 110, ...).
+    fn open_general_seen(count: usize, last_seen: Option<i64>) -> App {
+        let mut app = fixture_app();
+        app.rooms
+            .iter_mut()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap()
+            .last_seen = last_seen;
+        press(&mut app, "<CR>");
+        let page = (0..count)
+            .map(|i| msg("r-general", &format!("m{i}"), 100 + 10 * i as i64))
+            .collect();
+        load(&mut app, "r-general", page);
+        app.effects.clear();
+        app
+    }
+
+    fn divider(app: &App) -> Option<&str> {
+        crate::app::read::divider_before(app, &rid("r-general"))
+    }
+
+    #[test]
+    fn the_divider_goes_above_the_oldest_message_newer_than_last_seen() {
+        let app = open_general_seen(5, Some(115));
+        // m0 100, m1 110 are read; m2 120 is the first unread one.
+        assert_eq!(divider(&app), Some("m2"));
+    }
+
+    #[test]
+    fn nothing_newer_than_last_seen_means_no_divider_until_a_live_message() {
+        let mut app = open_general_seen(3, Some(500));
+        assert_eq!(divider(&app), None);
+        update(&mut app, Action::RtMessage(msg("r-general", "live-1", 600)));
+        assert_eq!(divider(&app), Some("live-1"));
+        // Later messages never move it.
+        update(&mut app, Action::RtMessage(msg("r-general", "live-2", 610)));
+        assert_eq!(divider(&app), Some("live-1"));
+    }
+
+    #[test]
+    fn own_messages_never_get_the_divider() {
+        let mut app = fixture_app();
+        app.own_username = Some("alice".to_string());
+        app.rooms
+            .iter_mut()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap()
+            .last_seen = Some(50);
+        press(&mut app, "<CR>");
+        load(&mut app, "r-general", vec![msg("r-general", "m0", 100)]);
+        assert_eq!(divider(&app), None);
+        update(&mut app, Action::RtMessage(msg("r-general", "mine", 200)));
+        assert_eq!(divider(&app), None);
+    }
+
+    #[test]
+    fn an_unknown_last_seen_draws_the_divider_only_for_a_live_message() {
+        let mut app = open_general_seen(3, None);
+        assert_eq!(divider(&app), None);
+        update(&mut app, Action::RtMessage(msg("r-general", "live-1", 600)));
+        assert_eq!(divider(&app), Some("live-1"));
+    }
+
+    #[test]
+    fn marking_read_keeps_the_divider_and_leaving_drops_it() {
+        let mut app = open_general_seen(5, Some(115));
+        assert_eq!(divider(&app), Some("m2"));
+        update(
+            &mut app,
+            Action::MarkReadDone {
+                room: rid("r-general"),
+            },
         );
-        // Every effect of opening is a GET: nothing marks the room read.
-        assert!(
-            app.effects
-                .iter()
-                .all(|e| matches!(e, Effect::LoadHistory { .. }))
-        );
+        assert_eq!(divider(&app), Some("m2"));
+        // Leaving and coming back after the room was read: nothing is newer than what was read.
+        let other = read_room(&app);
+        app.open_room(other);
+        assert_eq!(divider(&app), None);
+        app.open_room(rid("r-general"));
+        assert_eq!(divider(&app), None);
+    }
+
+    #[test]
+    fn the_divider_waits_for_the_first_page() {
+        let mut app = fixture_app();
+        app.rooms
+            .iter_mut()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap()
+            .last_seen = Some(115);
+        press(&mut app, "<CR>");
+        assert_eq!(divider(&app), None);
+        let page = (0..5)
+            .map(|i| msg("r-general", &format!("m{i}"), 100 + 10 * i as i64))
+            .collect();
+        load(&mut app, "r-general", page);
+        assert_eq!(divider(&app), Some("m2"));
     }
 
     // ---- stale rooms and gap recovery (2.5, 2.6)

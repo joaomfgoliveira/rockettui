@@ -8,7 +8,8 @@
 //! - an encrypted room is never fetched and never decrypted (D-12, ROOM-03);
 //! - a room is fetched on its first open only; a Loading or Loaded room is not fetched again
 //!   (D-13), and nothing is prefetched;
-//! - opening a room never marks it read on the server: every effect is a GET (D-11);
+//! - opening a room sends only GETs; marking it read is a later, separate request after a delay
+//!   (`app::read`), never part of the open (D-11);
 //! - only a Failed room is fetched again when it is reopened;
 //! - moving the messages cursor onto the oldest loaded message fetches the next older page, one
 //!   request in flight per room, and an empty page ends the history (D-14).
@@ -257,6 +258,8 @@ pub fn on_loaded(
             loading_older: false,
         },
     );
+    // The first page is held: the `unread` divider of the open room can now be placed.
+    super::read::settle_divider(app);
 }
 
 /// The newest page of an already Loaded room (`page` oldest first), after a realtime outage.

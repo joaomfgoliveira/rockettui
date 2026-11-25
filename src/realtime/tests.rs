@@ -399,6 +399,7 @@ fn wanted_rooms_are_the_joined_rooms_that_can_show_messages() {
         encrypted,
         private: false,
         unread: false,
+        last_seen: None,
         last_activity: 0,
     };
     let rooms = [room("b", false), room("secret", true), room("a", false)];
@@ -537,6 +538,7 @@ async fn the_supervisor_publishes_the_room_list_of_the_app() {
         encrypted,
         private: false,
         unread: false,
+        last_seen: None,
         last_activity: 0,
     };
     app.rooms = vec![room("r1", false), room("secret", true)];

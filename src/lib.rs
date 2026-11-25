@@ -132,6 +132,8 @@ pub async fn run(
     let started = tokio::time::Instant::now();
     // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.
     let mut key_deadline: Option<tokio::time::Instant> = None;
+    // The wait before the open room is marked read; the reducer only says one is wanted.
+    let mut read_timer = app::read::ReadTimer::default();
     loop {
         let mut saw_key = false;
         for action in std::iter::once(Action::Clock(unix_now())).chain(batch.drain(..)) {
@@ -156,6 +158,11 @@ pub async fn run(
                 .keys_pending()
                 .then(|| tokio::time::Instant::now() + app.key_timeout());
         }
+        read_timer.sync(
+            app.read.pending.as_ref(),
+            tokio::time::Instant::now(),
+            app.mark_read_delay(),
+        );
         // An image that arrived is in the terminal before the frame that draws it.
         tui::upload_images(&mut app);
         app.anim_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -172,6 +179,7 @@ pub async fn run(
                 None => break,
             },
             () = sleep_until_opt(key_deadline) => batch.push(Action::KeyTimeout),
+            () = sleep_until_opt(read_timer.deadline()) => batch.push(Action::MarkReadDue),
             // An animated emoji is on screen: draw again for its next frame.
             () = sleep_until_opt(
                 app.images.has_animation().then(|| tokio::time::Instant::now() + ANIMATION_TICK)

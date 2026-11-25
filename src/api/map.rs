@@ -82,6 +82,7 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
             encrypted: record.encrypted.unwrap_or(false),
             private: sub.t == "p",
             unread: sub.unread > 0,
+            last_seen: sub.ls.as_ref().and_then(|d| d.secs()),
             last_activity,
         });
     }
@@ -737,6 +738,30 @@ mod tests {
         serde_json::from_str::<crate::api::wire::HistoryResp>(json)
             .expect("docker history")
             .messages
+    }
+
+    #[test]
+    fn docker_fixtures_last_seen() {
+        // The 8.9.1 capture: `ls` is an ISO date with milliseconds, and a subscription that was
+        // never read has none.
+        let subs = serde_json::from_str::<crate::api::wire::SubscriptionsResp>(include_str!(
+            "fixtures/docker/subscriptions.json"
+        ))
+        .expect("docker subscriptions")
+        .update;
+        assert!(
+            subs.iter().any(|s| s.ls.is_none()),
+            "one subscription has no ls"
+        );
+        let mapped = docker_rooms();
+        let seen = mapped.iter().filter(|r| r.last_seen.is_some()).count();
+        assert!(seen > 0 && seen < mapped.len());
+        assert!(
+            mapped
+                .iter()
+                .filter_map(|r| r.last_seen)
+                .all(|s| s > 1_700_000_000)
+        );
     }
 
     #[test]

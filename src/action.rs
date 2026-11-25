@@ -96,6 +96,12 @@ pub enum Action {
     MessagesLoaded(RoomId, Vec<Message>),
     /// The user's own username from `GET /api/v1/me` (D-17). Its `Debug` never prints it.
     MeLoaded(String),
+    /// The wait before the open room is marked read is over (the loop's timer fired).
+    MarkReadDue,
+    /// The server marked `room` read.
+    MarkReadDone {
+        room: RoomId,
+    },
     /// The room load failed; the error is a fixed kind with no payload text.
     LoadFailed(crate::api::ApiError),
     /// A page of history arrived, oldest first. `oldest_ts` is the raw server timestamp of its
@@ -313,6 +319,8 @@ impl std::fmt::Debug for Action {
                 )
             }
             Action::MeLoaded(_) => write!(f, "MeLoaded(..)"),
+            Action::MarkReadDue => write!(f, "MarkReadDue"),
+            Action::MarkReadDone { room } => write!(f, "MarkReadDone({room:?})"),
             Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
             Action::HistoryLoaded {
                 room,

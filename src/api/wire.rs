@@ -75,6 +75,8 @@ pub struct WireSub {
     pub category: Option<String>,
     pub status: Option<String>,
     pub ts: Option<ApiDate>,
+    /// When the user last read the room; absent for a subscription that was never read.
+    pub ls: Option<ApiDate>,
 }
 
 #[derive(Deserialize)]

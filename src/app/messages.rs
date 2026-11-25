@@ -28,7 +28,7 @@ pub fn viewport(app: &App) -> (u16, u16) {
 pub fn row_starts(app: &App, room: &RoomId) -> Vec<usize> {
     let (width, _) = viewport(app);
     let msgs = app.messages.get(room).map_or(&[][..], Vec::as_slice);
-    row_starts_of(msgs, width, &app.row_ctx(msgs))
+    row_starts_of(msgs, width, &app.pane_row_ctx(room, msgs))
 }
 
 /// The new `top_row` that brings message `cursor` into the window.

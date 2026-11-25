@@ -111,6 +111,9 @@ pub struct RowCtx<'a> {
     pub emoji: crate::app::emoji::EmojiView<'a>,
     /// The user's own username, to tell their reactions from the others (`None` until known).
     pub own_user: Option<&'a str>,
+    /// The id of the message the `unread` divider is drawn above, when this list is the open
+    /// room (`App::pane_row_ctx`); `None` for every other list.
+    pub unread_before: Option<&'a str>,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -437,10 +440,29 @@ pub fn divider_row(
     Some(Line::from(Span::styled(text, ctx.theme.messages_notice)))
 }
 
-/// Rows `msg` takes in a list: its divider (0 or 1) plus `message_rows`. The reducer's row model
+/// The `unread` divider drawn above `msg`, or `None` when the divider is not above this message.
+/// It is one row of `width` columns, `── unread ───…`, in `theme.messages_unread_divider`.
+pub fn unread_row(msg: &Message, width: u16, ctx: &RowCtx) -> Option<Line<'static>> {
+    if ctx.unread_before != Some(msg.id.as_str()) {
+        return None;
+    }
+    let mut text = String::from("── unread ");
+    let width = usize::from(width);
+    let fill = width.saturating_sub(text.chars().count());
+    text.extend(std::iter::repeat_n('─', fill));
+    let text: String = text.chars().take(width).collect();
+    Some(Line::from(Span::styled(
+        text,
+        ctx.theme.messages_unread_divider,
+    )))
+}
+
+/// Rows `msg` takes in a list: its dividers (0 to 2) plus `message_rows`. The reducer's row model
 /// uses this, so scrolling agrees with what `divider_row` and `render_rows` draw.
 pub fn block_rows(msg: &Message, prev: Option<&Message>, width: u16, ctx: &RowCtx) -> usize {
-    usize::from(divider_row(msg, prev, width, ctx).is_some()) + message_rows(msg, width, ctx)
+    usize::from(divider_row(msg, prev, width, ctx).is_some())
+        + usize::from(unread_row(msg, width, ctx).is_some())
+        + message_rows(msg, width, ctx)
 }
 
 #[cfg(test)]
@@ -487,6 +509,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -510,6 +533,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -570,6 +594,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -601,6 +626,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -1004,6 +1030,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
         for state in [
@@ -1044,6 +1071,7 @@ mod tests {
                 aliases: &crate::ui::emoji::NO_ALIASES,
                 emoji: crate::app::emoji::EmojiView::none(),
                 own_user: None,
+                unread_before: None,
             };
             for state in [
                 crate::data::SendState::Sending,
@@ -1080,6 +1108,7 @@ mod tests {
                     aliases: &crate::ui::emoji::NO_ALIASES,
                     emoji: crate::app::emoji::EmojiView::none(),
                     own_user: None,
+                    unread_before: None,
                 };
                 let m = with_state(state, "alice", "hello there");
                 let rows = render_rows(&m, 60, &ctx);
@@ -1196,6 +1225,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
     }
@@ -1297,6 +1327,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         divider_row(msg, prev, width, &ctx)
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -1362,6 +1393,7 @@ mod tests {
             aliases,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: own,
+            unread_before: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -1389,6 +1421,7 @@ mod tests {
                 ..crate::app::emoji::EmojiView::none()
             },
             own_user: Some("me"),
+            unread_before: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -1718,6 +1751,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: view,
             own_user: Some("me"),
+            unread_before: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -2061,6 +2095,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         let m = msg("alice", &vec![":tada:"; 40].join(" "));
         assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
@@ -2129,6 +2164,7 @@ mod tests {
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
+            unread_before: None,
         };
         let plain = msg("alice", "hello");
         let m = reacted(

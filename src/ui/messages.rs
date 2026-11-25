@@ -59,11 +59,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let v = messages::view(app, room);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
-    let ctx = app.row_ctx(msgs);
+    let ctx = app.pane_row_ctx(room, msgs);
     for (i, msg) in msgs.iter().enumerate() {
         // The divider belongs to the message below it but is not part of its highlight.
         let prev = i.checked_sub(1).map(|p| &msgs[p]);
         lines.extend(wrap::divider_row(msg, prev, inner.width, &ctx));
+        lines.extend(wrap::unread_row(msg, inner.width, &ctx));
         let rows = wrap::render_rows(msg, inner.width, &ctx);
         if i == v.cursor {
             cursor_rows = lines.len()..lines.len() + rows.len();
@@ -1192,6 +1193,84 @@ mod tests {
         assert!(reversed(body), "body row of the cursor message");
         assert!(reversed(body + 1), "reaction row of the cursor message");
         assert!(!reversed(body + 2), "the next message is not highlighted");
+    }
+
+    /// The 52x20 fake-data app with `general` open in `layout`, last seen just before its fifth
+    /// newest message, so the `unread` divider is above that message and four follow it.
+    fn app_with_unread_divider(layout: wrap::MessageLayout) -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        app.message_layout = layout;
+        let seen = app.messages[&general()][app.messages[&general()].len() - 5].ts - 1;
+        app.rooms
+            .iter_mut()
+            .find(|r| r.id == general())
+            .expect("general")
+            .last_seen = Some(seen);
+        app.open_room(general());
+        assert_eq!(pane_rect(&app).width, 52, "snapshot geometry");
+        app
+    }
+
+    /// The y of the row of the `unread` divider, if one is drawn.
+    fn divider_y(terminal: &Terminal<TestBackend>) -> Option<u16> {
+        let height = terminal.backend().buffer().area.height;
+        (0..height).find(|&y| row_text(terminal, y).contains("── unread "))
+    }
+
+    #[test]
+    fn unread_divider_compact_52x20() {
+        let app = app_with_unread_divider(wrap::MessageLayout::Compact);
+        let terminal = render_pane(&app);
+        let y = divider_y(&terminal).expect("divider is drawn");
+        // It spans the whole inner width and sits above the first unread message's row.
+        let row = row_text(&terminal, y);
+        assert!(row.contains("── unread ─"), "{row}");
+        let body = &app.messages[&general()][app.messages[&general()].len() - 5];
+        assert!(row_text(&terminal, y + 1).contains(&body.author), "{row}");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn unread_divider_two_line_52x20() {
+        let app = app_with_unread_divider(wrap::MessageLayout::TwoLine);
+        let terminal = render_pane(&app);
+        assert!(divider_y(&terminal).is_some());
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_unread_divider_is_red_and_takes_one_row_without_moving_columns() {
+        let with = app_with_unread_divider(wrap::MessageLayout::Compact);
+        let mut without = App::with_fake_data(Size::new(80, 25));
+        without.open_room(general());
+        let room = general();
+        let rows_with = *row_starts(&with, &room).last().unwrap();
+        let rows_without = *row_starts(&without, &room).last().unwrap();
+        assert_eq!(rows_with, rows_without + 1, "one row for the divider");
+        let terminal = render_pane(&with);
+        let y = divider_y(&terminal).expect("divider");
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, y)].fg, Color::Red);
+        // The date divider keeps its own dim style.
+        assert_ne!(buffer[(2, y)].modifier, Modifier::DIM);
+    }
+
+    #[test]
+    fn the_cursor_highlight_skips_the_unread_divider() {
+        let mut app = app_with_unread_divider(wrap::MessageLayout::Compact);
+        let room = general();
+        // The cursor goes to the first unread message, the one just below the divider.
+        let first_unread = app.messages[&room].len() - 5;
+        press(&mut app, &format!("{}gg", first_unread + 1));
+        assert_eq!(view(&app, &room).cursor, first_unread);
+        let terminal = render_pane(&app);
+        let y = divider_y(&terminal).expect("divider");
+        let buffer = terminal.backend().buffer();
+        let reversed = |y: u16| {
+            (2..buffer.area.width - 2).all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
+        };
+        assert!(!reversed(y), "the divider row is not highlighted");
+        assert!(reversed(y + 1), "the message below it is");
     }
 
     /// A 52x20 pane in `layout` with messages that hold emoji shortcodes in the ways that matter.

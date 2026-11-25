@@ -154,6 +154,9 @@ pub enum Effect {
     /// `GET <server>/emoji-custom/<name>.<ext>`, then decode it. Answers
     /// `Action::EmojiImageReady` or `Action::EmojiImageFailed`.
     FetchEmojiImage(EmojiRef),
+    /// Mark `room` read with `POST subscriptions.read`. Answers `Action::MarkReadDone`; a failure
+    /// answers nothing, the room just stays unread.
+    MarkRead { room: RoomId },
 }
 
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
@@ -166,6 +169,8 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::LoadRooms => Action::LoadFailed(error),
                 // LoadRooms already reports the client error; the username is best effort.
                 Effect::LoadMe => return Vec::new(),
+                // Best effort too: the room stays unread.
+                Effect::MarkRead { .. } => return Vec::new(),
                 Effect::LoadHistory { room, before, .. } => Action::HistoryFailed {
                     room,
                     older: before.is_some(),
@@ -335,6 +340,10 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::React { id, emoji, add } => match client.react(&id, emoji.as_str(), add).await {
             Ok(()) => Vec::new(),
             Err(error) => vec![Action::ReactFailed { error }],
+        },
+        Effect::MarkRead { room } => match client.mark_read(&room).await {
+            Ok(()) => vec![Action::MarkReadDone { room }],
+            Err(_) => Vec::new(),
         },
         Effect::LoadCustomEmojis => match client.custom_emojis().await {
             Ok(list) => vec![Action::CustomEmojisLoaded(list)],
@@ -759,6 +768,35 @@ mod tests {
             room: general(),
             id: "m1".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn mark_read_answers_done_on_success_and_nothing_on_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/subscriptions.read"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("{\"success\":true}", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let effect = Effect::MarkRead { room: general() };
+        let actions = run(Ok(client_for(&server)), effect.clone()).await;
+        assert_eq!(actions, [Action::MarkReadDone { room: general() }]);
+
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        assert!(
+            run(Ok(client_for(&failing)), effect.clone())
+                .await
+                .is_empty()
+        );
+        // No client at all fails silently too.
+        assert!(run(Err(ApiError::Unauthorized), effect).await.is_empty());
     }
 
     #[tokio::test]

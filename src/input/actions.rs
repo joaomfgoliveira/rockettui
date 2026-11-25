@@ -166,6 +166,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::RoomsLoaded(_)
         | Action::FoldersLoaded(_)
         | Action::MeLoaded(_)
+        | Action::MarkReadDue
+        | Action::MarkReadDone { .. }
         | Action::MessagesLoaded(..)
         | Action::LoadFailed(_)
         | Action::HistoryLoaded { .. }
