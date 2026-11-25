@@ -21,9 +21,10 @@ pub fn on_message(app: &mut App, message: Message) {
     if !matches!(app.history.get(&room), Some(HistoryState::Loaded { .. })) {
         return;
     }
-    // A held server message whose text or edited state changed is an edit: replace it in place.
-    if messages::is_edit(app, &room, &message) {
-        messages::replace_edited(app, &room, message);
+    // A held server message whose text, edited state or reactions changed is an update (an edit or
+    // a reaction): replace it in place.
+    if messages::is_update(app, &room, &message) {
+        messages::replace_updated(app, &room, message);
         return;
     }
     // A detached room shows older history: a new message would sit after a gap (`app::jump`).
@@ -130,6 +131,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid(room),
             author: "alice".to_string(),
@@ -301,6 +303,7 @@ mod tests {
             body: body.to_string(),
             edited: true,
             plain_text: true,
+            reactions: Vec::new(),
             ..msg(room, id, ts)
         }
     }
@@ -366,7 +369,7 @@ mod tests {
     fn redelivery_without_a_change_is_ignored() {
         let mut app = open_general(2);
         let before = app.messages[&rid("r-general")].clone();
-        // A reaction or a pin: the same message again.
+        // A pin: the same message again, with the same text, edited state and reactions.
         update(&mut app, Action::RtMessage(msg("r-general", "m1", 110)));
         assert_eq!(app.messages[&rid("r-general")], before);
         // An edited message delivered twice changes only the first time.
@@ -375,6 +378,239 @@ mod tests {
         let once = app.messages[&rid("r-general")].clone();
         update(&mut app, Action::RtMessage(edit));
         assert_eq!(app.messages[&rid("r-general")], once);
+    }
+
+    fn reacted_copy(room: &str, id: &str, ts: i64, reactions: &[(&str, &[&str])]) -> Message {
+        Message {
+            reactions: reactions
+                .iter()
+                .map(|(name, users)| crate::data::Reaction {
+                    name: name.to_string(),
+                    users: users.iter().map(|u| u.to_string()).collect(),
+                })
+                .collect(),
+            ..msg(room, id, ts)
+        }
+    }
+
+    #[test]
+    fn a_reaction_on_a_held_message_shows_in_place_without_marking_it_edited() {
+        let mut app = open_general(3);
+        let before = app.messages[&rid("r-general")][1].clone();
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy("r-general", "m1", 110, &[("+1", &["bob"])])),
+        );
+        assert_eq!(ids(&app, "r-general"), ["m0", "m1", "m2"]);
+        let held = &app.messages[&rid("r-general")][1];
+        assert_eq!(held.reactions.len(), 1);
+        assert_eq!(held.reactions[0].name, "+1");
+        assert_eq!(held.reactions[0].users, ["bob"]);
+        assert_eq!(held.body, before.body, "the text is untouched");
+        assert!(!held.edited, "a reaction is not an edit");
+        assert_eq!(held.send, SendState::Sent);
+        let screen = render_to_string(&app, 80, 24);
+        assert!(screen.contains('👍'), "{screen}");
+    }
+
+    #[test]
+    fn a_reaction_added_then_removed_comes_and_goes_without_a_command() {
+        let mut app = open_general(3);
+        let room = rid("r-general");
+        let flat = crate::app::messages::row_starts(&app, &room);
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy(
+                "r-general",
+                "m1",
+                110,
+                &[("+1", &["bob"]), ("tada", &["ana", "bob"])],
+            )),
+        );
+        let with = crate::app::messages::row_starts(&app, &room);
+        assert_eq!(
+            with.last(),
+            Some(&(flat.last().unwrap() + 1)),
+            "one more row"
+        );
+        // One of the two reactions is taken back.
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy(
+                "r-general",
+                "m1",
+                110,
+                &[("tada", &["ana", "bob"])],
+            )),
+        );
+        let held = &app.messages[&room][1];
+        assert_eq!(held.reactions.len(), 1);
+        assert_eq!(held.reactions[0].name, "tada");
+        // The last one is taken back: the server sends the message without the key at all.
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy("r-general", "m1", 110, &[])),
+        );
+        assert!(app.messages[&room][1].reactions.is_empty());
+        assert_eq!(crate::app::messages::row_starts(&app, &room), flat);
+        assert!(!app.messages[&room][1].edited);
+        let screen = render_to_string(&app, 80, 24);
+        assert!(!screen.contains('👍') && !screen.contains('🎉'), "{screen}");
+    }
+
+    #[test]
+    fn the_same_reaction_update_twice_changes_nothing_the_second_time() {
+        let mut app = open_general(3);
+        let update_msg = reacted_copy("r-general", "m1", 110, &[("+1", &["bob"])]);
+        update(&mut app, Action::RtMessage(update_msg.clone()));
+        let once = app.messages[&rid("r-general")].clone();
+        update(&mut app, Action::RtMessage(update_msg));
+        assert_eq!(app.messages[&rid("r-general")], once);
+    }
+
+    #[test]
+    fn a_reaction_above_the_cursor_keeps_the_cursor_message_and_screen_row() {
+        let mut app = open_general(30);
+        let room = rid("r-general");
+        let starts = crate::app::messages::row_starts(&app, &room);
+        app.msg_views.insert(
+            room.clone(),
+            crate::app::messages::MsgView {
+                cursor: 20,
+                top_row: starts[20] - 2,
+            },
+        );
+        let before = anchor_of(&app);
+        assert_eq!(before.0, "m20");
+        // Many reactions wrap onto several rows and push everything below them down.
+        let names: Vec<String> = (0..12).map(|n| format!("custom_{n}")).collect();
+        let many: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &["bob"][..])).collect();
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy("r-general", "m5", 150, &many)),
+        );
+        let after_starts = crate::app::messages::row_starts(&app, &room);
+        assert!(after_starts[20] > starts[20], "the rows below must shift");
+        assert_eq!(anchor_of(&app), before, "same message at the same row");
+        assert!(!app.messages[&room][5].edited);
+    }
+
+    #[test]
+    fn a_reaction_on_a_message_not_held_is_appended_like_any_live_message() {
+        let mut app = open_general(2);
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy(
+                "r-general",
+                "unseen",
+                500,
+                &[("+1", &["bob"])],
+            )),
+        );
+        assert_eq!(ids(&app, "r-general"), ["m0", "m1", "unseen"]);
+        // And for a room that is not loaded, nothing is stored.
+        let mut app = fixture_app();
+        update(
+            &mut app,
+            Action::RtMessage(reacted_copy(
+                "r-general",
+                "unseen",
+                500,
+                &[("+1", &["bob"])],
+            )),
+        );
+        assert!(ids(&app, "r-general").is_empty());
+    }
+
+    #[test]
+    fn an_edit_and_a_reaction_together_are_both_applied() {
+        let mut app = open_general(2);
+        let mut both = edited_copy("r-general", "m1", 110, "reworded");
+        both.reactions = vec![crate::data::Reaction {
+            name: "+1".to_string(),
+            users: vec!["bob".to_string()],
+        }];
+        update(&mut app, Action::RtMessage(both));
+        let held = &app.messages[&rid("r-general")][1];
+        assert_eq!(held.body, "reworded");
+        assert!(held.edited);
+        assert_eq!(held.reactions.len(), 1);
+    }
+
+    #[test]
+    fn the_captured_live_reaction_frames_converge_on_the_captured_history() {
+        use crate::api::wire::HistoryResp;
+        use crate::realtime::{ddp, events};
+        // Both files were captured from a real server by dev/capture_reactions.py and are never
+        // edited: ten stream events for two messages (one reacted six ways, one reacted to once
+        // and taken back), and the room history after the last of them.
+        let frames: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../api/fixtures/docker/stream_reactions.json"))
+                .expect("stream fixture");
+        let history: HistoryResp = serde_json::from_str(include_str!(
+            "../api/fixtures/docker/history_reactions.json"
+        ))
+        .expect("history fixture");
+        assert_eq!(frames.len(), 10);
+        let actions: Vec<Action> = frames
+            .iter()
+            .map(|fields| {
+                let raw = serde_json::json!({
+                    "msg": "changed",
+                    "collection": "stream-room-messages",
+                    "id": "id",
+                    "fields": fields,
+                })
+                .to_string();
+                events::action_for(ddp::parse(&raw).expect("a DDP frame"))
+                    .expect("a message action")
+            })
+            .collect();
+        let Action::RtMessage(first) = &actions[0] else {
+            panic!("the first frame is a message");
+        };
+        let room = first.room_id.clone();
+
+        // The room is loaded and empty, then the stream delivers everything that happened.
+        let mut app = fixture_app();
+        update(
+            &mut app,
+            Action::HistoryLoaded {
+                room: room.clone(),
+                messages: Vec::new(),
+                oldest_ts: None,
+                older: false,
+            },
+        );
+        for action in actions {
+            update(&mut app, action);
+        }
+
+        let held = &app.messages[&room];
+        assert_eq!(held.len(), 2, "two messages, none duplicated");
+        for fetched in history.messages {
+            let fetched = crate::api::map::message(&room, fetched);
+            let live = held
+                .iter()
+                .find(|m| m.id == fetched.id)
+                .expect("the stream delivered it");
+            let plain = |m: &Message| -> Vec<(String, Vec<String>)> {
+                m.reactions
+                    .iter()
+                    .map(|r| (r.name.clone(), r.users.clone()))
+                    .collect()
+            };
+            assert_eq!(plain(live), plain(&fetched), "stream and history agree");
+            assert_eq!(live.body, fetched.body);
+            assert!(!live.edited, "a reaction does not mark a message edited");
+        }
+        // The reacted message ends with all four reactions, in server order; the other with none.
+        let names: Vec<Vec<&str>> = held
+            .iter()
+            .map(|m| m.reactions.iter().map(|r| r.name.as_str()).collect())
+            .collect();
+        assert!(names.contains(&vec!["+1", "tada", "thumbsup_tone2", "rtpartyparrot"]));
+        assert!(names.contains(&Vec::new()));
     }
 
     #[test]
@@ -852,6 +1088,122 @@ mod tests {
             assert_eq!(kind_of(&app, &format!("m{i}")), MessageKind::Normal);
             assert!(!app.messages[&rid("r-general")][i].edited);
         }
+    }
+
+    fn held_reactions(app: &App, id: &str) -> Vec<(String, Vec<String>)> {
+        app.messages[&rid("r-general")]
+            .iter()
+            .find(|m| m.id == id)
+            .expect("held")
+            .reactions
+            .iter()
+            .map(|r| (r.name.clone(), r.users.clone()))
+            .collect()
+    }
+
+    fn give_reactions(app: &mut App, id: &str, reactions: &[(&str, &[&str])]) {
+        let copy = reacted_copy("r-general", id, 0, reactions);
+        app.messages
+            .get_mut(&rid("r-general"))
+            .unwrap()
+            .iter_mut()
+            .find(|m| m.id == id)
+            .expect("held")
+            .reactions = copy.reactions;
+    }
+
+    #[test]
+    fn refetch_takes_reactions_made_while_offline() {
+        let mut app = open_general(10);
+        let mut page = page_from(4, 10);
+        page[2] = reacted_copy("r-general", "m6", 160, &[("+1", &["bob"])]);
+        load(&mut app, "r-general", page);
+        assert_eq!(ids(&app, "r-general").len(), 10);
+        assert_eq!(
+            held_reactions(&app, "m6"),
+            [("+1".to_string(), vec!["bob".to_string()])]
+        );
+        assert!(
+            !app.messages[&rid("r-general")][6].edited,
+            "a reaction is not an edit"
+        );
+        // Messages the page did not react to stay as they were.
+        assert!(held_reactions(&app, "m7").is_empty());
+    }
+
+    #[test]
+    fn refetch_drops_a_reaction_removed_while_offline() {
+        let mut app = open_general(10);
+        give_reactions(&mut app, "m6", &[("+1", &["bob"]), ("tada", &["ana"])]);
+        // The page has m6 with only one of them left, and m7 with none (the key absent).
+        give_reactions(&mut app, "m7", &[("+1", &["bob"])]);
+        let mut page = page_from(4, 10);
+        page[2] = reacted_copy("r-general", "m6", 160, &[("tada", &["ana"])]);
+        load(&mut app, "r-general", page);
+        assert_eq!(
+            held_reactions(&app, "m6"),
+            [("tada".to_string(), vec!["ana".to_string()])]
+        );
+        assert!(held_reactions(&app, "m7").is_empty());
+    }
+
+    #[test]
+    fn refetch_leaves_the_reactions_of_messages_older_than_the_page_alone() {
+        let mut app = open_general(10);
+        give_reactions(&mut app, "m2", &[("+1", &["bob"])]);
+        load(&mut app, "r-general", page_from(6, 10));
+        assert_eq!(
+            held_reactions(&app, "m2"),
+            [("+1".to_string(), vec!["bob".to_string()])]
+        );
+    }
+
+    #[test]
+    fn an_overlapping_page_keeps_one_copy_with_the_newer_reactions() {
+        let mut app = open_general(10);
+        give_reactions(&mut app, "m6", &[("+1", &["bob"])]);
+        let mut page = page_from(4, 10);
+        page[2] = reacted_copy(
+            "r-general",
+            "m6",
+            160,
+            &[("+1", &["bob", "ana"]), ("tada", &["ana"])],
+        );
+        load(&mut app, "r-general", page);
+        let copies = app.messages[&rid("r-general")]
+            .iter()
+            .filter(|m| m.id == "m6")
+            .count();
+        assert_eq!(copies, 1);
+        assert_eq!(
+            held_reactions(&app, "m6"),
+            [
+                ("+1".to_string(), vec!["bob".to_string(), "ana".to_string()]),
+                ("tada".to_string(), vec!["ana".to_string()])
+            ]
+        );
+    }
+
+    #[test]
+    fn refetch_with_reactions_keeps_the_cursor_message_and_row() {
+        let mut app = open_general(30);
+        let room = rid("r-general");
+        let starts = crate::app::messages::row_starts(&app, &room);
+        app.msg_views.insert(
+            room.clone(),
+            crate::app::messages::MsgView {
+                cursor: 20,
+                top_row: starts[20].saturating_sub(2),
+            },
+        );
+        let before = anchor_of(&app);
+        let names: Vec<String> = (0..12).map(|n| format!("custom_{n}")).collect();
+        let many: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &["bob"][..])).collect();
+        let mut page = page_from(10, 30);
+        page[3] = reacted_copy("r-general", "m13", 230, &many);
+        load(&mut app, "r-general", page);
+        assert_eq!(held_reactions(&app, "m13").len(), 12);
+        assert_eq!(anchor_of(&app), before);
     }
 
     #[test]

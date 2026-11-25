@@ -1,10 +1,14 @@
 //! `config.toml`: the scalar settings of D-12 and their D-13 validation.
 
 use super::diag::{ConfigFile, Problem, Reader, parse_table};
+use crate::ui::sanitize::sanitize_line;
 use crate::ui::wrap::MessageLayout;
 use chrono::format::{Item, StrftimeItems};
 use chrono::{TimeZone, Utc};
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use toml::Spanned;
+use toml::de::DeValue;
 use unicode_width::UnicodeWidthStr;
 
 pub const DEFAULT_HISTORY_SIZE: u16 = 50;
@@ -15,6 +19,8 @@ pub const HISTORY_SIZE_RANGE: (i64, i64) = (1, 1000);
 pub const KEY_TIMEOUT_MS_RANGE: (i64, i64) = (100, 5000);
 /// Widest a rendered timestamp may be, in columns (A7).
 pub const MAX_TIMESTAMP_WIDTH: usize = 40;
+/// Widest an `[emoji_aliases]` value may be, in columns.
+pub const MAX_ALIAS_WIDTH: usize = 8;
 /// 2026-01-31 23:59:59 UTC: the instant a format is test-rendered with (month, day and hour all
 /// wide, so a format that overflows with real data overflows here too).
 const SAMPLE_TS: i64 = 1_769_903_999;
@@ -98,6 +104,9 @@ pub struct Settings {
     /// config.toml key `follow_on_send` (D-05): `"always"` (default) jumps to the newest message
     /// after every send; `"if_at_bottom"` follows only when the newest row was already visible.
     pub follow_on_send: FollowOnSend,
+    /// config.toml table `[emoji_aliases]`: the text drawn for a reaction by shortcode name
+    /// (without colons), so a custom server emoji can show as a lookalike. Empty by default.
+    pub emoji_aliases: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -110,6 +119,7 @@ impl Default for Settings {
             message_layout: MessageLayout::Compact,
             key_timeout_ms: DEFAULT_KEY_TIMEOUT_MS,
             follow_on_send: FollowOnSend::Always,
+            emoji_aliases: HashMap::new(),
         }
     }
 }
@@ -122,6 +132,7 @@ const KNOWN_KEYS: &[&str] = &[
     "message_layout",
     "key_timeout_ms",
     "follow_on_send",
+    "emoji_aliases",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
     "server_url",
     "user_id",
@@ -206,15 +217,164 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
             settings.key_timeout_ms = u64::try_from(n).unwrap_or(settings.key_timeout_ms);
         }
     }
+    if let Some(value) = table.get("emoji_aliases") {
+        settings.emoji_aliases = parse_emoji_aliases(&mut reader, value);
+    }
     // D-03: unknown keys and tables only warn. The connection keys are known (Phase 3, D-01).
     reader.warn_unknown(table, KNOWN_KEYS, "");
     settings
+}
+
+/// At most this many characters of a user-written alias name are echoed in an error.
+const ALIAS_NAME_ECHO: usize = 32;
+
+/// Read the `[emoji_aliases]` table. A name is written without colons and holds no whitespace or
+/// control character; a value must survive `sanitize_line` unchanged and fit `MAX_ALIAS_WIDTH`
+/// columns. An invalid entry is reported and skipped, the others are kept.
+fn parse_emoji_aliases(
+    reader: &mut Reader<'_>,
+    value: &Spanned<DeValue<'_>>,
+) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    let DeValue::Table(table) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            "emoji_aliases",
+            format!("expected a table, found {}", value.get_ref().type_str()),
+        );
+        return aliases;
+    };
+    for (name_key, entry) in table.iter() {
+        let name: &str = name_key.get_ref();
+        let shown: String = name.chars().take(ALIAS_NAME_ECHO).collect();
+        let key = format!("emoji_aliases.{shown}");
+        if name.is_empty() {
+            reader.error(name_key.span().start, &key, "the name must not be empty");
+            continue;
+        }
+        if name.contains(':') {
+            reader.error(
+                name_key.span().start,
+                &key,
+                "write the name without colons (partyparrot, not :partyparrot:)",
+            );
+            continue;
+        }
+        if name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            reader.error(
+                name_key.span().start,
+                &key,
+                "the name must not contain spaces or control characters",
+            );
+            continue;
+        }
+        let Some(text) = reader.string(entry, &key) else {
+            continue;
+        };
+        if sanitize_line(&text) != text.as_str() {
+            reader.error(
+                entry.span().start,
+                &key,
+                "must not contain control or bidi characters",
+            );
+            continue;
+        }
+        let width = text.width();
+        if width > MAX_ALIAS_WIDTH {
+            reader.error(
+                entry.span().start,
+                &key,
+                format!("must be at most {MAX_ALIAS_WIDTH} columns wide, got {width}"),
+            );
+            continue;
+        }
+        aliases.insert(name.to_string(), text);
+    }
+    aliases
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::diag::Severity;
+
+    #[test]
+    fn emoji_aliases_default_to_none() {
+        let (s, out) = errors_of("");
+        assert!(s.emoji_aliases.is_empty());
+        assert!(out.is_empty());
+        let (s, out) = errors_of("[emoji_aliases]\n");
+        assert!(s.emoji_aliases.is_empty());
+        assert!(out.is_empty(), "known table, no warning: {out:?}");
+    }
+
+    #[test]
+    fn emoji_aliases_are_read() {
+        let (s, out) = errors_of("[emoji_aliases]\npartyparrot = \"🦜\"\nship_it = \"🚢\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(s.emoji_aliases.len(), 2);
+        assert_eq!(s.emoji_aliases["partyparrot"], "🦜");
+        assert_eq!(s.emoji_aliases["ship_it"], "🚢");
+    }
+
+    #[test]
+    fn emoji_alias_value_width_is_capped_at_eight() {
+        let (s, out) = errors_of("[emoji_aliases]\nok = \"12345678\"\nwide = \"123456789\"\n");
+        assert_eq!(s.emoji_aliases.len(), 1, "the valid one is kept");
+        assert_eq!(s.emoji_aliases["ok"], "12345678");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].key.as_deref(), Some("emoji_aliases.wide"));
+        assert_eq!(out[0].message, "must be at most 8 columns wide, got 9");
+        assert_eq!(out[0].pos.map(|(line, _)| line), Some(3));
+    }
+
+    #[test]
+    fn emoji_alias_value_with_control_characters_is_an_error() {
+        let (s, out) = errors_of("[emoji_aliases]\nbad = \"a\\u001bb\"\n");
+        assert!(s.emoji_aliases.is_empty());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("emoji_aliases.bad"));
+        assert!(out[0].message.contains("control"), "{}", out[0].message);
+    }
+
+    #[test]
+    fn emoji_alias_name_with_colons_is_an_error() {
+        let (s, out) = errors_of("[emoji_aliases]\n\":partyparrot:\" = \"🦜\"\n");
+        assert!(s.emoji_aliases.is_empty());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].key.as_deref(), Some("emoji_aliases.:partyparrot:"));
+        assert!(
+            out[0].message.contains("without colons"),
+            "{}",
+            out[0].message
+        );
+    }
+
+    #[test]
+    fn emoji_alias_bad_names_and_types_are_errors() {
+        let (s, out) = errors_of("[emoji_aliases]\n\"\" = \"x\"\n\"a b\" = \"x\"\nnum = 3\n");
+        assert!(s.emoji_aliases.is_empty());
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(out[0].message.contains("empty"));
+        assert!(out[1].message.contains("spaces"));
+        assert!(out[2].message.contains("expected a string"));
+
+        let (s, out) = errors_of("emoji_aliases = \"x\"\n");
+        assert!(s.emoji_aliases.is_empty());
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("expected a table"));
+    }
+
+    #[test]
+    fn emoji_alias_long_names_are_truncated_in_the_error() {
+        let long = "n".repeat(100);
+        let (_, out) = errors_of(&format!("[emoji_aliases]\n\"{long}:\" = \"x\"\n"));
+        assert_eq!(out.len(), 1);
+        let key = out[0].key.as_deref().unwrap();
+        assert_eq!(key, format!("emoji_aliases.{}", "n".repeat(32)));
+    }
 
     #[test]
     fn message_layout_values() {

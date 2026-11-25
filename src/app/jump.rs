@@ -383,6 +383,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: format!("c{n}"),
             room_id: room.clone(),
             author: "alice".to_string(),

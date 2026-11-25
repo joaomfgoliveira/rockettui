@@ -1,0 +1,27 @@
+---
+source: src/ui/picker.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃? alice  deploy finished                          ┃
+│> * #general              │┃         👍  3  🎉  1  🦜  2  :rt_unknown: 1         ┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┌ React ───────────────────────────────────────────┐
+│  ▾ People (1)            ││press / to search                                 │
+│  Recent                  ││* 👍  :+1:           3, you                        │
+│    #random               ││  🎉  :tada:         1                             │
+│    &secrets [e2e]        ││  🦜  :partyparrot:  2                             │
+│    #quiet                ││     :rt_unknown:   1                             │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+└──────────────────────────┘└───────── j/k move  Enter remove  / find  q close ┘
+ NORMAL  general

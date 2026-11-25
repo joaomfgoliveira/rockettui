@@ -1,0 +1,27 @@
+---
+source: src/ui/reactions.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃? alice  deploy finished                          ┃
+│> * #general              │┃         👍  3  🎉  1  🦜  2  :rt_unknown: 1         ┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┃                                                  ┃
+│  ▾ People (1)            │┃                                                  ┃
+│  Recent                  │┃                                                  ┃
+│    #random               │┃                                                  ┃
+│    &secrets [e2e]        │┃                                                  ┃
+│    #quiet                │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┌ Reactions ───────────────────────────────────────┐
+│                          ││👍  :+1:           you, bob, ana                   │
+│                          ││🎉  :tada:         ana                             │
+│                          ││🦜  :partyparrot:  bob, ana                        │
+│                          ││   :rt_unknown:   zed                             │
+└──────────────────────────┘└────────────────────────────────── any key closes ┘
+ NORMAL  general

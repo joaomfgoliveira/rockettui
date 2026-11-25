@@ -1,12 +1,16 @@
 //! The view: a pure function of `&App` onto a ratatui `Frame`. It never mutates `App`.
 
 pub mod context;
+pub mod emoji;
+pub mod emoji_names;
 pub mod error_screen;
 pub mod help;
 pub mod input;
 pub mod layout;
 pub mod messages;
 pub mod palette;
+pub mod picker;
+pub mod reactions;
 pub mod results;
 pub mod sanitize;
 pub mod sidebar;
@@ -40,6 +44,8 @@ pub fn view(frame: &mut Frame, app: &App) {
     results::render(frame, areas.messages, app);
     help::render(frame, areas.messages, app);
     context::render(frame, &areas, app);
+    reactions::render(frame, &areas, app);
+    picker::render(frame, &areas, app);
     status::render_status(frame, areas.status, app);
     status::render_cmdline(frame, areas.cmdline, app);
 }
@@ -93,6 +99,7 @@ mod tests {
             Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "hostile-0".to_string(),
                 room_id: RoomId(id.0.clone()),
                 author: "\u{202e}mallory".to_string(),

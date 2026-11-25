@@ -100,6 +100,7 @@ fn message_in_state(send: SendState) -> Message {
     Message {
         edited: false,
         plain_text: true,
+        reactions: Vec::new(),
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),
         author: "alice".to_string(),
@@ -260,6 +261,39 @@ fn sentinel_sweep() {
         id: "m1".to_string(),
     };
     no_sentinel("Effect::DeleteMessage", &format!("{delete:?}"));
+    // Reacting: the shortcode, the effects and every result Action. A reaction name and a custom
+    // emoji name are never printed.
+    let react = Effect::React {
+        id: "m1".to_string(),
+        emoji: crate::effect::EmojiName::new(BODY.to_string()),
+        add: true,
+    };
+    no_sentinel("Effect::React", &format!("{react:?} {react:#?}"));
+    no_sentinel(
+        "Effect::LoadCustomEmojis",
+        &format!("{:?}", Effect::LoadCustomEmojis),
+    );
+    no_sentinel(
+        "Action::ReactFailed",
+        &format!(
+            "{:?}",
+            Action::ReactFailed {
+                error: crate::api::ApiError::Rejected
+            }
+        ),
+    );
+    let custom = vec![crate::data::CustomEmoji {
+        name: BODY.to_string(),
+        aliases: vec![BODY.to_string()],
+    }];
+    no_sentinel(
+        "Action::CustomEmojisLoaded",
+        &format!("{:?}", Action::CustomEmojisLoaded(custom)),
+    );
+    no_sentinel(
+        "Action::CustomEmojisFailed",
+        &format!("{:?}", Action::CustomEmojisFailed),
+    );
     no_sentinel("Action::EditMessage", &format!("{:?}", Action::EditMessage));
     no_sentinel(
         "Action::DeleteMessage",

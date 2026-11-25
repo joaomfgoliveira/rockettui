@@ -105,6 +105,11 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "r", Action::RetrySend),
         (Mode::Normal, "e", Action::EditMessage),
         (Mode::Normal, "dd", Action::DeleteMessage),
+        // `gr` (`show_reactions`) opens the popup of who reacted to the message under the cursor.
+        // `g` is already the prefix of `gg`, so this adds a second continuation, not a new prefix.
+        (Mode::Normal, "gr", Action::ShowReactions),
+        // `+` (`react_message`) opens the reaction picker for the message under the cursor.
+        (Mode::Normal, "+", Action::ReactMessage),
         // `?` opens the context popup; `?` again opens the help overlay, generated from this very
         // keymap. `show_help` has no default key.
         (Mode::Normal, "?", Action::ShowContext),

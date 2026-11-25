@@ -421,6 +421,7 @@ mod tests {
             send: crate::data::SendState::Sent,
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
         }
     }
 
@@ -485,6 +486,7 @@ mod reducer_tests {
             send: SendState::Sent,
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
         }
     }
 

@@ -259,6 +259,7 @@ mod tests {
             .map(|i| Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: format!("s{i}"),
                 room_id: room.clone(),
                 author: "alice".to_string(),

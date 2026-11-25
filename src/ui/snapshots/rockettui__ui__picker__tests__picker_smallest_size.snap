@@ -1,0 +1,11 @@
+---
+source: src/ui/picker.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ React ───┐
+│  Unread                  ││press / t…│
+│> * #general              ││* 👍  …  3…│
+│  * &dev-team             ││  🎉  …  1 │
+│  * @alice                ││     …  2 │
+└──────────────────────────┘└──────────┘
+ NORMAL  general

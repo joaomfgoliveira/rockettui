@@ -303,6 +303,7 @@ mod tests {
             .map(|(n, send)| Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: format!("rt-{n}"),
                 room_id: rid("r-a"),
                 author: "me".to_string(),
@@ -334,6 +335,7 @@ mod tests {
             .push(Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "u-1".to_string(),
                 room_id: rid("general"),
                 author: "me".to_string(),
@@ -383,6 +385,7 @@ mod tests {
             .push(Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: format!("w-{n}"),
                 room_id: rid(room),
                 author: "me".to_string(),
@@ -454,6 +457,7 @@ mod tests {
         app.messages.get_mut(&id).expect("room").push(Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "s-1".to_string(),
             room_id: id,
             author: "SENTINEL-AUTHOR-2b9d".to_string(),
@@ -523,6 +527,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid(room),
             author: "alice".to_string(),

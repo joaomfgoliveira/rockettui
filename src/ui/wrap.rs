@@ -52,7 +52,7 @@ pub fn wrap_body(text: &str, width: usize) -> Vec<String> {
 /// unchanged; `col == 0` yields an empty string; otherwise whole grapheme clusters are kept while
 /// they fit in `col - 1` columns and an ellipsis is appended. A wide cluster straddling the limit
 /// is dropped, never split, so the result is at most `col` wide.
-fn fit_author(author: &str, col: usize) -> Cow<'_, str> {
+pub(crate) fn fit_author(author: &str, col: usize) -> Cow<'_, str> {
     if author.width() <= col {
         return Cow::Borrowed(author);
     }
@@ -99,6 +99,10 @@ pub struct RowCtx<'a> {
     /// The query of the active search, whose matches are drawn in `theme.search_match`. Only the
     /// styling of spans depends on it: the number of rows never does.
     pub search: Option<&'a str>,
+    /// The `[emoji_aliases]` of config.toml: the text drawn for a reaction by shortcode name.
+    pub aliases: &'a std::collections::HashMap<String, String>,
+    /// The user's own username, to tell their reactions from the others (`None` until known).
+    pub own_user: Option<&'a str>,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -239,7 +243,8 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
 /// The body rows of `msg` at `width` columns, as spans without any prefix. A deleted message is
 /// the one `DELETED_TEXT` row. An edited message gets `EDITED_MARKER` (in `theme.messages_edited`)
 /// after its last row when it fits in `width`, on a new row of its own (without the leading space)
-/// when it does not.
+/// when it does not. The body is drawn with its emoji shortcodes as emoji (see `draw_shortcodes`).
+/// The reaction rows (`reaction_rows`) follow the last body row.
 fn body_rows(
     msg: &Message,
     width: usize,
@@ -252,7 +257,15 @@ fn body_rows(
     let query = ctx
         .search
         .filter(|_| crate::app::search::highlightable(msg));
-    let mut rows: Vec<Vec<Span<'static>>> = wrap_body(&msg.body, width)
+    // The emoji shortcodes of an ordinary message are drawn as emoji before the text is wrapped, so
+    // widths are measured on what is on screen and the row model agrees with the pane. The stored
+    // text is not changed. A system message is fixed text the client wrote itself.
+    let drawn = if msg.kind == MessageKind::Normal {
+        crate::ui::emoji::draw_shortcodes(&msg.body, ctx.aliases)
+    } else {
+        std::borrow::Cow::Borrowed(msg.body.as_str())
+    };
+    let mut rows: Vec<Vec<Span<'static>>> = wrap_body(&drawn, width)
         .into_iter()
         .map(|row| highlight_row(row, body_style, query, ctx.theme.search_match))
         .collect();
@@ -269,6 +282,47 @@ fn body_rows(
                 EDITED_MARKER.trim_start(),
                 ctx.theme.messages_edited,
             )]);
+        }
+    }
+    rows.extend(reaction_rows(msg, width, ctx));
+    rows
+}
+
+/// What sits between two reactions of a row.
+const REACTION_GAP: &str = "  ";
+
+/// The reaction rows of `msg` at `width` columns, as spans without any prefix: one item per
+/// reaction, `glyph count` (the glyph from `ui::emoji::resolve`, the count the number of users),
+/// in the order the server lists them, joined by `REACTION_GAP` and wrapped by whole items. An item
+/// wider than `width` is cut with an ellipsis. The user's own reactions take
+/// `theme.messages_reactions_own`, the others `theme.messages_reactions`. Usernames never appear
+/// here (the popup shows them). No reactions, no rows.
+fn reaction_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'static>>> {
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut used = 0;
+    for reaction in &msg.reactions {
+        let label = crate::ui::emoji::resolve(&reaction.name, ctx.aliases);
+        let text = format!("{label} {}", reaction.users.len());
+        let text = fit_author(&text, width).into_owned();
+        let own = ctx
+            .own_user
+            .is_some_and(|me| reaction.users.iter().any(|user| user == me));
+        let style = if own {
+            ctx.theme.messages_reactions_own
+        } else {
+            ctx.theme.messages_reactions
+        };
+        let item = text.width();
+        match rows.last_mut() {
+            Some(row) if used + REACTION_GAP.width() + item <= width => {
+                row.push(Span::raw(REACTION_GAP));
+                row.push(Span::styled(text, style));
+                used += REACTION_GAP.width() + item;
+            }
+            _ => {
+                rows.push(vec![Span::styled(text, style)]);
+                used = item;
+            }
         }
     }
     rows
@@ -371,6 +425,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
             author: author.to_string(),
@@ -398,6 +453,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -418,6 +475,8 @@ mod tests {
             zone: Zone::Utc,
             theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         render_rows(m, width, &ctx)
     }
@@ -475,6 +534,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         let bodies: Vec<usize> = msgs
             .iter()
@@ -503,6 +564,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
@@ -903,6 +966,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
         for state in [
@@ -940,6 +1005,8 @@ mod tests {
                 zone: Zone::Utc,
                 theme: &theme,
                 search: None,
+                aliases: &crate::ui::emoji::NO_ALIASES,
+                own_user: None,
             };
             for state in [
                 crate::data::SendState::Sending,
@@ -973,6 +1040,8 @@ mod tests {
                     zone: Zone::Utc,
                     theme: &theme,
                     search: None,
+                    aliases: &crate::ui::emoji::NO_ALIASES,
+                    own_user: None,
                 };
                 let m = with_state(state, "alice", "hello there");
                 let rows = render_rows(&m, 60, &ctx);
@@ -1031,6 +1100,7 @@ mod tests {
         Message {
             edited: true,
             plain_text: true,
+            reactions: Vec::new(),
             ..msg(author, body)
         }
     }
@@ -1085,6 +1155,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
     }
@@ -1112,6 +1184,7 @@ mod tests {
             body: "SECRET-TEXT".to_string(),
             edited: true,
             plain_text: true,
+            reactions: Vec::new(),
             ..deleted("alice")
         };
         for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
@@ -1160,6 +1233,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: format!("m{ts}"),
             room_id: RoomId("r".to_string()),
             author: "a".to_string(),
@@ -1181,6 +1255,8 @@ mod tests {
             zone: Zone::Utc,
             theme: &theme,
             search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
         };
         divider_row(msg, prev, width, &ctx)
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -1204,5 +1280,351 @@ mod tests {
         assert_eq!(divider_text(&msg_at(i64::MAX), None, 30), None);
         let ok = msg_at(0);
         assert_eq!(divider_text(&msg_at(i64::MAX), Some(&ok), 30), None);
+    }
+
+    // ---- reaction rows ----
+
+    use crate::data::Reaction;
+    use std::collections::HashMap;
+
+    fn reaction(name: &str, users: &[&str]) -> Reaction {
+        Reaction {
+            name: name.to_string(),
+            users: users.iter().map(|u| u.to_string()).collect(),
+        }
+    }
+
+    fn reacted(body: &str, reactions: Vec<Reaction>) -> Message {
+        Message {
+            reactions,
+            ..msg("alice", body)
+        }
+    }
+
+    /// `render_rows` with aliases and an own username, in the Phase 1 context.
+    fn rows_with(
+        m: &Message,
+        width: u16,
+        layout: MessageLayout,
+        aliases: &HashMap<String, String>,
+        own: Option<&str>,
+    ) -> Vec<Line<'static>> {
+        let format = TimeFormat::default();
+        let theme = Theme::default();
+        let ctx = RowCtx {
+            layout,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases,
+            own_user: own,
+        };
+        render_rows(m, width, &ctx)
+    }
+
+    fn alias_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_message_with_reactions_gets_one_row_under_its_body() {
+        let plain = msg("alice", "deploy done");
+        let m = reacted(
+            "deploy done",
+            vec![reaction("+1", &["a", "b", "c"]), reaction("tada", &["d"])],
+        );
+        let none = HashMap::new();
+        let before = rows_with(&plain, 60, MessageLayout::Compact, &none, None);
+        let rows = rows_with(&m, 60, MessageLayout::Compact, &none, None);
+        assert_eq!(rows.len(), before.len() + 1);
+        assert_eq!(
+            text(&rows[0]),
+            text(&before[0]),
+            "the body row is unchanged"
+        );
+        // Hangs under the body: time (5) + space + author column (5) + two spaces.
+        assert_eq!(text(&rows[1]), format!("{}👍 3  🎉 1", " ".repeat(13)));
+    }
+
+    #[test]
+    fn a_message_without_reactions_is_drawn_as_before() {
+        let m = msg("alice", "deploy done");
+        let none = HashMap::new();
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            assert_eq!(
+                texts(&rows_with(&m, 40, layout, &none, None)),
+                texts(&rows_at(&m, 40, layout, 5))
+            );
+        }
+        // A message with only empty reactions list is the same thing.
+        assert!(m.reactions.is_empty());
+    }
+
+    #[test]
+    fn two_line_puts_the_reaction_row_under_the_indented_body() {
+        let m = reacted("hello", vec![reaction("+1", &["a"])]);
+        let rows = rows_with(&m, 40, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert_eq!(texts(&rows)[1..], ["  hello", "  👍 1"]);
+    }
+
+    #[test]
+    fn reactions_wrap_by_whole_items_and_never_exceed_the_width() {
+        let aliases = alias_map(&[("a", "AAAA"), ("b", "BBBB"), ("c", "CCCC")]);
+        let m = reacted(
+            "x",
+            vec![
+                reaction("a", &["u"]),
+                reaction("b", &["u"]),
+                reaction("c", &["u"]),
+            ],
+        );
+        // Two-line, width 16: the body column is 14, so two 6-wide items and the gap just fit.
+        let rows = rows_with(&m, 16, MessageLayout::TwoLine, &aliases, None);
+        assert_eq!(texts(&rows)[2..], ["  AAAA 1  BBBB 1", "  CCCC 1"]);
+        // At every width the reaction rows fit, and every row holds only whole items.
+        for width in [12, 14, 16, 20, 30, 52, 80] {
+            let rows = rows_with(&m, width, MessageLayout::TwoLine, &aliases, None);
+            for line in &rows[2..] {
+                let shown = text(line);
+                assert!(
+                    shown.width() <= usize::from(width).max(12),
+                    "{width}: {shown:?}"
+                );
+                for item in shown.trim().split(REACTION_GAP) {
+                    assert!(
+                        ["AAAA 1", "BBBB 1", "CCCC 1"].contains(&item),
+                        "{width}: {item:?} in {shown:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_item_wider_than_the_row_is_cut_with_an_ellipsis() {
+        let aliases = alias_map(&[("x", "WWWWWWWW")]);
+        let users = vec!["u"; 100];
+        let m = reacted("x", vec![reaction("x", &users)]);
+        // Body column 12: "WWWWWWWW 100" is exactly 12 wide, so it fits.
+        let rows = rows_with(&m, 14, MessageLayout::TwoLine, &aliases, None);
+        assert_eq!(text(&rows[2]), "  WWWWWWWW 100");
+        // A narrower row cannot go below MIN_BODY (10), so the item is cut to it.
+        let rows = rows_with(&m, 8, MessageLayout::TwoLine, &aliases, None);
+        let shown = text(&rows[2]);
+        assert!(shown.trim().width() <= MIN_BODY, "{shown:?}");
+        assert!(shown.trim().ends_with('\u{2026}'), "{shown:?}");
+    }
+
+    #[test]
+    fn the_users_own_reactions_take_the_own_style() {
+        let theme = Theme::default();
+        let m = reacted(
+            "x",
+            vec![
+                reaction("+1", &["alice", "me"]),
+                reaction("tada", &["alice"]),
+            ],
+        );
+        let rows = rows_with(&m, 40, MessageLayout::TwoLine, &HashMap::new(), Some("me"));
+        let spans = &rows[2].spans;
+        // indent, +1 item, gap, tada item
+        assert_eq!(spans[1].style, theme.messages_reactions_own);
+        assert_eq!(spans[3].style, theme.messages_reactions);
+        assert_ne!(spans[1].style, spans[3].style);
+        // Without an own username nothing is own.
+        let rows = rows_with(&m, 40, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert_eq!(rows[2].spans[1].style, theme.messages_reactions);
+    }
+
+    #[test]
+    fn aliases_and_raw_names_show_in_the_row_and_hostile_names_are_sanitized() {
+        let aliases = alias_map(&[("partyparrot", "🦜")]);
+        let m = reacted(
+            "x",
+            vec![
+                reaction("partyparrot", &["a", "b"]),
+                reaction("unknown_thing", &["a"]),
+                reaction("bad\u{1b}[31mname\u{7}", &["a"]),
+            ],
+        );
+        let rows = rows_with(&m, 80, MessageLayout::TwoLine, &aliases, None);
+        let shown = text(&rows[2]);
+        assert!(shown.contains("🦜 2"), "{shown:?}");
+        assert!(shown.contains(":unknown_thing: 1"), "{shown:?}");
+        assert!(!shown.chars().any(|c| c.is_control()), "{shown:?}");
+    }
+
+    #[test]
+    fn usernames_never_appear_in_the_row() {
+        let m = reacted("x", vec![reaction("+1", &["SENTINEL-USER-1", "other"])]);
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_with(&m, 80, layout, &HashMap::new(), Some("SENTINEL-USER-1"));
+            assert!(!texts(&rows).join("\n").contains("SENTINEL"));
+        }
+    }
+
+    // ---- emoji shortcodes in the body
+
+    #[test]
+    fn shortcodes_in_a_body_are_drawn_as_emoji_in_both_layouts() {
+        let m = msg("alice", "ship it :tada: now :+1:");
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_with(&m, 60, layout, &HashMap::new(), None);
+            let all = texts(&rows).join("\n");
+            assert!(all.contains("ship it 🎉 now 👍"), "{layout:?}: {all}");
+            assert!(
+                !all.contains(":tada:") && !all.contains(":+1:"),
+                "{layout:?}: {all}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alias_applies_in_the_body() {
+        let aliases = alias_map(&[("partyparrot", "🦜")]);
+        let m = msg("alice", "go :partyparrot: go");
+        let rows = rows_with(&m, 60, MessageLayout::TwoLine, &aliases, None);
+        assert_eq!(text(&rows[1]), "  go 🦜 go");
+    }
+
+    #[test]
+    fn what_is_not_a_shortcode_stays_as_written() {
+        let m = msg("alice", "at 10:100:20 use `:tada:` and :nope_x: ok");
+        let rows = rows_with(&m, 80, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert_eq!(
+            text(&rows[1]),
+            "  at 10:100:20 use `:tada:` and :nope_x: ok"
+        );
+    }
+
+    #[test]
+    fn system_messages_and_deleted_lines_are_not_drawn_with_emoji() {
+        let mut system = msg("alice", "* added :tada:");
+        system.kind = MessageKind::System;
+        let rows = rows_with(&system, 60, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert!(texts(&rows).join("\n").contains(":tada:"));
+        let mut deleted = msg("alice", ":tada:");
+        deleted.kind = MessageKind::Deleted;
+        let rows = rows_with(&deleted, 60, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert!(!texts(&rows).join("\n").contains('🎉'));
+    }
+
+    #[test]
+    fn a_message_still_being_sent_draws_like_the_confirmed_one() {
+        let mut pending = msg("me", "thanks :+1:");
+        pending.send = crate::data::SendState::Sending;
+        let rows = rows_with(&pending, 60, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert!(texts(&rows).join("\n").contains("thanks 👍"));
+    }
+
+    #[test]
+    fn lines_wrap_by_the_drawn_width_and_never_exceed_the_pane() {
+        // `:tada:` is six columns written and two drawn: the wrap must use the drawn width.
+        let body = vec![":tada:"; 40].join(" ");
+        let m = msg("alice", &body);
+        for width in [12u16, 20, 31, 52, 80] {
+            let rows = rows_with(&m, width, MessageLayout::TwoLine, &HashMap::new(), None);
+            for row in &rows[1..] {
+                let shown = text(row);
+                assert!(
+                    shown.width() <= usize::from(width).max(MIN_BODY + 2),
+                    "{width}: {} wide: {shown:?}",
+                    shown.width()
+                );
+            }
+            assert!(!texts(&rows).join(" ").contains(":tada:"));
+        }
+        // Drawn, 40 emoji with their spaces take fewer rows than the written text would.
+        let drawn = rows_with(&m, 40, MessageLayout::TwoLine, &HashMap::new(), None).len();
+        let mut plain = m.clone();
+        plain.kind = MessageKind::System;
+        let written = rows_with(&plain, 40, MessageLayout::TwoLine, &HashMap::new(), None).len();
+        assert!(drawn < written, "{drawn} rows drawn, {written} written");
+    }
+
+    #[test]
+    fn the_row_model_counts_the_drawn_rows() {
+        let format = TimeFormat::default();
+        let theme = Theme::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
+        };
+        let m = msg("alice", &vec![":tada:"; 40].join(" "));
+        assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
+        assert_eq!(
+            block_rows(&m, None, 40, &ctx),
+            message_rows(&m, 40, &ctx) + 1
+        );
+    }
+
+    #[test]
+    fn hostile_text_is_still_sanitized_after_the_substitution() {
+        let m = msg("alice", "bad \u{1b}[31m :tada: \u{7}x");
+        let rows = rows_with(&m, 60, MessageLayout::TwoLine, &HashMap::new(), None);
+        let all = texts(&rows).join("\n");
+        assert!(all.contains('🎉'));
+        assert!(!all.chars().any(|c| c.is_control() && c != '\n'), "{all:?}");
+    }
+
+    #[test]
+    fn a_reaction_named_with_a_name_the_server_uses_draws_as_its_emoji() {
+        let m = reacted("x", vec![reaction("flag_af", &["a", "b"])]);
+        let rows = rows_with(&m, 40, MessageLayout::TwoLine, &HashMap::new(), None);
+        assert_eq!(text(&rows[2]), "  🇦🇫 2");
+        assert!(!texts(&rows).join("\n").contains("flag_af"));
+    }
+
+    #[test]
+    fn a_deleted_message_shows_no_reaction_row() {
+        let mut m = reacted("x", vec![reaction("+1", &["a"])]);
+        m.kind = MessageKind::Deleted;
+        for layout in [MessageLayout::Compact, MessageLayout::TwoLine] {
+            let rows = rows_with(&m, 40, layout, &HashMap::new(), None);
+            assert_eq!(rows.len(), 1, "{:?}", texts(&rows));
+        }
+    }
+
+    #[test]
+    fn block_rows_counts_the_reaction_rows() {
+        let format = TimeFormat::default();
+        let theme = Theme::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            own_user: None,
+        };
+        let plain = msg("alice", "hello");
+        let m = reacted(
+            "hello",
+            vec![reaction("+1", &["a"]), reaction("tada", &["b"])],
+        );
+        assert_eq!(
+            block_rows(&m, None, 60, &ctx),
+            block_rows(&plain, None, 60, &ctx) + 1
+        );
+        assert_eq!(
+            block_rows(&m, None, 60, &ctx),
+            message_rows(&m, 60, &ctx) + 1
+        );
     }
 }

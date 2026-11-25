@@ -1,0 +1,59 @@
+{
+  "messages": [
+    {
+      "_id": "oxGDPmsNtgfBBLy8i",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "reaction capture two",
+      "ts": "2026-11-24T22:03:10.412Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-24T22:03:15.201Z",
+      "mentions": [],
+      "channels": [],
+      "urls": []
+    },
+    {
+      "_id": "z8HTrGb5txGNuiqdY",
+      "rid": "6b04ac4b408233ed49434196",
+      "msg": "reaction capture one",
+      "ts": "2026-11-24T22:03:10.039Z",
+      "u": {
+        "_id": "JjeoCMcSJnKcsJdxF",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-24T22:03:13.928Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "reactions": {
+        ":+1:": {
+          "usernames": [
+            "dev",
+            "alice",
+            "bob"
+          ]
+        },
+        ":tada:": {
+          "usernames": [
+            "alice"
+          ]
+        },
+        ":thumbsup_tone2:": {
+          "usernames": [
+            "alice"
+          ]
+        },
+        ":rtpartyparrot:": {
+          "usernames": [
+            "alice"
+          ]
+        }
+      }
+    }
+  ],
+  "success": true
+}

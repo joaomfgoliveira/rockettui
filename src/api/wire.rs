@@ -160,6 +160,119 @@ pub struct WireMsg {
     /// Present when the message was edited; only its presence is read.
     #[serde(rename = "editedAt")]
     pub edited_at: Option<serde_json::Value>,
+    /// The reactions in the order the server lists them. Absent, `null` and anything that is not
+    /// an object give none: the server drops the key when the last reaction is taken back.
+    #[serde(default)]
+    pub reactions: WireReactions,
+}
+
+/// One reaction of a message: the shortcode as the server writes it (`:+1:`, with the colons) and
+/// the usernames that gave it. Never printed: usernames are private.
+pub struct WireReaction {
+    pub name: String,
+    pub usernames: Vec<String>,
+}
+
+/// The `reactions` object of a message, kept as a `Vec` in the order the server wrote the keys.
+///
+/// Order depends on two things. Here, the visitor reads the entries one by one, so a typed parse
+/// straight from text (history) keeps server order. The realtime stream first decodes a whole DDP
+/// frame into a `serde_json::Value`, and a `Value` map is a `BTreeMap` (sorted keys) unless
+/// serde_json's `preserve_order` feature is on, which Cargo.toml enables; without it live
+/// reactions would come out alphabetical and then jump when a refetch brought server order.
+/// `reactions_keep_server_order_through_a_json_value` and the captured-stream test in
+/// `app::realtime` guard it.
+///
+/// The visitor is also what keeps the type lenient like the rest of this file: an entry that is
+/// not an object, has no `usernames` array or has no usernames is skipped, and a non-string
+/// username is dropped, so one odd entry never fails a whole page.
+#[derive(Default)]
+pub struct WireReactions(pub Vec<WireReaction>);
+
+impl<'de> Deserialize<'de> for WireReactions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = WireReactions;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a reactions object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut reactions = Vec::new();
+                while let Some((name, body)) = map.next_entry::<String, serde_json::Value>()? {
+                    let usernames: Vec<String> = body
+                        .get("usernames")
+                        .and_then(|v| v.as_array())
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(|u| u.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !usernames.is_empty() {
+                        reactions.push(WireReaction { name, usernames });
+                    }
+                }
+                Ok(WireReactions(reactions))
+            }
+
+            // `null` and any other shape: no reactions, and the value is consumed.
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(WireReactions::default())
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(WireReactions::default())
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+/// The answer of `emoji-custom.list`: `{"emojis": {"update": [..], "remove": [..]}}`. The whole list
+/// is fetched, so `remove` is not declared. Entries stay raw `Value`s so one odd entry (no name, a
+/// number for a name) is skipped by the mapping instead of failing the list.
+#[derive(Deserialize)]
+pub struct CustomEmojiResp {
+    #[serde(default)]
+    pub emojis: WireEmojis,
+}
+
+#[derive(Deserialize, Default)]
+pub struct WireEmojis {
+    #[serde(default)]
+    pub update: Vec<serde_json::Value>,
 }
 
 /// An uploaded file of a message; only its name is used.
@@ -215,6 +328,91 @@ mod tests {
         let bad: ApiDate = serde_json::from_str("\"not a date\"").unwrap();
         // An unparsable ISO string is still returned verbatim; the caller decides what to do.
         assert_eq!(bad.raw_iso().as_deref(), Some("not a date"));
+    }
+
+    fn reactions_of(extra: &str) -> Vec<(String, Vec<String>)> {
+        let json = format!(
+            r#"{{"_id":"m","msg":"x","ts":"2026-11-16T10:00:00.000Z","u":{{"username":"a"}}{extra}}}"#
+        );
+        let msg: WireMsg = serde_json::from_str(&json).unwrap();
+        msg.reactions
+            .0
+            .into_iter()
+            .map(|r| (r.name, r.usernames))
+            .collect()
+    }
+
+    #[test]
+    fn reactions_keep_server_order_not_alphabetical() {
+        let got = reactions_of(
+            r#","reactions":{":z:":{"usernames":["b"]},":a:":{"usernames":["a","c"]},":m:":{"usernames":["d"]}}"#,
+        );
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [":z:", ":a:", ":m:"]);
+        assert_eq!(got[1].1, ["a", "c"]);
+    }
+
+    #[test]
+    fn reactions_keep_server_order_through_a_json_value() {
+        // The stream decodes a whole frame into a `Value` before the typed parse.
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"_id":"m","msg":"x","ts":"2026-11-16T10:00:00.000Z","u":{"username":"a"},
+                "reactions":{":z:":{"usernames":["b"]},":a:":{"usernames":["c"]}}}"#,
+        )
+        .unwrap();
+        let msg: WireMsg = serde_json::from_value(value).unwrap();
+        let names: Vec<&str> = msg.reactions.0.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, [":z:", ":a:"]);
+    }
+
+    #[test]
+    fn reactions_absent_null_empty_or_not_an_object_are_none() {
+        assert!(reactions_of("").is_empty());
+        assert!(reactions_of(r#","reactions":null"#).is_empty());
+        assert!(reactions_of(r#","reactions":{}"#).is_empty());
+        assert!(reactions_of(r#","reactions":"nope""#).is_empty());
+        assert!(reactions_of(r#","reactions":7"#).is_empty());
+        assert!(reactions_of(r#","reactions":true"#).is_empty());
+        assert!(reactions_of(r#","reactions":[1,{"a":2}]"#).is_empty());
+    }
+
+    #[test]
+    fn reactions_skip_bad_entries_and_keep_the_good_ones() {
+        let got = reactions_of(
+            r#","reactions":{":a:":"text",":b:":{"usernames":[]},":c:":{},":d:":{"usernames":"x"},":e:":{"usernames":["u",5,null]},":f:":{"usernames":["v"]}}"#,
+        );
+        assert_eq!(
+            got,
+            [
+                (":e:".to_string(), vec!["u".to_string()]),
+                (":f:".to_string(), vec!["v".to_string()])
+            ]
+        );
+    }
+
+    #[test]
+    fn reactions_from_the_captured_server_fixture() {
+        let resp: HistoryResp =
+            serde_json::from_str(include_str!("fixtures/docker/history_reactions.json")).unwrap();
+        let reacted = resp
+            .messages
+            .iter()
+            .find(|m| !m.reactions.0.is_empty())
+            .expect("the capture has a message with reactions");
+        let names: Vec<&str> = reacted
+            .reactions
+            .0
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        // The order the capture script reacted in, which is not alphabetical.
+        assert_eq!(
+            names,
+            [":+1:", ":tada:", ":thumbsup_tone2:", ":rtpartyparrot:"]
+        );
+        assert_eq!(reacted.reactions.0[0].usernames, ["dev", "alice", "bob"]);
+        // The sibling message whose only reaction was taken back has none.
+        assert!(resp.messages.iter().any(|m| m.reactions.0.is_empty()));
     }
 
     #[test]

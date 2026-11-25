@@ -273,33 +273,37 @@ pub fn anchored<R>(app: &mut App, room: &RoomId, change: impl FnOnce(&mut App) -
     result
 }
 
-/// True when `message` is a live edit of a message `room` holds: the held copy is a server
-/// message (`Sent`, not a tombstone) whose text or edited state differs. An equal copy (a
-/// reaction, a pin) and a copy of a pending local row are not edits.
-pub fn is_edit(app: &App, room: &RoomId, message: &Message) -> bool {
+/// True when `message` is a live update of a message `room` holds: the held copy is a server
+/// message (`Sent`, not a tombstone) whose text, edited state or reactions differ. An equal copy
+/// (a pin) and a copy of a pending local row are not updates. A reaction changes only the
+/// reactions, so it replaces them without the message becoming edited: the `edited` flag comes from
+/// the server's `editedAt`, which a reaction does not set.
+pub fn is_update(app: &App, room: &RoomId, message: &Message) -> bool {
     app.messages
         .get(room)
         .and_then(|held| held.iter().find(|m| m.id == message.id))
         .is_some_and(|held| {
             held.send == SendState::Sent
                 && held.kind != MessageKind::Deleted
-                && (held.body != message.body || held.edited != message.edited)
+                && (held.body != message.body
+                    || held.edited != message.edited
+                    || held.reactions != message.reactions)
         })
 }
 
 /// Replace the held server message with `message.id` by `message`, in place (no index moves), and
 /// keep a stored view on the same message and screen row. A no-op for anything but a held `Sent`,
-/// non-deleted message.
-pub fn replace_edited(app: &mut App, room: &RoomId, message: Message) {
-    if is_edit(app, room, &message) {
-        anchored(app, room, |app| apply_edit(app, room, message));
+/// non-deleted message that `is_update` says changed.
+pub fn replace_updated(app: &mut App, room: &RoomId, message: Message) {
+    if is_update(app, room, &message) {
+        anchored(app, room, |app| apply_update(app, room, message));
     }
 }
 
-/// The unanchored half of `replace_edited`, for a caller that anchors the view itself (a history
-/// merge). Replaces the held message with `message.id` when `is_edit` says it is one.
-pub fn apply_edit(app: &mut App, room: &RoomId, message: Message) {
-    if !is_edit(app, room, &message) {
+/// The unanchored half of `replace_updated`, for a caller that anchors the view itself (a history
+/// merge). Replaces the held message with `message.id` when `is_update` says it is one.
+pub fn apply_update(app: &mut App, room: &RoomId, message: Message) {
+    if !is_update(app, room, &message) {
         return;
     }
     if let Some(slot) = app
@@ -348,6 +352,8 @@ pub fn tombstone_in_place(app: &mut App, room: &RoomId, id: &str) {
         slot.body.clear();
         slot.kind = MessageKind::Deleted;
         slot.edited = false;
+        // A tombstone shows nothing of the message, reactions included (as `map::message` maps it).
+        slot.reactions.clear();
     }
 }
 
@@ -402,6 +408,57 @@ mod tests {
         let mut app = app_80x24();
         app.open_room(general());
         app
+    }
+
+    /// A reaction named `name` from one user.
+    fn reaction(name: &str) -> crate::data::Reaction {
+        crate::data::Reaction {
+            name: name.to_string(),
+            users: vec!["u".to_string()],
+        }
+    }
+
+    /// The cursor message's id and the screen row it sits on.
+    fn anchor(app: &App) -> (String, isize) {
+        let v = view(app, &general());
+        let starts = row_starts(app, &general());
+        (
+            app.messages[&general()][v.cursor].id.clone(),
+            starts[v.cursor] as isize - v.top_row as isize,
+        )
+    }
+
+    #[test]
+    fn a_taller_message_above_the_cursor_keeps_the_cursor_on_its_row() {
+        let mut app = open_general();
+        press(&mut app, "gg");
+        press(&mut app, "20j");
+        let room = general();
+        assert_eq!(view(&app, &room).cursor, 20);
+        let before = anchor(&app);
+        let starts_before = row_starts(&app, &room);
+
+        // Many reactions on a message above the cursor wrap onto several extra rows.
+        let many: Vec<_> = (0..12).map(|n| reaction(&format!("custom_{n}"))).collect();
+        anchored(&mut app, &room, |app| {
+            app.messages.get_mut(&room).unwrap()[5].reactions = many;
+        });
+        let starts_after = row_starts(&app, &room);
+        assert!(
+            starts_after[20] >= starts_before[20] + 3,
+            "the reactions must shift the rows below: {} then {}",
+            starts_before[20],
+            starts_after[20]
+        );
+        assert_eq!(anchor(&app), before, "same message at the same screen row");
+        assert_cursor_visible(&app, view(&app, &room));
+
+        // Taking them back restores the rows and the anchor.
+        anchored(&mut app, &room, |app| {
+            app.messages.get_mut(&room).unwrap()[5].reactions.clear();
+        });
+        assert_eq!(row_starts(&app, &room), starts_before);
+        assert_eq!(anchor(&app), before);
     }
 
     fn viewport_h(app: &App) -> usize {
@@ -611,6 +668,7 @@ mod tests {
             .push(crate::data::Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
                 author: "firstname.lastname.contractor.external".to_string(),
@@ -705,6 +763,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
             author: "smoke".to_string(),

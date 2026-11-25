@@ -107,6 +107,7 @@ pub(crate) fn sample_message(id: &str) -> crate::data::Message {
         send: crate::data::SendState::Sent,
         edited: false,
         plain_text: true,
+        reactions: Vec::new(),
     }
 }
 

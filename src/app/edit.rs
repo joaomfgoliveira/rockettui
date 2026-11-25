@@ -152,7 +152,7 @@ pub fn save(app: &mut App) {
 /// The server accepted the edit of message `id` of `room`: show the stored copy in place (a no-op
 /// when the live stream already did) and end the edit when it is the one being edited.
 pub fn on_edit_done(app: &mut App, room: RoomId, id: String, message: Message) {
-    messages::replace_edited(app, &room, message);
+    messages::replace_updated(app, &room, message);
     if app
         .editing
         .as_ref()
@@ -272,6 +272,7 @@ mod tests {
             send: SendState::Sent,
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
         }
     }
 
@@ -377,6 +378,7 @@ mod tests {
         };
         let attachment = Message {
             plain_text: false,
+            reactions: Vec::new(),
             ..row("x", OWN, "see [attachment: a.pdf]")
         };
         let cases: Vec<(&str, Message)> = vec![
@@ -423,6 +425,24 @@ mod tests {
             assert!(app.confirm.is_none(), "no prompt for a local row");
             assert!(app.effects.is_empty());
         }
+    }
+
+    #[test]
+    fn editing_loads_what_was_typed_not_what_is_drawn() {
+        let mut app = app_with(vec![
+            row("m0", "alice", "older"),
+            row("m1", OWN, "nice :tada: work"),
+        ])
+        .tap(|app| cursor_at(app, 1));
+        // The pane draws the emoji, and the held text is untouched by drawing.
+        // A wide glyph leaves a placeholder cell after it in the test buffer; squeeze it out.
+        let screen = crate::test_util::render_to_string(&app, 80, 24).replace("  ", " ");
+        assert!(screen.contains("nice 🎉 work"), "{screen}");
+        assert_eq!(body(&app, "m1"), "nice :tada: work");
+        // Editing starts from the shortcode as it was typed.
+        press(&mut app, "e");
+        assert_eq!(app.input.text(), "nice :tada: work");
+        assert!(app.editing.is_some());
     }
 
     #[test]

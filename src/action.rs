@@ -62,6 +62,13 @@ pub enum Action {
     /// prompt of a delete. Anything else is a silent no-op. Not a motion, so a count repeats it,
     /// but an open prompt is never opened twice.
     DeleteMessage,
+    /// Normal mode, messages pane focused, cursor on a message the server holds (`+`): open the
+    /// reaction picker, to add a reaction or take one back. Anything else is a silent no-op, and a
+    /// detached room or an unknown own username is refused with a status line.
+    ReactMessage,
+    /// Normal mode, messages pane focused, cursor on a message that has reactions (`gr`): open the
+    /// popup that lists who gave each one. Anything else is a silent no-op.
+    ShowReactions,
     /// Open the help overlay (no default key; `?` then `?` or `:help`); while it is open, close it.
     ShowHelp,
     /// Open the context popup (`?`): the actions that apply to the selected object.
@@ -177,6 +184,15 @@ pub enum Action {
         id: String,
         error: crate::api::ApiError,
     },
+    /// A reaction could not be sent; the error is a fixed kind with no payload text. A reaction
+    /// that was sent produces no action: the server streams the reacted message back.
+    ReactFailed {
+        error: crate::api::ApiError,
+    },
+    /// The server's custom emojis arrived (`Effect::LoadCustomEmojis`).
+    CustomEmojisLoaded(Vec<crate::data::CustomEmoji>),
+    /// The custom emojis could not be fetched; the picker goes on without them.
+    CustomEmojisFailed,
     /// The realtime connection is live (logged in and subscribed). Produced only by the realtime
     /// task. The reducer decides from `App.rt_seen_live` whether it is a reconnect.
     RtConnected,
@@ -262,6 +278,8 @@ impl std::fmt::Debug for Action {
             Action::DiscardSend => write!(f, "DiscardSend"),
             Action::EditMessage => write!(f, "EditMessage"),
             Action::DeleteMessage => write!(f, "DeleteMessage"),
+            Action::ShowReactions => write!(f, "ShowReactions"),
+            Action::ReactMessage => write!(f, "ReactMessage"),
             Action::ShowHelp => write!(f, "ShowHelp"),
             Action::ShowContext => write!(f, "ShowContext"),
             Action::SearchStart => write!(f, "SearchStart"),
@@ -350,6 +368,9 @@ impl std::fmt::Debug for Action {
             Action::DeleteFailed { room, id, error } => {
                 write!(f, "DeleteFailed({room:?}, {id}, {error:?})")
             }
+            Action::ReactFailed { error } => write!(f, "ReactFailed({error:?})"),
+            Action::CustomEmojisLoaded(list) => write!(f, "CustomEmojisLoaded(<{}>)", list.len()),
+            Action::CustomEmojisFailed => write!(f, "CustomEmojisFailed"),
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),
@@ -386,6 +407,7 @@ mod tests {
         let message = Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "alice".to_string(),
@@ -423,6 +445,7 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "alice".to_string(),
@@ -460,6 +483,7 @@ mod tests {
             message: Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),
                 author: "smoke".to_string(),

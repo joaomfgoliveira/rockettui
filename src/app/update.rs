@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, help, history, jump,
-    realtime, results, search, send, sidebar,
+    react, reactions, realtime, results, search, send, sidebar,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -14,6 +14,13 @@ use crate::ui::sanitize::sanitize_line;
 use ratatui::layout::Size;
 
 pub fn update(app: &mut App, action: Action) {
+    reduce(app, action);
+    // A live change can leave the reactions popup with nothing to show; it closes at once.
+    reactions::close_if_stale(app);
+    react::close_if_stale(app);
+}
+
+fn reduce(app: &mut App, action: Action) {
     match action {
         Action::Key(ev) => {
             app.status_msg = None;
@@ -21,6 +28,11 @@ pub fn update(app: &mut App, action: Action) {
             // An open search prompt takes every key before anything else (see `app::search`).
             if app.search_prompt.is_some() {
                 search::prompt_key(app, chord);
+                return;
+            }
+            // An open reaction picker takes every key, so letters are the search (see `app::react`).
+            if app.react_picker.is_some() {
+                react::key(app, chord);
                 return;
             }
             // An open help overlay takes the keys next (see `app::help`).
@@ -31,6 +43,12 @@ pub fn update(app: &mut App, action: Action) {
             // An open context popup closes on any key and consumes it (see `app::context`).
             if app.context {
                 context_key(app, chord);
+                return;
+            }
+            // An open reactions popup closes on any key and consumes it (see `app::reactions`).
+            if app.reactions_popup.is_some() {
+                app.matcher.reset();
+                app.reactions_popup = None;
                 return;
             }
             // An open confirmation takes exactly this key, before any keymap lookup.
@@ -48,7 +66,11 @@ pub fn update(app: &mut App, action: Action) {
             dispatch(app, outcome);
         }
         Action::KeyTimeout => {
-            if app.search_prompt.is_some() || app.context {
+            if app.search_prompt.is_some()
+                || app.context
+                || app.reactions_popup.is_some()
+                || app.react_picker.is_some()
+            {
                 return;
             }
             if app.help.is_some() {
@@ -142,6 +164,9 @@ pub fn update(app: &mut App, action: Action) {
         Action::EditFailed { room, id, error } => edit::on_edit_failed(app, &room, &id, error),
         Action::DeleteDone { room, id } => edit::on_delete_done(app, &room, &id),
         Action::DeleteFailed { error, .. } => edit::on_delete_failed(app, error),
+        Action::ReactFailed { error } => react::on_react_failed(app, error),
+        Action::CustomEmojisLoaded(list) => react::on_custom_emojis_loaded(app, list),
+        Action::CustomEmojisFailed => react::on_custom_emojis_failed(app),
         Action::RtConnected => realtime::on_connected(app),
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),
@@ -258,6 +283,8 @@ pub fn update(app: &mut App, action: Action) {
         Action::DeleteMessage => edit::delete(app),
         Action::ShowHelp => app.help = Some(0),
         Action::ShowContext => app.context = true,
+        Action::ShowReactions => reactions::open(app),
+        Action::ReactMessage => react::open(app),
         Action::SearchStart => search::start(app),
         Action::SearchNext => search::next(app),
         Action::SearchPrev => search::prev(app),
@@ -270,6 +297,7 @@ pub fn update(app: &mut App, action: Action) {
         }
         // A paste is one insert and never a submit (T-01-22).
         Action::Paste(text) if app.search_prompt.is_some() => search::prompt_paste(app, &text),
+        Action::Paste(text) if app.react_picker.is_some() => react::paste(app, &text),
         Action::Paste(text) => match app.mode {
             Mode::Insert => edit_input(app, |input| {
                 input.insert_str(&text);
@@ -994,6 +1022,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: RoomId(room.to_string()),
             author: author.to_string(),

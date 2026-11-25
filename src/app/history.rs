@@ -302,8 +302,8 @@ fn on_refetched(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opti
         let id = app.messages[&room][view.cursor].id.clone();
         (id, starts[view.cursor] as isize - view.top_row as isize)
     });
-    // What the page says about messages the room already holds: their current text and edited
-    // state, and (by absence) which ones were deleted. Only the span strictly between the page's
+    // What the page says about messages the room already holds: their current text, edited
+    // state and reactions, and (by absence) which ones were deleted. Only the span strictly between the page's
     // oldest and newest second is judged: a message in the oldest second may simply lie beyond the
     // page, and one in the newest second may have arrived live after the request left.
     let page_ids: HashSet<String> = page.iter().map(|m| m.id.clone()).collect();
@@ -313,8 +313,8 @@ fn on_refetched(app: &mut App, room: RoomId, page: Vec<Message>, oldest_ts: Opti
         if !seen.insert(message.id.clone()) {
             continue;
         }
-        if messages::is_edit(app, &room, &message) {
-            messages::apply_edit(app, &room, message);
+        if messages::is_update(app, &room, &message) {
+            messages::apply_update(app, &room, message);
             continue;
         }
         if messages::confirm_held(app, &room, &message).is_some() {
@@ -717,6 +717,7 @@ mod tests {
             .map(|i| Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: format!("{prefix}{i:03}"),
                 room_id: rid("r-general"),
                 author: "alice".to_string(),
@@ -949,6 +950,7 @@ mod tests {
         Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid("r-general"),
             author: "alice".to_string(),

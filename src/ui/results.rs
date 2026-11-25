@@ -102,6 +102,7 @@ mod tests {
             .map(|i| Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: format!("s{i}"),
                 room_id: RoomId(room.0.clone()),
                 author: "alice".to_string(),
@@ -205,6 +206,7 @@ mod tests {
                 .map(|i| Message {
                     edited: false,
                     plain_text: true,
+                    reactions: Vec::new(),
                     id: format!("c{i}"),
                     room_id: room.clone(),
                     author: "bob".to_string(),

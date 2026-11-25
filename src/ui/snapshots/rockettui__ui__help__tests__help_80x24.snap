@@ -4,22 +4,22 @@ expression: "render_to_string(&app, 80, 24)"
 ---
 ┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q to close) ───────────────────────────────┐
 ┃  Unread                  ┃│Normal mode                                       │
-┃> * #general              ┃│<C-c>              cancel, or leave the mode      │
-┃  * &dev-team             ┃│<Esc>              cancel, or leave the mode      │
-┃  * @alice                ┃│dd                 delete your message under the c│
-┃  Folders                 ┃│e                  edit your message under the cur│
-┃  ▾ Work (1)              ┃│/                  find text in the open room     │
-┃      ~design-review      ┃│<C-w>j             focus the input bar            │
-┃      +platform           ┃│<C-w>l             focus the messages pane        │
-┃  ▾ People (1)            ┃│<C-w>h             focus the sidebar              │
-┃  Recent                  ┃│za                 fold or unfold the folder      │
-┃    #random               ┃│<C-d>              half a page down               │
-┃    &secrets [e2e]        ┃│<C-u>              half a page up                 │
-┃    #quiet                ┃│G                  jump to the bottom             │
+┃> * #general              ┃│+                  add or remove your reaction on │
+┃  * &dev-team             ┃│<C-c>              cancel, or leave the mode      │
+┃  * @alice                ┃│<Esc>              cancel, or leave the mode      │
+┃  Folders                 ┃│dd                 delete your message under the c│
+┃  ▾ Work (1)              ┃│e                  edit your message under the cur│
+┃      ~design-review      ┃│/                  find text in the open room     │
+┃      +platform           ┃│<C-w>j             focus the input bar            │
+┃  ▾ People (1)            ┃│<C-w>l             focus the messages pane        │
+┃  Recent                  ┃│<C-w>h             focus the sidebar              │
+┃    #random               ┃│za                 fold or unfold the folder      │
+┃    &secrets [e2e]        ┃│<C-d>              half a page down               │
+┃    #quiet                ┃│<C-u>              half a page up                 │
+┃                          ┃│G                  jump to the bottom             │
 ┃                          ┃│gg                 jump to the top                │
 ┃                          ┃│j                  move down                      │
 ┃                          ┃│h                  move left                      │
-┃                          ┃│l                  move right                     │
 ┃                          ┃└──────────────────────────────────────────────────┘
 ┃                          ┃┌ Input ───────────────────────────────────────────┐
 ┃                          ┃│press i to write                                  │

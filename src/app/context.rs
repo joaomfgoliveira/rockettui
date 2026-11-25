@@ -4,7 +4,7 @@
 //! the actions themselves use, so the popup does not promise an action that would be a silent
 //! no-op. Only built-in text is shown, never a message, an author or a room name.
 
-use crate::app::{App, Focus, Mode, edit, send, sidebar};
+use crate::app::{App, Focus, Mode, edit, react, reactions, send, sidebar};
 use crate::input::actions::name_of;
 use crate::input::key::format_keys;
 
@@ -117,6 +117,16 @@ impl Kind {
     }
 }
 
+/// The react action: listed on a message the user can react to, after the message's own actions
+/// and before the reactions row and the jumps (`lines` places it). Not part of `Kind::actions`
+/// because it depends on the message, not on its kind. A test checks the name is a real action.
+const REACT_ACTION: (&str, &str) = ("react_message", "add or remove your reaction");
+
+/// The reactions action: listed on a message that has reactions, after its own actions and before
+/// the jumps (`lines` places it). Not part of `Kind::actions` because it depends on the message,
+/// not on its kind. A test checks the name is a real action.
+const REACTIONS_ACTION: (&str, &str) = ("show_reactions", "show who reacted");
+
 /// One row of the popup: the keys bound to an action and what it does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextLine {
@@ -194,7 +204,33 @@ fn keys_for(app: &App, name: &str) -> Option<String> {
 pub fn lines(app: &App) -> Context {
     let kind = classify(app);
     let mut rows: Vec<ContextLine> = Vec::new();
+    // Right before the first jump, a message lists the actions that depend on the message and
+    // not on its kind: reacting to it (when it can be reacted to), then showing its reactions
+    // (when it has any).
+    let is_message = matches!(
+        kind,
+        Kind::OwnMessage | Kind::UnsentMessage | Kind::OtherMessage
+    );
+    let mut message_actions: Vec<(&str, &str)> = Vec::new();
+    if is_message && react::reactable_under_cursor(app) {
+        message_actions.push(REACT_ACTION);
+    }
+    if is_message && reactions::under_cursor(app).is_some() {
+        message_actions.push(REACTIONS_ACTION);
+    }
+    let mut message_actions_pending = !message_actions.is_empty();
     for (name, desc) in kind.actions() {
+        if message_actions_pending && *name == "goto_top" {
+            message_actions_pending = false;
+            for (extra_name, extra_desc) in &message_actions {
+                if let Some(keys) = keys_for(app, extra_name) {
+                    rows.push(ContextLine {
+                        keys,
+                        desc: (*extra_desc).to_string(),
+                    });
+                }
+            }
+        }
         let Some(keys) = keys_for(app, name) else {
             continue;
         };
@@ -229,7 +265,7 @@ pub fn lines(app: &App) -> Context {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::SendState;
+    use crate::data::{MessageKind, SendState};
     use crate::input::actions::ACTION_NAMES;
     use crate::test_util::{app_80x24, app_with_config, config_from_keymap, press, sample_message};
 
@@ -239,7 +275,11 @@ mod tests {
 
     /// An app with the messages pane focused on a room holding one message by `author`.
     fn messages_app(author: &str, send: SendState) -> App {
-        let mut app = app_80x24();
+        messages_app_in(app_80x24(), author, send)
+    }
+
+    /// `messages_app` on a given app (for one built with a config).
+    fn messages_app_in(mut app: App, author: &str, send: SendState) -> App {
         let room = app.rooms[0].id.clone();
         let mut m = sample_message("m-ctx");
         m.room_id = room.clone();
@@ -313,6 +353,7 @@ mod tests {
             [
                 "edit the message",
                 "delete the message",
+                "add or remove your reaction",
                 "jump to the oldest message",
                 "jump to the newest message",
                 "find text in the room",
@@ -322,11 +363,12 @@ mod tests {
         );
         assert_eq!(ctx.rows[0].keys, "e");
         assert_eq!(ctx.rows[1].keys, "dd");
-        assert_eq!(ctx.rows[2].keys, "gg");
-        assert_eq!(ctx.rows[3].keys, "G");
-        assert_eq!(ctx.rows[4].keys, "/");
-        assert_eq!(ctx.rows[5].keys, "n");
-        assert_eq!(ctx.rows[6].keys, "N");
+        assert_eq!(ctx.rows[2].keys, "+");
+        assert_eq!(ctx.rows[3].keys, "gg");
+        assert_eq!(ctx.rows[4].keys, "G");
+        assert_eq!(ctx.rows[5].keys, "/");
+        assert_eq!(ctx.rows[6].keys, "n");
+        assert_eq!(ctx.rows[7].keys, "N");
     }
 
     #[test]
@@ -345,6 +387,187 @@ mod tests {
         assert_eq!(ctx.rows[1].keys, "dd");
     }
 
+    /// Give the one message of `app` a reaction from one user.
+    fn react(app: &mut App) {
+        let room = app.current_room.clone().expect("a room");
+        app.messages.get_mut(&room).unwrap()[0]
+            .reactions
+            .push(crate::data::Reaction {
+                name: "+1".to_string(),
+                users: vec!["bob".to_string()],
+            });
+    }
+
+    #[test]
+    fn reactions_row_on_a_message_with_reactions() {
+        let mut app = messages_app("someone-else", SendState::Sent);
+        react(&mut app);
+        let ctx = lines(&app);
+        assert_eq!(ctx.kind, Kind::OtherMessage);
+        assert_eq!(
+            descs(&ctx),
+            [
+                "add or remove your reaction",
+                "show who reacted",
+                "jump to the oldest message",
+                "jump to the newest message",
+                "find text in the room",
+                "next match, older",
+                "previous match, newer"
+            ]
+        );
+        assert_eq!(ctx.rows[0].keys, "+");
+        assert_eq!(ctx.rows[1].keys, "gr");
+    }
+
+    #[test]
+    fn reactions_row_comes_after_the_own_actions_and_before_the_jumps() {
+        let mut app = messages_app("me", SendState::Sent);
+        react(&mut app);
+        let ctx = lines(&app);
+        assert_eq!(ctx.kind, Kind::OwnMessage);
+        assert_eq!(
+            descs(&ctx)[..5],
+            [
+                "edit the message",
+                "delete the message",
+                "add or remove your reaction",
+                "show who reacted",
+                "jump to the oldest message"
+            ]
+        );
+    }
+
+    #[test]
+    fn no_reactions_row_without_reactions_or_off_a_message() {
+        let app = messages_app("someone-else", SendState::Sent);
+        assert!(!descs(&lines(&app)).contains(&"show who reacted"));
+        // Reactions on a message do not show in the popup of another object.
+        let mut app = messages_app("someone-else", SendState::Sent);
+        react(&mut app);
+        app.focus = Focus::Input;
+        assert!(!descs(&lines(&app)).contains(&"show who reacted"));
+        app.focus = Focus::Sidebar;
+        assert!(!descs(&lines(&app)).contains(&"show who reacted"));
+    }
+
+    #[test]
+    fn reactions_row_follows_the_live_keymap() {
+        let rebound = app_with_config(
+            config_from_keymap("[normal]\n\"R\" = \"show_reactions\"\n"),
+            80,
+            24,
+        );
+        let mut app = messages_app_in(rebound, "someone-else", SendState::Sent);
+        react(&mut app);
+        // Both the new key and the preset key are bound; every key is listed, sorted.
+        assert_eq!(lines(&app).rows[1].keys, "R gr");
+
+        let unbound = app_with_config(config_from_keymap("[normal]\n\"gr\" = \"none\"\n"), 80, 24);
+        let mut app = messages_app_in(unbound, "someone-else", SendState::Sent);
+        react(&mut app);
+        assert!(
+            !descs(&lines(&app)).contains(&"show who reacted"),
+            "an action with no key bound is left out"
+        );
+    }
+
+    #[test]
+    fn react_row_on_a_message_the_user_can_react_to() {
+        // Any server message, with or without reactions, and the user's own as well.
+        for author in ["someone-else", "me"] {
+            let app = messages_app(author, SendState::Sent);
+            let ctx = lines(&app);
+            let at = descs(&ctx)
+                .iter()
+                .position(|d| *d == "add or remove your reaction")
+                .unwrap_or_else(|| panic!("no react row for {author}"));
+            assert_eq!(ctx.rows[at].keys, "+");
+            // Before the jumps, after the message's own actions.
+            let jump = descs(&ctx)
+                .iter()
+                .position(|d| *d == "jump to the oldest message")
+                .unwrap();
+            assert_eq!(at + 1, jump, "{author}");
+        }
+    }
+
+    #[test]
+    fn no_react_row_where_the_user_cannot_react() {
+        let has = |app: &App| descs(&lines(app)).contains(&"add or remove your reaction");
+        // A deleted line and a system message.
+        for kind in [MessageKind::Deleted, MessageKind::System] {
+            let mut app = messages_app("someone-else", SendState::Sent);
+            let room = app.current_room.clone().unwrap();
+            app.messages.get_mut(&room).unwrap()[0].kind = kind;
+            assert!(!has(&app), "{kind:?}");
+        }
+        // A message still being sent or that failed.
+        for send in [
+            SendState::Sending,
+            SendState::Failed,
+            SendState::Unconfirmed,
+        ] {
+            assert!(!has(&messages_app("me", send)), "{send:?}");
+        }
+        // Other panes.
+        let mut app = messages_app("someone-else", SendState::Sent);
+        app.focus = Focus::Input;
+        assert!(!has(&app));
+        app.focus = Focus::Sidebar;
+        assert!(!has(&app));
+    }
+
+    #[test]
+    fn react_row_follows_the_live_keymap() {
+        let rebound = app_with_config(
+            config_from_keymap("[normal]\n\"R\" = \"react_message\"\n"),
+            80,
+            24,
+        );
+        let app = messages_app_in(rebound, "someone-else", SendState::Sent);
+        let ctx = lines(&app);
+        let row = ctx
+            .rows
+            .iter()
+            .find(|r| r.desc == "add or remove your reaction")
+            .unwrap();
+        assert_eq!(row.keys, "+ R", "every key is listed, sorted");
+
+        let unbound = app_with_config(config_from_keymap("[normal]\n\"+\" = \"none\"\n"), 80, 24);
+        let app = messages_app_in(unbound, "someone-else", SendState::Sent);
+        assert!(
+            !descs(&lines(&app)).contains(&"add or remove your reaction"),
+            "an action with no key bound is left out"
+        );
+    }
+
+    #[test]
+    fn the_react_action_is_a_real_described_action() {
+        let (name, desc) = REACT_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        assert!(
+            crate::app::help::DESCRIPTIONS
+                .iter()
+                .any(|(n, _)| *n == name),
+            "{name} has no help description"
+        );
+    }
+
+    #[test]
+    fn the_reactions_action_is_a_real_described_action() {
+        let (name, desc) = REACTIONS_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        assert!(
+            crate::app::help::DESCRIPTIONS
+                .iter()
+                .any(|(n, _)| *n == name),
+            "{name} has no help description"
+        );
+    }
+
     #[test]
     fn other_message() {
         let app = messages_app("someone-else", SendState::Sent);
@@ -353,13 +576,14 @@ mod tests {
         assert_eq!(
             descs(&ctx),
             [
+                "add or remove your reaction",
                 "jump to the oldest message",
                 "jump to the newest message",
                 "find text in the room",
                 "next match, older",
                 "previous match, newer"
             ],
-            "someone else's message lists only the jumps and the search actions"
+            "someone else's message lists reacting, the jumps and the search actions"
         );
     }
 

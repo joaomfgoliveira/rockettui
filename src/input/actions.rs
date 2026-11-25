@@ -9,7 +9,9 @@
 //! unconfirmed message under the messages-pane cursor, bound by default to `r` (retry). `edit_message`
 //! and `delete_message` act on the user's own server messages: `e` and `dd` by default.
 //! `delete_message` also discards a failed or unconfirmed local row, so `dd` keeps that meaning;
-//! `discard_send` remains a name that only discards.
+//! `discard_send` remains a name that only discards. `show_reactions` opens the popup of who reacted
+//! to the message under the cursor (`gr` by default) and does nothing on a message without any.
+//! `react_message` opens the picker to add a reaction or take one back (`+` by default).
 
 use crate::action::Action;
 
@@ -48,6 +50,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "discard_send",
     "edit_message",
     "delete_message",
+    "show_reactions",
+    "react_message",
     "show_help",
     "show_context",
     "search_start",
@@ -93,6 +97,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "discard_send" => Action::DiscardSend,
         "edit_message" => Action::EditMessage,
         "delete_message" => Action::DeleteMessage,
+        "show_reactions" => Action::ShowReactions,
+        "react_message" => Action::ReactMessage,
         "show_help" => Action::ShowHelp,
         "show_context" => Action::ShowContext,
         "search_start" => Action::SearchStart,
@@ -141,6 +147,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::DiscardSend => Some("discard_send"),
         Action::EditMessage => Some("edit_message"),
         Action::DeleteMessage => Some("delete_message"),
+        Action::ShowReactions => Some("show_reactions"),
+        Action::ReactMessage => Some("react_message"),
         Action::ShowHelp => Some("show_help"),
         Action::ShowContext => Some("show_context"),
         Action::SearchStart => Some("search_start"),
@@ -173,6 +181,9 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::EditFailed { .. }
         | Action::DeleteDone { .. }
         | Action::DeleteFailed { .. }
+        | Action::ReactFailed { .. }
+        | Action::CustomEmojisLoaded(_)
+        | Action::CustomEmojisFailed
         | Action::RtConnected
         | Action::RtDisconnected
         | Action::RtRejected
@@ -230,6 +241,11 @@ mod tests {
                 id: "m".to_string(),
                 error: crate::api::ApiError::Rejected,
             },
+            Action::ReactFailed {
+                error: crate::api::ApiError::Rejected,
+            },
+            Action::CustomEmojisLoaded(Vec::new()),
+            Action::CustomEmojisFailed,
             Action::RtConnected,
             Action::RtDisconnected,
             Action::RtRejected,

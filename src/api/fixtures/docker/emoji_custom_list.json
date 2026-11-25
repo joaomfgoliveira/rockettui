@@ -1,0 +1,27 @@
+{
+  "emojis": {
+    "update": [
+      {
+        "_id": "6b06188e8446ee9999144400",
+        "name": "rtshipit",
+        "aliases": [
+          "rtship",
+          "rt_ship"
+        ],
+        "extension": "png",
+        "_updatedAt": "2026-11-24T23:06:54.641Z",
+        "etag": "46961c"
+      },
+      {
+        "_id": "6b06188e8446ee9999144401",
+        "name": "rtplain",
+        "aliases": [],
+        "extension": "png",
+        "_updatedAt": "2026-11-24T23:06:54.668Z",
+        "etag": "79f0a2"
+      }
+    ],
+    "remove": []
+  },
+  "success": true
+}

@@ -108,9 +108,48 @@ pub struct Message {
     /// encrypted placeholder and for a system message. Only a plain-text message can be edited or
     /// deleted by this client, so edit text is never written back from display text.
     pub plain_text: bool,
+    /// The reactions in the order the server lists them; empty when there are none.
+    pub reactions: Vec<Reaction>,
 }
 
-/// Redacting `Debug` (T-01-03): only the id, the room id, the body length and the send state.
+/// One reaction of a message: the shortcode and who gave it.
+#[derive(Clone, PartialEq)]
+pub struct Reaction {
+    /// The shortcode without the colons (`+1`, `thumbsup_tone2`, `partyparrot`). Untrusted text:
+    /// sanitize before drawing.
+    pub name: String,
+    /// The usernames that gave it, in the order the server lists them. Never empty. Private: only
+    /// drawn on screen, never logged.
+    pub users: Vec<String>,
+}
+
+/// A custom emoji of the server: its name (no colons) and the other names it answers to. Untrusted
+/// text: sanitize before drawing. Never printed: the `Debug` shows only how many aliases it has.
+#[derive(Clone, PartialEq)]
+pub struct CustomEmoji {
+    pub name: String,
+    pub aliases: Vec<String>,
+}
+
+impl std::fmt::Debug for CustomEmoji {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomEmoji")
+            .field("aliases", &self.aliases.len())
+            .finish()
+    }
+}
+
+/// Redacting `Debug`: the count only. Neither the shortcode nor the usernames are printed.
+impl std::fmt::Debug for Reaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reaction")
+            .field("users", &self.users.len())
+            .finish()
+    }
+}
+
+/// Redacting `Debug` (T-01-03): only the id, the room id, the body length, the send state and the
+/// number of reactions.
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Message")
@@ -120,6 +159,7 @@ impl std::fmt::Debug for Message {
             .field("send", &self.send)
             .field("edited", &self.edited)
             .field("plain_text", &self.plain_text)
+            .field("reactions", &self.reactions.len())
             .finish()
     }
 }
@@ -140,10 +180,37 @@ mod tests {
     }
 
     #[test]
+    fn debug_shows_only_the_number_of_reactions() {
+        let message = Message {
+            edited: false,
+            plain_text: true,
+            reactions: vec![Reaction {
+                name: "SENTINEL-REACTION-5c1e".to_string(),
+                users: vec!["SENTINEL-USER-9a4d".to_string(), "other".to_string()],
+            }],
+            id: "general-000".to_string(),
+            room_id: RoomId("general".to_string()),
+            author: "someone".to_string(),
+            ts: 0,
+            body: "text".to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        };
+        for shown in [format!("{message:?}"), format!("{:#?}", message)] {
+            assert!(!shown.contains("SENTINEL-REACTION-5c1e"), "{shown}");
+            assert!(!shown.contains("SENTINEL-USER-9a4d"), "{shown}");
+            assert!(shown.contains("reactions: 1"), "{shown}");
+        }
+        let one = format!("{:?}", message.reactions[0]);
+        assert!(!one.contains("SENTINEL"), "{one}");
+    }
+
+    #[test]
     fn debug_redacts() {
         let message = Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
             author: "SENTINEL-AUTHOR-2b9d".to_string(),

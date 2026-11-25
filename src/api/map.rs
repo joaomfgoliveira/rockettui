@@ -5,7 +5,10 @@
 
 use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits};
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
+use crate::data::{
+    CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
+    SendState,
+};
 use std::collections::{HashMap, HashSet};
 
 /// The kind of a joined room, `None` for kinds the sidebar does not show (livechat and anything
@@ -206,6 +209,7 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
     let (kind, body) = kind_and_body(&msg);
     let edited = msg.edited_at.is_some() && kind != MessageKind::Deleted;
     let plain_text = is_plain_text(&msg, kind);
+    let reactions = reactions(&msg, kind);
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -216,7 +220,56 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         send: SendState::Sent,
         edited,
         plain_text,
+        reactions,
     }
+}
+
+/// The custom emojis of an `emoji-custom.list` answer, in server order. An entry without a usable
+/// name (absent, not a string, empty or with a colon) is skipped, and so is anything in `aliases`
+/// that is not a usable name; an entry with a bad `aliases` simply has none.
+pub fn custom_emojis(resp: crate::api::wire::CustomEmojiResp) -> Vec<CustomEmoji> {
+    let usable = |text: &str| !text.is_empty() && !text.contains(':');
+    resp.emojis
+        .update
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.get("name")?.as_str().filter(|n| usable(n))?;
+            let aliases = entry
+                .get("aliases")
+                .and_then(|a| a.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|a| a.as_str().filter(|a| usable(a)))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(CustomEmoji {
+                name: name.to_string(),
+                aliases,
+            })
+        })
+        .collect()
+}
+
+/// The reactions of `msg` in server order, with the colons of the shortcode removed. An entry
+/// whose name is empty without them is dropped. A deleted-message tombstone has none: it is one
+/// dim line that shows nothing of the message.
+fn reactions(msg: &WireMsg, kind: MessageKind) -> Vec<Reaction> {
+    if kind == MessageKind::Deleted {
+        return Vec::new();
+    }
+    msg.reactions
+        .0
+        .iter()
+        .filter_map(|r| {
+            let name = r.name.trim_matches(':');
+            (!name.is_empty()).then(|| Reaction {
+                name: name.to_string(),
+                users: r.usernames.clone(),
+            })
+        })
+        .collect()
 }
 
 /// True when the displayed body of `msg` is exactly the text the server stores (the
@@ -818,6 +871,130 @@ mod tests {
         assert_eq!(single.send, SendState::Sent);
         let page = history(&room, vec![wire()]);
         assert_eq!(page.messages, [single]);
+    }
+
+    fn emojis_of(json: &str) -> Vec<(String, Vec<String>)> {
+        let resp: crate::api::wire::CustomEmojiResp = serde_json::from_str(json).expect("wire");
+        custom_emojis(resp)
+            .into_iter()
+            .map(|e| (e.name, e.aliases))
+            .collect()
+    }
+
+    #[test]
+    fn custom_emojis_map_from_the_captured_server_fixture() {
+        let got = emojis_of(include_str!("fixtures/docker/emoji_custom_list.json"));
+        assert_eq!(
+            got,
+            [
+                (
+                    "rtshipit".to_string(),
+                    vec!["rtship".to_string(), "rt_ship".to_string()]
+                ),
+                ("rtplain".to_string(), Vec::new()),
+            ],
+            "server order, aliases kept"
+        );
+    }
+
+    #[test]
+    fn custom_emojis_tolerate_empty_missing_and_odd_answers() {
+        assert!(emojis_of(r#"{"emojis":{"update":[],"remove":[]},"success":true}"#).is_empty());
+        assert!(emojis_of(r#"{"emojis":{"update":[]}}"#).is_empty());
+        assert!(emojis_of(r#"{"emojis":{}}"#).is_empty());
+        assert!(emojis_of(r#"{"success":true}"#).is_empty());
+        // Entries without a usable name are skipped; the others survive.
+        let got = emojis_of(
+            r#"{"emojis":{"update":[
+                {"aliases":["x"]},
+                {"name":5},
+                {"name":""},
+                {"name":"has:colon"},
+                "text",
+                null,
+                {"name":"good","aliases":["ok",7,"",":bad:",null,"fine"]},
+                {"name":"noalias"},
+                {"name":"weird","aliases":"nope"}
+            ]}}"#,
+        );
+        assert_eq!(
+            got,
+            [
+                (
+                    "good".to_string(),
+                    vec!["ok".to_string(), "fine".to_string()]
+                ),
+                ("noalias".to_string(), Vec::new()),
+                ("weird".to_string(), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_emoji_debug_shows_no_name() {
+        let e = CustomEmoji {
+            name: "SENTINEL-NAME-1".to_string(),
+            aliases: vec!["SENTINEL-ALIAS-2".to_string()],
+        };
+        let shown = format!("{e:?} {e:#?}");
+        assert!(!shown.contains("SENTINEL"), "{shown}");
+    }
+
+    #[test]
+    fn reactions_map_from_the_captured_server_fixture() {
+        let room = RoomId("r-public".to_string());
+        let resp: crate::api::wire::HistoryResp =
+            serde_json::from_str(include_str!("fixtures/docker/history_reactions.json"))
+                .expect("fixture");
+        let messages: Vec<Message> = resp
+            .messages
+            .into_iter()
+            .map(|m| message(&room, m))
+            .collect();
+        let reacted = messages
+            .iter()
+            .find(|m| !m.reactions.is_empty())
+            .expect("a message with reactions");
+        let names: Vec<&str> = reacted.reactions.iter().map(|r| r.name.as_str()).collect();
+        // No colons, and the order the server listed them in.
+        assert_eq!(names, ["+1", "tada", "thumbsup_tone2", "rtpartyparrot"]);
+        assert_eq!(reacted.reactions[0].users, ["dev", "alice", "bob"]);
+        assert_eq!(reacted.reactions[1].users, ["alice"]);
+        // The message whose only reaction was taken back has none, and is not edited by it.
+        let undone = messages
+            .iter()
+            .find(|m| m.reactions.is_empty())
+            .expect("a message without reactions");
+        assert!(!undone.edited);
+    }
+
+    #[test]
+    fn reactions_do_not_mark_a_message_edited() {
+        let room = RoomId("r".to_string());
+        let json = r#"{"_id":"m1","rid":"r","msg":"hi","ts":"2026-11-17T10:00:00.000Z","u":{"username":"a"},"reactions":{":+1:":{"usernames":["b"]}}}"#;
+        let m = message(&room, serde_json::from_str(json).expect("wire message"));
+        assert_eq!(m.reactions.len(), 1);
+        assert!(!m.edited);
+        assert!(m.plain_text);
+    }
+
+    #[test]
+    fn reaction_names_without_a_name_are_dropped() {
+        let room = RoomId("r".to_string());
+        let json = r#"{"_id":"m1","rid":"r","msg":"hi","ts":"2026-11-17T10:00:00.000Z","u":{"username":"a"},"reactions":{"::":{"usernames":["b"]},":ok:":{"usernames":["c"]},"bare":{"usernames":["d"]}}}"#;
+        let m = message(&room, serde_json::from_str(json).expect("wire message"));
+        let names: Vec<&str> = m.reactions.iter().map(|r| r.name.as_str()).collect();
+        // A name that the server wrote without colons is kept as is.
+        assert_eq!(names, ["ok", "bare"]);
+    }
+
+    #[test]
+    fn a_tombstone_has_no_reactions() {
+        let room = RoomId("r".to_string());
+        let json = r#"{"_id":"m1","rid":"r","msg":"","t":"rm","ts":"2026-11-17T10:00:00.000Z","u":{"username":"a"},"reactions":{":+1:":{"usernames":["b"]}}}"#;
+        let m = message(&room, serde_json::from_str(json).expect("wire message"));
+        assert_eq!(m.kind, MessageKind::Deleted);
+        assert!(m.reactions.is_empty());
     }
 
     #[test]

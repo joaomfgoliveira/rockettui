@@ -1,0 +1,27 @@
+---
+source: src/ui/picker.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃? alice  deploy finished                          ┃
+│> * #general              │┃         :ship_it: 1                              ┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┌ React ───────────────────────────────────────────┐
+│  ▾ People (1)            ││/ship                                             │
+│  Recent                  ││  🚢  :ship:                                       │
+│    #random               ││*    :ship_it:           custom, 1, you           │
+│    &secrets [e2e]        ││  📜  :ship_log:          alias                    │
+│    #quiet                ││     :shipping_cart:     custom                   │
+│                          ││  🛳️  :passenger_ship:                             │
+│                          ││  🛐  :place_of_worship:                           │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+│                          ││                                                  │
+└──────────────────────────┘└─────────────── C-n/C-p move  Enter add  Esc done ┘
+ NORMAL  general

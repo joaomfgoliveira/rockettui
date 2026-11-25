@@ -58,6 +58,14 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
     ("discard_send", "discard a failed message"),
     ("edit_message", "edit your message under the cursor"),
     ("delete_message", "delete your message under the cursor"),
+    (
+        "show_reactions",
+        "show who reacted to the message under the cursor",
+    ),
+    (
+        "react_message",
+        "add or remove your reaction on the message under the cursor",
+    ),
     ("show_help", "show or close this help"),
     ("show_context", "show what the selected object can do"),
     ("search_start", "find text in the open room"),

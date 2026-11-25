@@ -1,0 +1,27 @@
+---
+source: src/ui/reactions.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃? alice  deploy finished                          ┃
+│> * #general              │┃         :custom_0: 1  :custom_1: 1  :custom_2: 1 ┃
+│  * &dev-team             │┃         :custom_3: 1  :custom_4: 1  :custom_5: 1 ┃
+│  * @alice                │┃         :custom_6: 1  :custom_7: 1  :custom_8: 1 ┃
+│  Folders                 │┃         :custom_9: 1  :custom_10: 1              ┃
+│  ▾ Work (1)              │┃         :custom_11: 1  :custom_12: 1             ┃
+│      ~design-review      │┃         :custom_13: 1  :custom_14: 1             ┃
+│      +platform           │┃                                                  ┃
+│  ▾ People (1)            │┃                                                  ┃
+│  Recent                  │┌ Reactions ───────────────────────────────────────┐
+│    #random               ││:custom_0:  bob                                   │
+│    &secrets [e2e]        ││:custom_1:  bob                                   │
+│    #quiet                ││:custom_2:  bob                                   │
+│                          ││:custom_3:  bob                                   │
+│                          ││:custom_4:  bob                                   │
+│                          ││:custom_5:  bob                                   │
+│                          ││:custom_6:  bob                                   │
+│                          ││:custom_7:  bob                                   │
+│                          ││:custom_8:  bob                                   │
+│                          ││... 6 more                                        │
+└──────────────────────────┘└────────────────────────────────── any key closes ┘
+ NORMAL  general

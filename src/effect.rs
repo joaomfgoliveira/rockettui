@@ -28,6 +28,27 @@ impl std::fmt::Debug for SendText {
     }
 }
 
+/// A reaction's shortcode (without colons) on its way to the server. Like `SendText`, its `Debug`
+/// prints only a byte length, so the derived `Debug` of `Effect` never prints a reaction name.
+#[derive(Clone, PartialEq)]
+pub struct EmojiName(String);
+
+impl EmojiName {
+    pub fn new(name: String) -> Self {
+        EmojiName(name)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for EmojiName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EmojiName(<{}> bytes)", self.0.len())
+    }
+}
+
 /// One IO intent: a fetch, or one send attempt.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -102,6 +123,17 @@ pub enum Effect {
     /// Delete message `id` of `room` with `POST chat.delete`. Answers `Action::DeleteDone` or
     /// `Action::DeleteFailed`, addressed by `room` and `id`.
     DeleteMessage { room: RoomId, id: String },
+    /// Add (`add`) or take back the user's reaction `emoji` to message `id` with
+    /// `POST chat.react`. Answers nothing on success (the server streams the reacted message back,
+    /// which is what changes the row) and `Action::ReactFailed` on failure.
+    React {
+        id: String,
+        emoji: EmojiName,
+        add: bool,
+    },
+    /// Fetch the server's custom emojis with `GET emoji-custom.list`. Answers
+    /// `Action::CustomEmojisLoaded` or `Action::CustomEmojisFailed`.
+    LoadCustomEmojis,
 }
 
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
@@ -145,6 +177,8 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::SendMessage { room, id, .. } => Action::SendFailed { room, id, error },
                 Effect::EditMessage { room, id, .. } => Action::EditFailed { room, id, error },
                 Effect::DeleteMessage { room, id } => Action::DeleteFailed { room, id, error },
+                Effect::React { .. } => Action::ReactFailed { error },
+                Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
             }];
         }
     };
@@ -276,6 +310,14 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::DeleteMessage { room, id } => match client.delete_message(&room, &id).await {
             Ok(()) => vec![Action::DeleteDone { room, id }],
             Err(error) => vec![Action::DeleteFailed { room, id, error }],
+        },
+        Effect::React { id, emoji, add } => match client.react(&id, emoji.as_str(), add).await {
+            Ok(()) => Vec::new(),
+            Err(error) => vec![Action::ReactFailed { error }],
+        },
+        Effect::LoadCustomEmojis => match client.custom_emojis().await {
+            Ok(list) => vec![Action::CustomEmojisLoaded(list)],
+            Err(_) => vec![Action::CustomEmojisFailed],
         },
     }
 }
@@ -701,6 +743,100 @@ mod tests {
         );
     }
 
+    fn react_effect(add: bool) -> Effect {
+        Effect::React {
+            id: "m1".to_string(),
+            emoji: EmojiName::new("tada".to_string()),
+            add,
+        }
+    }
+
+    #[tokio::test]
+    async fn react_sends_the_request_and_answers_nothing_on_success() {
+        for add in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/chat.react"))
+                .and(wiremock::matchers::body_json(serde_json::json!({
+                    "messageId": "m1",
+                    "emoji": ":tada:",
+                    "shouldReact": add,
+                })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw("{\"success\":true}", "application/json"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            // The streamed message is what changes the row, so success reports no action.
+            let actions = run(Ok(client_for(&server)), react_effect(add)).await;
+            assert!(actions.is_empty(), "{actions:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn react_failures_become_one_action() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.react"))
+            .respond_with(ResponseTemplate::new(400).set_body_raw(
+                "{\"success\":false,\"error\":\"not valid\"}",
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            run(Ok(client_for(&server)), react_effect(true)).await,
+            [Action::ReactFailed {
+                error: ApiError::Rejected
+            }]
+        );
+        assert_eq!(
+            run(Err(ApiError::Client), react_effect(true)).await,
+            [Action::ReactFailed {
+                error: ApiError::Client
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_emojis_effect_actions() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/emoji-custom.list"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                include_str!("api/fixtures/docker/emoji_custom_list.json"),
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let actions = run(Ok(client_for(&server)), Effect::LoadCustomEmojis).await;
+        match actions.as_slice() {
+            [Action::CustomEmojisLoaded(list)] => {
+                let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+                assert_eq!(names, ["rtshipit", "rtplain"]);
+            }
+            other => panic!("expected CustomEmojisLoaded, got {other:?}"),
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/emoji-custom.list"))
+            .respond_with(ResponseTemplate::new(503).set_body_raw("{}", "application/json"))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            run(Ok(client_for(&server)), Effect::LoadCustomEmojis).await,
+            [Action::CustomEmojisFailed]
+        );
+        assert_eq!(
+            run(Err(ApiError::Client), Effect::LoadCustomEmojis).await,
+            [Action::CustomEmojisFailed]
+        );
+    }
+
     #[tokio::test]
     async fn delete_message_actions() {
         let server = MockServer::start().await;
@@ -768,6 +904,7 @@ mod tests {
         let pending = Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "rt-test-1".to_string(),
             room_id: general(),
             author: "me".to_string(),

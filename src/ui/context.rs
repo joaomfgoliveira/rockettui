@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 /// Most rows of text the popup grows to, borders excluded.
-const MAX_INNER_HEIGHT: u16 = 10;
+const MAX_INNER_HEIGHT: u16 = 12;
 
 /// Draw the popup when `app.context` is set.
 pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
@@ -132,6 +132,46 @@ mod tests {
         let out = render_to_string(&app, 40, 8);
         assert!(out.contains("Room"), "{out}");
         insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn an_own_message_with_reactions_shows_every_row_at_80x24() {
+        // The tallest message popup: edit, delete, react, show reactions, two jumps, three search
+        // rows, the name line and the way to the full help. None may be clipped.
+        let mut app = app_80x24();
+        let room = app.rooms[0].id.clone();
+        let message = crate::data::Message {
+            room_id: room.clone(),
+            author: "me".to_string(),
+            ts: i64::MAX / 4,
+            reactions: vec![crate::data::Reaction {
+                name: "+1".to_string(),
+                users: vec!["bob".to_string()],
+            }],
+            ..crate::test_util::sample_message("m-tall")
+        };
+        app.messages.insert(room.clone(), vec![message]);
+        app.msg_views.remove(&room);
+        app.current_room = Some(room);
+        app.own_username = Some("me".to_string());
+        app.focus = crate::app::Focus::Messages;
+        press(&mut app, "?");
+        let out = render_to_string(&app, 80, 24);
+        for row in [
+            "Your message",
+            "edit the message",
+            "delete the message",
+            "add or remove your reaction",
+            "show who reacted",
+            "jump to the oldest message",
+            "jump to the newest message",
+            "find text in the room",
+            "next match, older",
+            "previous match, newer",
+            "all keys (full help)",
+        ] {
+            assert!(out.contains(row), "{row} is clipped:\n{out}");
+        }
     }
 
     #[test]

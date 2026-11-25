@@ -307,6 +307,41 @@ mod tests {
         assert_eq!(keys, ["bogus", "ui"]);
     }
 
+    #[test]
+    fn emoji_aliases_reach_the_config_and_their_errors_reach_the_report() {
+        let ok = load_from_sources(&sources("[emoji_aliases]\npartyparrot = \"🦜\"\n"))
+            .expect("valid aliases load");
+        assert_eq!(ok.settings.emoji_aliases["partyparrot"], "🦜");
+
+        // A bad entry and a bad value elsewhere are reported together, with the file and line.
+        let bad = "sidebar_width = 99\n[emoji_aliases]\n\":x:\" = \"y\"\nwide = \"123456789\"\n";
+        let Err(report) = load_from_sources(&sources(bad)) else {
+            panic!("expected Err");
+        };
+        let keys: Vec<(Option<usize>, String)> = report
+            .errors
+            .iter()
+            .map(|p| {
+                (
+                    p.pos.map(|(line, _)| line),
+                    p.key.clone().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                (Some(1), "sidebar_width".to_string()),
+                (Some(3), "emoji_aliases.:x:".to_string()),
+                (Some(4), "emoji_aliases.wide".to_string()),
+            ]
+        );
+        assert!(
+            report.to_string().contains("emoji_aliases.wide"),
+            "{report}"
+        );
+    }
+
     const SENTINEL: &str = "SENTINEL-TOKEN-9c41";
 
     #[test]

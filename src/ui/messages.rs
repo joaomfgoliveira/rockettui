@@ -556,6 +556,7 @@ mod tests {
             .push(Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
                 author: "firstname.lastname.contractor.external".to_string(),
@@ -589,6 +590,7 @@ mod tests {
         msgs.push(Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: "hostile".to_string(),
             room_id: general(),
             author: "\u{202e}mal\u{1b}]52;c;ZXZpbA==\u{7}lory\u{9b}".to_string(),
@@ -628,6 +630,7 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str, kind: MessageKind| Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),
@@ -746,6 +749,7 @@ mod tests {
         let msg = |id: &str, author: &str, ts: i64, body: &str, send: SendState| Message {
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
             author: author.to_string(),
@@ -874,6 +878,7 @@ mod tests {
             send: SendState::Sent,
             edited: false,
             plain_text: true,
+            reactions: Vec::new(),
         }
     }
 
@@ -1024,5 +1029,185 @@ mod tests {
         let without = row_starts(&app, &general());
         searching(&mut app, "foo");
         assert_eq!(row_starts(&app, &general()), without);
+    }
+
+    /// A 52x20 pane in `layout` with a room of three messages: one with two reactions, one without
+    /// and one whose many reactions (an alias, a skin tone, a custom name, the user's own) wrap.
+    fn app_with_reactions(layout: wrap::MessageLayout) -> App {
+        use crate::data::Reaction;
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        app.message_layout = layout;
+        app.own_username = Some("me".to_string());
+        app.settings
+            .emoji_aliases
+            .insert("partyparrot".to_string(), "🦜".to_string());
+        let room = RoomId("quiet".to_string());
+        let reaction = |name: &str, users: &[&str]| Reaction {
+            name: name.to_string(),
+            users: users.iter().map(|u| u.to_string()).collect(),
+        };
+        let msg = |id: &str, author: &str, ts: i64, body: &str, reactions: Vec<Reaction>| Message {
+            edited: false,
+            plain_text: true,
+            reactions,
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: author.to_string(),
+            ts,
+            body: body.to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg(
+                    "1",
+                    "alice",
+                    34_440,
+                    "deploy finished",
+                    vec![
+                        reaction("+1", &["dev", "alice", "bob"]),
+                        reaction("tada", &["alice"]),
+                    ],
+                ),
+                msg("2", "bob", 34_500, "no reactions here", Vec::new()),
+                msg(
+                    "3",
+                    "alice",
+                    34_560,
+                    "ship it",
+                    vec![
+                        reaction("partyparrot", &["bob"]),
+                        reaction("thumbsup_tone2", &["me"]),
+                        reaction("rt_custom_name", &["alice", "bob"]),
+                        reaction("heart", &["a"]),
+                        reaction("eyes", &["a"]),
+                        reaction("rocket", &["a"]),
+                        reaction("fire", &["a"]),
+                        reaction("100", &["a"]),
+                    ],
+                ),
+            ],
+        );
+        app.open_room(room);
+        app
+    }
+
+    #[test]
+    fn reactions_compact_52x20() {
+        let app = app_with_reactions(wrap::MessageLayout::Compact);
+        let terminal = render_pane(&app);
+        // A wide glyph leaves a placeholder cell after it in the test buffer; squeeze it out.
+        let text = all_text(&terminal).replace("  ", " ");
+        assert!(text.contains("👍 3"), "{text}");
+        assert!(text.contains("🦜 1"), "{text}");
+        assert!(text.contains(":rt_custom_name: 2"), "{text}");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn reactions_two_line_52x20() {
+        let app = app_with_reactions(wrap::MessageLayout::TwoLine);
+        let terminal = render_pane(&app);
+        assert!(all_text(&terminal).replace("  ", " ").contains("👍 3"));
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_cursor_highlight_covers_the_reaction_row() {
+        let mut app = app_with_reactions(wrap::MessageLayout::Compact);
+        press(&mut app, "gg");
+        let room = RoomId("quiet".to_string());
+        let v = view(&app, &room);
+        assert_eq!(v.cursor, 0);
+        let starts = row_starts(&app, &room);
+        // The first message of the room: the day divider, its body row and one reaction row.
+        assert_eq!(starts[1] - starts[0], 3);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width;
+        let hidden = |x: u16, y: u16| {
+            x > 0 && unicode_width::UnicodeWidthStr::width(buffer[(x - 1, y)].symbol()) == 2
+        };
+        let reversed = |y: u16| {
+            (1..width - 1)
+                .filter(|&x| !hidden(x, y))
+                .all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
+        };
+        // The divider row is not part of the highlight (the cursor skips dividers).
+        let body = 2 + (starts[0] - v.top_row) as u16;
+        assert!(!reversed(body - 1), "the divider row");
+        assert!(reversed(body), "body row of the cursor message");
+        assert!(reversed(body + 1), "reaction row of the cursor message");
+        assert!(!reversed(body + 2), "the next message is not highlighted");
+    }
+
+    /// A 52x20 pane in `layout` with messages that hold emoji shortcodes in the ways that matter.
+    fn app_with_shortcodes(layout: wrap::MessageLayout) -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        app.message_layout = layout;
+        app.settings
+            .emoji_aliases
+            .insert("partyparrot".to_string(), "🦜".to_string());
+        let room = RoomId("quiet".to_string());
+        let msg = |id: &str, author: &str, ts: i64, body: &str| Message {
+            edited: false,
+            plain_text: true,
+            reactions: Vec::new(),
+            id: id.to_string(),
+            room_id: room.clone(),
+            author: author.to_string(),
+            ts,
+            body: body.to_string(),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+        };
+        app.messages.insert(
+            room.clone(),
+            vec![
+                msg("1", "alice", 34_440, "deploy done :tada: thanks :+1:"),
+                msg("2", "bob", 34_500, "meeting at 10:100:20 or use `:smile:` here"),
+                msg("3", "alice", 34_560, ":partyparrot: :flag_af: :rt_custom_name: :thumbsup_tone2:"),
+                msg(
+                    "4",
+                    "bob",
+                    34_620,
+                    "a long line with several emoji :rocket: :fire: :100: :tada: that has to wrap to the next row",
+                ),
+            ],
+        );
+        app.open_room(room);
+        app
+    }
+
+    #[test]
+    fn shortcodes_compact_52x20() {
+        let app = app_with_shortcodes(wrap::MessageLayout::Compact);
+        let terminal = render_pane(&app);
+        // A wide glyph leaves a placeholder cell after it in the test buffer; squeeze it out.
+        let text = all_text(&terminal).replace("  ", " ");
+        assert!(text.contains("deploy done 🎉 thanks 👍"), "{text}");
+        assert!(
+            text.contains("10:100:20") && text.contains("`:smile:`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("🦜") && text.contains("🇦🇫") && text.contains(":rt_custom_name:"),
+            "{text}"
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn shortcodes_two_line_52x20() {
+        let app = app_with_shortcodes(wrap::MessageLayout::TwoLine);
+        let terminal = render_pane(&app);
+        assert!(
+            all_text(&terminal)
+                .replace("  ", " ")
+                .contains("deploy done 🎉")
+        );
+        insta::assert_snapshot!(terminal.backend());
     }
 }

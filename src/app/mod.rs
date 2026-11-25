@@ -11,6 +11,8 @@ pub mod history;
 pub mod input_buf;
 pub mod jump;
 pub mod messages;
+pub mod react;
+pub mod reactions;
 pub mod realtime;
 pub mod results;
 pub mod search;
@@ -149,6 +151,14 @@ pub struct App {
     /// The context popup (`app::context`), when open. Like `help` it is a state, not a mode; its
     /// content is recomputed from the app on every draw.
     pub context: bool,
+    /// The reactions popup (`app::reactions`), when open: the message it was opened on. Like
+    /// `context` it is a state, not a mode; its content is recomputed from the app on every draw.
+    pub reactions_popup: Option<reactions::ReactionsPopup>,
+    /// The server's custom emojis for the reaction picker (`app::react`): fetched on the first
+    /// opening and kept for the session.
+    pub custom_emojis: react::CustomEmojis,
+    /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
+    pub react_picker: Option<react::ReactPicker>,
     /// The active find in the open room (`app::search`), if any. No `Debug`: it holds the query.
     pub search: Option<search::Search>,
     /// The text of the open search prompt (`/`), when open. Like `help` it is a state, not a mode.
@@ -226,6 +236,9 @@ impl App {
             confirm: None,
             help: None,
             context: false,
+            reactions_popup: None,
+            custom_emojis: react::CustomEmojis::default(),
+            react_picker: None,
             search: None,
             search_prompt: None,
             results: None,
@@ -280,6 +293,8 @@ impl App {
             zone: self.zone,
             theme: &self.theme,
             search: self.search.as_ref().map(|s| s.query.as_str()),
+            aliases: &self.settings.emoji_aliases,
+            own_user: self.own_username.as_deref(),
         }
     }
 
@@ -609,6 +624,7 @@ mod tests {
                 .push(Message {
                     edited: false,
                     plain_text: true,
+                    reactions: Vec::new(),
                     id: format!("u-{n}"),
                     room_id: rid(room),
                     author: "me".to_string(),

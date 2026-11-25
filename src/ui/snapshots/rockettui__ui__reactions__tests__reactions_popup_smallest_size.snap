@@ -1,0 +1,11 @@
+---
+source: src/ui/reactions.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ Reactions┐
+│  Unread                  ││👍  :…  yo…│
+│> * #general              ││🎉  :…  ana│
+│  * &dev-team             ││   :…  bo…│
+│  * @alice                ││   :…  zed│
+└──────────────────────────┘└──────────┘
+ NORMAL  general

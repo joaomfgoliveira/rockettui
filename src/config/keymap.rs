@@ -598,6 +598,76 @@ mod tests {
     }
 
     #[test]
+    fn show_reactions_default_rebind_and_unbind() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        // Bound to `gr` in every preset, and `gg` still resolves with `g` as their shared prefix.
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "gr", Action::ShowReactions), "{preset:?}");
+            assert!(is(&keymap, "gg", Action::GotoTop), "{preset:?}");
+            assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
+        }
+        // Rebind: the new key works and the preset key stays (a binding adds, `none` removes).
+        let src = "[normal]\n\"R\" = \"show_reactions\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "R", Action::ShowReactions));
+        assert!(is(&keymap, "gr", Action::ShowReactions));
+        // Unbind with `none`.
+        let src = "[normal]\n\"gr\" = \"none\"\n";
+        assert!(errors(src).is_empty());
+        let keymap = built(src);
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
+        assert!(is(&keymap, "gg", Action::GotoTop));
+        // The name is part of the vocabulary and round-trips.
+        assert_eq!(
+            crate::input::actions::name_of(&Action::ShowReactions),
+            Some("show_reactions")
+        );
+    }
+
+    #[test]
+    fn react_message_default_rebind_unbind_and_unknown_spelling() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        // `+` in every preset, next to the other bindings it must not disturb.
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "+", Action::ReactMessage), "{preset:?}");
+            assert!(is(&keymap, "gr", Action::ShowReactions), "{preset:?}");
+            assert!(is(&keymap, "?", Action::ShowContext), "{preset:?}");
+        }
+        // Rebind: the new key works and `+` stays.
+        let src = "[normal]\n\"R\" = \"react_message\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "R", Action::ReactMessage));
+        assert!(is(&keymap, "+", Action::ReactMessage));
+        // Unbind with `none`.
+        let src = "[normal]\n\"+\" = \"none\"\n";
+        assert!(errors(src).is_empty());
+        assert_eq!(lookup_kind(&built(src), Mode::Normal, "+"), "none");
+        // A misspelled name is a config error that names it.
+        let found = errors("[normal]\n\"R\" = \"react_msg\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("react_msg"), "{found:?}");
+        // The name round-trips.
+        assert_eq!(
+            crate::input::actions::name_of(&Action::ReactMessage),
+            Some("react_message")
+        );
+    }
+
+    #[test]
     fn none_unbinds() {
         let keymap = built("[normal]\n\"<C-d>\" = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "<C-d>"), "none");
@@ -606,16 +676,21 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "<C-u>"), "exact");
         assert!(errors("[normal]\n\"<C-d>\" = \"none\"\n").is_empty());
 
-        // Unbinding gg leaves nothing: g is no longer a prefix.
+        // Unbinding gg leaves gr: g is still a prefix.
         let keymap = built("[normal]\ngg = \"none\"\n");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
+        // Unbinding both leaves nothing: g is no longer a prefix.
+        let keymap = built("[normal]\ngg = \"none\"\ngr = \"none\"\n");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "none");
     }
 
     #[test]
     fn none_gg_then_bind_g() {
         // TOML iterates `g` before `gg`; the result must not depend on it.
-        let src = "[normal]\ngg = \"none\"\ng = \"goto_top\"\n";
+        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ng = \"goto_top\"\n";
         assert!(errors(src).is_empty(), "{:?}", problems(src));
         let keymap = built(src);
         let g = parse_keys("g").unwrap();
@@ -628,13 +703,23 @@ mod tests {
 
     #[test]
     fn prefix_clash_names_both() {
+        // `g` is the prefix of two default bindings, `gg` and `gr`: one error for each.
         let found = errors("[normal]\ng = \"goto_top\"\n");
-        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found.len(), 2, "{found:?}");
         assert_eq!(line_of(&found[0]), Some(2));
-        assert!(found[0].message.contains("`g`"), "{found:?}");
-        assert!(found[0].message.contains("`gg`"), "{found:?}");
-        // Unbinding one of them resolves it.
-        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
+        assert!(found.iter().all(|p| p.message.contains("`g`")), "{found:?}");
+        assert!(
+            found.iter().any(|p| p.message.contains("`gg`")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|p| p.message.contains("`gr`")),
+            "{found:?}"
+        );
+        // Unbinding one of them is not enough; unbinding both resolves it.
+        let half = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
+        assert_eq!(errors(half).len(), 1);
+        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\n";
         assert!(errors(resolved).is_empty());
     }
 

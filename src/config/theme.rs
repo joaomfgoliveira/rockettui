@@ -45,6 +45,8 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.failed",
     "messages.edited",
     "messages.deleted",
+    "messages.reactions",
+    "messages.reactions_own",
     "help.border",
     "help.title",
     "help.heading",
@@ -58,6 +60,18 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "results.border",
     "results.title",
     "results.selected",
+    "reactions.border",
+    "reactions.title",
+    "reactions.name",
+    "reactions.users",
+    "reactions.own",
+    "picker.border",
+    "picker.title",
+    "picker.input",
+    "picker.item",
+    "picker.selected",
+    "picker.own",
+    "picker.hint",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -227,6 +241,10 @@ pub struct Theme {
     pub messages_edited: Style,
     /// The whole line of a deleted message: author, time and `message deleted`.
     pub messages_deleted: Style,
+    /// The reaction row under a message: each reaction and its count.
+    pub messages_reactions: Style,
+    /// The reactions the user gave, in the reaction row.
+    pub messages_reactions_own: Style,
     /// The help overlay: its border, its title, the section headings, the key column and the
     /// description column.
     pub help_border: Style,
@@ -246,6 +264,22 @@ pub struct Theme {
     pub results_border: Style,
     pub results_title: Style,
     pub results_selected: Style,
+    /// The reactions popup (`show_reactions`): its border, its title, the shortcode column, the
+    /// user list and the entries that are the user's own.
+    pub reactions_border: Style,
+    pub reactions_title: Style,
+    pub reactions_name: Style,
+    pub reactions_users: Style,
+    pub reactions_own: Style,
+    /// The reaction picker (`react_message`): its border, its title, the search line, a result
+    /// row, the selected row, the entries the user already gave, and the hint and empty-state text.
+    pub picker_border: Style,
+    pub picker_title: Style,
+    pub picker_input: Style,
+    pub picker_item: Style,
+    pub picker_selected: Style,
+    pub picker_own: Style,
+    pub picker_hint: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -285,6 +319,8 @@ impl Default for Theme {
             messages_failed: plain.fg(Color::Red),
             messages_edited: plain.add_modifier(Modifier::DIM),
             messages_deleted: plain.add_modifier(Modifier::DIM),
+            messages_reactions: plain.add_modifier(Modifier::DIM),
+            messages_reactions_own: plain.add_modifier(Modifier::BOLD),
             help_border: plain,
             help_title: plain.add_modifier(Modifier::BOLD),
             help_heading: plain.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -298,6 +334,18 @@ impl Default for Theme {
             results_border: plain,
             results_title: plain.add_modifier(Modifier::BOLD),
             results_selected: plain.add_modifier(Modifier::REVERSED),
+            reactions_border: plain,
+            reactions_title: plain.add_modifier(Modifier::BOLD),
+            reactions_name: plain.add_modifier(Modifier::DIM),
+            reactions_users: plain,
+            reactions_own: plain.add_modifier(Modifier::BOLD),
+            picker_border: plain,
+            picker_title: plain.add_modifier(Modifier::BOLD),
+            picker_input: plain,
+            picker_item: plain,
+            picker_selected: plain.add_modifier(Modifier::REVERSED),
+            picker_own: plain.add_modifier(Modifier::BOLD),
+            picker_hint: plain.add_modifier(Modifier::DIM),
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -336,6 +384,8 @@ impl Theme {
             ("messages", "failed") => Some(&mut self.messages_failed),
             ("messages", "edited") => Some(&mut self.messages_edited),
             ("messages", "deleted") => Some(&mut self.messages_deleted),
+            ("messages", "reactions") => Some(&mut self.messages_reactions),
+            ("messages", "reactions_own") => Some(&mut self.messages_reactions_own),
             ("help", "border") => Some(&mut self.help_border),
             ("help", "title") => Some(&mut self.help_title),
             ("help", "heading") => Some(&mut self.help_heading),
@@ -349,6 +399,18 @@ impl Theme {
             ("results", "border") => Some(&mut self.results_border),
             ("results", "title") => Some(&mut self.results_title),
             ("results", "selected") => Some(&mut self.results_selected),
+            ("reactions", "border") => Some(&mut self.reactions_border),
+            ("reactions", "title") => Some(&mut self.reactions_title),
+            ("reactions", "name") => Some(&mut self.reactions_name),
+            ("reactions", "users") => Some(&mut self.reactions_users),
+            ("reactions", "own") => Some(&mut self.reactions_own),
+            ("picker", "border") => Some(&mut self.picker_border),
+            ("picker", "title") => Some(&mut self.picker_title),
+            ("picker", "input") => Some(&mut self.picker_input),
+            ("picker", "item") => Some(&mut self.picker_item),
+            ("picker", "selected") => Some(&mut self.picker_selected),
+            ("picker", "own") => Some(&mut self.picker_own),
+            ("picker", "hint") => Some(&mut self.picker_hint),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -880,8 +942,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            39,
-            "16 chrome and border paths, the ten messages elements, the five help elements, the four context elements the search match and the three results elements"
+            53,
+            "16 chrome and border paths, the twelve messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -906,6 +968,55 @@ mod tests {
         // The edited marker and the deleted line are dim unless the theme says otherwise.
         assert_eq!(theme.messages_edited.add_modifier, Modifier::DIM);
         assert_eq!(theme.messages_deleted.add_modifier, Modifier::DIM);
+    }
+
+    #[test]
+    fn reaction_elements_are_themeable_and_own_stands_out_by_default() {
+        let t = Theme::default();
+        // The user's own reactions are distinguishable from the others, in the row and the popup,
+        // without any colour (a terminal may not draw the emoji, nor show colours).
+        assert_ne!(t.messages_reactions, t.messages_reactions_own);
+        assert_ne!(t.reactions_users, t.reactions_own);
+
+        let (theme, out) = parse_str(
+            "[messages.reactions]\nfg = \"yellow\"\n[reactions.users]\nfg = \"cyan\"\n\
+             [reactions.own]\nbg = \"#112233\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_reactions.fg, Some(Color::Yellow));
+        // The default modifiers survive a partial override.
+        assert_eq!(theme.messages_reactions.add_modifier, Modifier::DIM);
+        assert_eq!(theme.reactions_users.fg, Some(Color::Cyan));
+        assert_eq!(theme.reactions_own.bg, Some(Color::Rgb(0x11, 0x22, 0x33)));
+        assert_eq!(theme.reactions_own.add_modifier, Modifier::BOLD);
+        // Untouched elements keep their built-in style.
+        assert_eq!(theme.reactions_border, t.reactions_border);
+        assert_eq!(theme.messages_reactions_own, t.messages_reactions_own);
+    }
+
+    #[test]
+    fn picker_elements_are_themeable_with_defaults_that_do_not_rely_on_colour() {
+        let t = Theme::default();
+        // The selected row and the user's own entries stand out from a plain row without colour.
+        assert_ne!(t.picker_selected, t.picker_item);
+        assert_ne!(t.picker_own, t.picker_item);
+        assert_ne!(t.picker_selected, t.picker_own);
+        assert_eq!(t.picker_selected.add_modifier, Modifier::REVERSED);
+        assert_eq!(t.picker_hint.add_modifier, Modifier::DIM);
+
+        let (theme, out) = parse_str(
+            "[picker.selected]\nbg = \"#334455\"\n[picker.item]\nfg = \"cyan\"\n\
+             [picker.title]\nmodifiers = []\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.picker_selected.bg, Some(Color::Rgb(0x33, 0x44, 0x55)));
+        // A partial override keeps the default modifiers; an empty list clears them.
+        assert_eq!(theme.picker_selected.add_modifier, Modifier::REVERSED);
+        assert_eq!(theme.picker_item.fg, Some(Color::Cyan));
+        assert_eq!(theme.picker_title.add_modifier, Modifier::empty());
+        // Untouched elements keep their built-in style.
+        assert_eq!(theme.picker_own, t.picker_own);
+        assert_eq!(theme.picker_border, t.picker_border);
     }
 
     #[test]

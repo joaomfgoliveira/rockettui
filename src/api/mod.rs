@@ -218,6 +218,17 @@ struct DeleteBody<'a> {
     msg_id: &'a str,
 }
 
+/// The body of `chat.react`: the message id, the emoji as `:name:` and whether to add the reaction
+/// (`true`) or take the user's own back (`false`). Always explicit, never left to the server to toggle.
+#[derive(serde::Serialize)]
+struct ReactBody<'a> {
+    #[serde(rename = "messageId")]
+    message_id: &'a str,
+    emoji: &'a str,
+    #[serde(rename = "shouldReact")]
+    should_react: bool,
+}
+
 /// The joined rooms and the sidebar folders built from one load.
 pub struct RoomList {
     pub rooms: Vec<Room>,
@@ -677,6 +688,29 @@ impl Client {
             msg_id: id,
         };
         let request = self.http.post(self.endpoint("chat.delete")).json(&body);
+        let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
+        Ok(())
+    }
+
+    /// The server's custom emojis with `GET emoji-custom.list`: one request for the whole list. Any
+    /// error means the list is not known, and the caller carries on without custom emojis.
+    pub async fn custom_emojis(&self) -> Result<Vec<crate::data::CustomEmoji>, ApiError> {
+        let resp: wire::CustomEmojiResp = self.get_json("emoji-custom.list", &[]).await?;
+        Ok(map::custom_emojis(resp))
+    }
+
+    /// Add (`add`) or take back the user's reaction `emoji` to message `id` with `POST chat.react`.
+    /// `emoji` is the shortcode without colons; the request carries it as `:name:`. The answer body
+    /// is not read beyond being valid JSON. A name the server does not know (measured: HTTP 400) is
+    /// `ApiError::Rejected`, like a refused edit; no server text reaches the error.
+    pub async fn react(&self, id: &str, emoji: &str, add: bool) -> Result<(), ApiError> {
+        let emoji = format!(":{emoji}:");
+        let body = ReactBody {
+            message_id: id,
+            emoji: &emoji,
+            should_react: add,
+        };
+        let request = self.http.post(self.endpoint("chat.react")).json(&body);
         let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
         Ok(())
     }
@@ -1232,6 +1266,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_emojis_contract() {
+        let server = MockServer::start().await;
+        mount_ok(
+            &server,
+            "emoji-custom.list",
+            include_str!("fixtures/docker/emoji_custom_list.json"),
+        )
+        .await;
+        let list = client_for(&server)
+            .custom_emojis()
+            .await
+            .expect("the list loads");
+        let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["rtshipit", "rtplain"]);
+        assert_eq!(list[0].aliases, ["rtship", "rt_ship"]);
+    }
+
+    #[tokio::test]
+    async fn custom_emojis_errors_leave_no_list() {
+        for (status, want) in [
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/emoji-custom.list"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw("{}", "application/json"))
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .custom_emojis()
+                .await
+                .expect_err("refused");
+            assert_eq!(error, want, "status {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn react_contract() {
+        // The exact body, for both directions, with the colons added around the name.
+        for (add, name) in [(true, "tada"), (false, "+1")] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/chat.react"))
+                .and(header("X-User-Id", USER))
+                .and(header("X-Auth-Token", TOKEN))
+                .and(wiremock::matchers::body_json(serde_json::json!({
+                    "messageId": "m1",
+                    "emoji": format!(":{name}:"),
+                    "shouldReact": add,
+                })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw("{\"success\":true}", "application/json"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            client_for(&server)
+                .react("m1", name, add)
+                .await
+                .expect("react works");
+        }
+    }
+
+    #[tokio::test]
+    async fn react_error_kinds() {
+        // Measured on 8.9.1: a name the server does not know is a 400 and is Rejected; the other
+        // statuses keep their kinds, and no error holds the emoji name or any server text.
+        for (status, want) in [
+            (400, ApiError::Rejected),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (404, ApiError::NotFound),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/chat.react"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw(
+                    "{\"success\":false,\"error\":\"SENTINEL-EMOJI-NAME not valid\"}",
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .react("m1", "SENTINEL-EMOJI-NAME", true)
+                .await
+                .expect_err("refused");
+            assert_eq!(error, want, "status {status}");
+            let shown = format!("{error:?} {error}");
+            assert!(!shown.contains("SENTINEL"), "{shown}");
+        }
+        // An answer that is not JSON leaves the outcome unknown.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.react"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("not json", "text/plain"))
+            .mount(&server)
+            .await;
+        let error = client_for(&server)
+            .react("m1", "tada", true)
+            .await
+            .expect_err("unreadable");
+        assert!(error.outcome_unknown(), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_while_reacting_leaves_the_outcome_unknown() {
+        let (url, handle) = dropping_server();
+        let error = Client::new(&connection(&url, USER, TOKEN))
+            .expect("client")
+            .react("m1", "tada", true)
+            .await
+            .expect_err("the connection is dropped");
+        handle.join().expect("server thread");
+        assert_eq!(error, ApiError::ConnectionLost);
+        assert!(error.outcome_unknown());
+    }
+
+    #[tokio::test]
     async fn edit_delete_error_kinds() {
         // Measured: every refusal is a 400 and is Rejected; 401, 403 and 404 keep their kinds.
         assert_eq!(
@@ -1718,6 +1874,7 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r".to_string()),
                 author: "secret-author".to_string(),
@@ -2110,6 +2267,7 @@ mod tests {
             messages: vec![Message {
                 edited: false,
                 plain_text: true,
+                reactions: Vec::new(),
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),
                 author: "a".to_string(),
