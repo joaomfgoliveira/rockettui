@@ -185,19 +185,23 @@ A reaction the server refuses, or that cannot be sent, SHALL show one fixed stat
 - **THEN** the status line says the reaction may not have been sent
 
 ### Requirement: Custom emojis from the server
-The picker SHALL fetch the server's custom emojis once, the first time it opens, and keep them for the session. A failed fetch SHALL NOT stop the picker: it searches unicode emoji and aliases, and the next opening SHALL try the fetch again. A custom emoji SHALL be offered under its name and its aliases and sent under its name.
+The picker SHALL search the server's custom emojis from the list the client loads when the session starts and keeps for the session, and SHALL NOT request it again once it has loaded. When that list has not loaded, the picker SHALL work from unicode emoji and aliases and ask for the list again, and a custom emoji that arrives while the picker is open SHALL become searchable without closing it. A custom emoji SHALL be offered under its name and its aliases and sent under its name.
 
 #### Scenario: First opening
-- **WHEN** the picker opens for the first time in a session
-- **THEN** the custom emojis are requested and become searchable when they arrive, without closing the picker
+- **WHEN** the picker opens for the first time in a session and the session's list has loaded
+- **THEN** the custom emojis are searchable at once and no request is made by the picker
 
 #### Scenario: Later openings
-- **WHEN** the picker opens again after a successful fetch
+- **WHEN** the picker opens again after a successful load
 - **THEN** no new request is made
 
 #### Scenario: Fetch fails
-- **WHEN** the fetch fails
-- **THEN** unicode emoji and aliases still search, and the next opening requests the custom emojis again
+- **WHEN** the session's list could not be loaded
+- **THEN** unicode emoji and aliases still search, and opening the picker requests the list again
+
+#### Scenario: List arrives while open
+- **WHEN** the picker opens while the list is still loading and the list then arrives
+- **THEN** the custom emojis become searchable without closing the picker
 
 ### Requirement: Picker follows live changes
 The open picker SHALL show the message's current reactions as they change, and SHALL close if the message is deleted or is no longer held. The room underneath SHALL keep updating while it is open.
