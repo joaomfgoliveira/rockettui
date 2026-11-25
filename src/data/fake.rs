@@ -4,7 +4,9 @@
 //! rooms, one encrypted room, and one very long message. Every body is plain text.
 
 use crate::action::Action;
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
+use crate::data::{
+    Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState, Unread,
+};
 
 /// 2026-11-14T00:00:00Z. All fake timestamps are offsets from this.
 pub const FAKE_EPOCH: i64 = 1_794_614_400;
@@ -63,7 +65,11 @@ fn rooms() -> Vec<Room> {
             kind,
             encrypted,
             private: kind == RoomKind::PrivateGroup,
-            unread,
+            unread: if unread {
+                Unread::flag()
+            } else {
+                Unread::default()
+            },
             last_seen: None,
             last_activity: FAKE_EPOCH + offset,
         })
@@ -183,7 +189,7 @@ mod tests {
         assert_eq!(encrypted[0].name, "secrets");
         assert!(count_of(&encrypted[0].id) > 0);
 
-        assert_eq!(rooms.iter().filter(|r| r.unread).count(), 3);
+        assert_eq!(rooms.iter().filter(|r| r.unread.is_unread()).count(), 3);
 
         let names: Vec<&str> = folders.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"Work"));

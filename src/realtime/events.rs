@@ -7,7 +7,7 @@
 use crate::action::Action;
 use crate::api::map;
 use crate::api::wire::{WireMsg, WireSubDoc};
-use crate::data::RoomId;
+use crate::data::{RoomId, UnreadUpdate};
 use crate::realtime::ddp::ServerFrame;
 use serde_json::Value;
 
@@ -21,14 +21,17 @@ const SUBSCRIPTIONS_SUFFIX: &str = "/subscriptions-changed";
 pub const ROOM_STREAM: &str = "stream-notify-room";
 pub const DELETE_SUFFIX: &str = "/deleteMessage";
 
-/// Whether a subscription document means "unread": the server's `alert` flag or a positive unread
-/// count. `None` when the document carries neither key: such an update is about something else
-/// (the last-seen time, for example) and must not change the flag. The one place the rule lives.
-fn unread_of(doc: &WireSubDoc) -> Option<bool> {
-    if doc.alert.is_none() && doc.unread.is_none() {
-        return None;
-    }
-    Some(doc.alert.unwrap_or(false) || doc.unread.unwrap_or(0) > 0)
+/// What a subscription document says about the unread state. Keys the document lacks stay `None`;
+/// `None` overall means the update is about something else (the last-seen time, for example) and
+/// must not change anything. The one place the rule lives.
+fn unread_of(doc: &WireSubDoc) -> Option<UnreadUpdate> {
+    let update = UnreadUpdate {
+        alert: doc.alert,
+        unread: doc.unread,
+        user_mentions: doc.user_mentions,
+        group_mentions: doc.group_mentions,
+    };
+    (!update.is_empty()).then_some(update)
 }
 
 /// The Action a `changed` frame stands for, or `None` for a frame that is not an event this client
@@ -59,7 +62,7 @@ pub fn action_for(frame: ServerFrame) -> Option<Action> {
                 .ok()
                 .and_then(|v| serde_json::from_value(v).ok())?;
             Some(Action::RtSubscription {
-                unread: unread_of(&doc)?,
+                update: unread_of(&doc)?,
                 room: RoomId(doc.rid),
             })
         }
@@ -177,7 +180,11 @@ mod tests {
             action_for(set),
             Some(Action::RtSubscription {
                 room: RoomId("r1".to_string()),
-                unread: true
+                update: UnreadUpdate {
+                    alert: Some(true),
+                    unread: Some(2),
+                    ..UnreadUpdate::default()
+                }
             })
         );
         let cleared = changed(
@@ -189,7 +196,11 @@ mod tests {
             action_for(cleared),
             Some(Action::RtSubscription {
                 room: RoomId("r1".to_string()),
-                unread: false
+                update: UnreadUpdate {
+                    alert: Some(false),
+                    unread: Some(0),
+                    ..UnreadUpdate::default()
+                }
             })
         );
         // An update with neither key (measured on the servers) leaves the flag alone.

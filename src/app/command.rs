@@ -133,7 +133,7 @@ mod tests {
     use crate::app::history::HistoryState;
     use crate::app::update::update;
     use crate::app::{App, ConnState, Mode, StatusMsg};
-    use crate::data::{Message, MessageKind, Room, RoomId, RoomKind, SendState};
+    use crate::data::{Message, MessageKind, Room, RoomId, RoomKind, SendState, Unread};
     use crate::effect::Effect;
     use crate::test_util::{app_80x24, press};
     use ratatui::layout::Size;
@@ -187,7 +187,7 @@ mod tests {
             kind: RoomKind::Channel,
             encrypted: false,
             private: false,
-            unread: false,
+            unread: Unread::default(),
             last_seen: None,
             last_activity: 0,
         }

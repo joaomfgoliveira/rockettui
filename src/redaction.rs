@@ -17,7 +17,9 @@ use crate::config::connection::{
     ConnEnv, Connection, EnvValue, FileConn, Secret, parse_file, parse_server_url,
 };
 use crate::config::{Sources, load_from_sources};
-use crate::data::{Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState};
+use crate::data::{
+    Folder, FolderId, Message, MessageKind, Room, RoomId, RoomKind, SendState, Unread,
+};
 use crate::effect::{Effect, SendText};
 use crate::test_util::{press, render_to_string};
 use ratatui::layout::Size;
@@ -372,7 +374,7 @@ fn sentinel_sweep() {
             kind: RoomKind::Channel,
             encrypted: false,
             private: false,
-            unread: false,
+            unread: Unread::default(),
             last_seen: None,
             last_activity: 0,
         }]),
@@ -466,7 +468,7 @@ fn hostile_server_text() {
                 kind: RoomKind::Channel,
                 encrypted: false,
                 private: false,
-                unread: true,
+                unread: Unread::flag(),
                 last_seen: None,
                 last_activity: 1,
             }]),

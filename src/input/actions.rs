@@ -260,7 +260,10 @@ mod tests {
             Action::RtRejected,
             Action::RtSubscription {
                 room: crate::data::RoomId("r".to_string()),
-                unread: true,
+                update: crate::data::UnreadUpdate {
+                    alert: Some(true),
+                    ..Default::default()
+                },
             },
             Action::RtDeleted {
                 room: crate::data::RoomId("r".to_string()),

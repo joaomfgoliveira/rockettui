@@ -2,7 +2,7 @@
 //! contents here are made-up sentinels; nothing is printed.
 
 use super::*;
-use crate::data::RoomId;
+use crate::data::{RoomId, Unread};
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
@@ -398,7 +398,7 @@ fn wanted_rooms_are_the_joined_rooms_that_can_show_messages() {
         kind: RoomKind::Channel,
         encrypted,
         private: false,
-        unread: false,
+        unread: Unread::default(),
         last_seen: None,
         last_activity: 0,
     };
@@ -537,7 +537,7 @@ async fn the_supervisor_publishes_the_room_list_of_the_app() {
         kind: RoomKind::Channel,
         encrypted,
         private: false,
-        unread: false,
+        unread: Unread::default(),
         last_seen: None,
         last_activity: 0,
     };

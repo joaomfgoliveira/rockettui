@@ -7,7 +7,7 @@ use crate::api::wire::{WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits};
 use crate::data::{
     CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
-    SendState,
+    SendState, Unread,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -81,7 +81,11 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
             kind,
             encrypted: record.encrypted.unwrap_or(false),
             private: sub.t == "p",
-            unread: sub.unread > 0,
+            unread: Unread {
+                flagged: sub.alert,
+                count: sub.unread,
+                mentions: sub.user_mentions.saturating_add(sub.group_mentions),
+            },
             last_seen: sub.ls.as_ref().and_then(|d| d.secs()),
             last_activity,
         });
@@ -382,7 +386,7 @@ mod tests {
         let mapped = rooms(&fixture_subs(), &fixture_rooms());
         let summary: Vec<(&str, RoomKind, bool, bool)> = mapped
             .iter()
-            .map(|r| (r.name.as_str(), r.kind, r.unread, r.encrypted))
+            .map(|r| (r.name.as_str(), r.kind, r.unread.is_unread(), r.encrypted))
             .collect();
         assert_eq!(
             summary,
@@ -406,6 +410,35 @@ mod tests {
                 .all(|w| w[0].last_activity >= w[1].last_activity)
         );
         assert_eq!(mapped[0].last_activity, 1_794_823_200);
+    }
+
+    #[test]
+    fn unread_counts_alert_and_summed_mentions() {
+        let mapped = rooms(
+            &[
+                sub(
+                    r#"{"rid":"r-a","t":"c","name":"a","unread":3,"alert":true,"userMentions":1,"groupMentions":2}"#,
+                ),
+                sub(r#"{"rid":"r-b","t":"c","name":"b","alert":true}"#),
+                sub(r#"{"rid":"r-c","t":"c","name":"c"}"#),
+            ],
+            &[
+                record(r#"{"_id":"r-a","lm":"2026-11-16T10:00:00.000Z"}"#),
+                record(r#"{"_id":"r-b","lm":"2026-11-16T10:00:00.000Z"}"#),
+                record(r#"{"_id":"r-c","lm":"2026-11-16T10:00:00.000Z"}"#),
+            ],
+        );
+        let get = |name: &str| mapped.iter().find(|r| r.name == name).unwrap().unread;
+        assert_eq!(
+            get("a"),
+            Unread {
+                flagged: true,
+                count: 3,
+                mentions: 3
+            }
+        );
+        assert_eq!(get("b"), Unread::flag());
+        assert_eq!(get("c"), Unread::default());
     }
 
     #[test]

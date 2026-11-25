@@ -10,7 +10,7 @@
 
 use crate::app::history::{self, HistoryState};
 use crate::app::{App, RtState, messages, read, sidebar};
-use crate::data::{Message, RoomId};
+use crate::data::{Message, RoomId, UnreadUpdate};
 
 /// A new message arrived live. It joins the room only when the room's history is Loaded, through
 /// `messages::merge_incoming` (a held id is never duplicated, an echo of a pending send confirms
@@ -51,16 +51,17 @@ pub fn on_deleted(app: &mut App, room: &RoomId, id: &str) {
 /// The server reported the unread state of one subscription (set, or cleared by another client).
 /// The room moves between the sidebar sections, so the cursor is put back on the room it was on.
 /// An open room stays flagged until the server says otherwise.
-pub fn on_subscription(app: &mut App, room: &RoomId, unread: bool) {
+pub fn on_subscription(app: &mut App, room: &RoomId, update: UnreadUpdate) {
     let selected = sidebar::selected_room(app);
     let Some(held) = app.rooms.iter_mut().find(|r| &r.id == room) else {
         return;
     };
-    if held.unread == unread {
+    let before = held.unread;
+    held.unread.merge(update);
+    if held.unread == before {
         return;
     }
-    held.unread = unread;
-    if unread {
+    if held.unread.is_unread() {
         read::on_unread(app, room);
     }
     let moved = selected.and_then(|id| {
@@ -811,23 +812,105 @@ mod tests {
 
     // ---- live unread (2.4)
 
+    fn alert(on: bool) -> UnreadUpdate {
+        UnreadUpdate {
+            alert: Some(on),
+            unread: Some(u32::from(on)),
+            ..UnreadUpdate::default()
+        }
+    }
+
+    fn counts(app: &App, room: &str) -> crate::data::Unread {
+        app.rooms.iter().find(|r| r.id == rid(room)).unwrap().unread
+    }
+
+    #[test]
+    fn counts_merge_partial_updates_and_clear() {
+        let mut app = fixture_app();
+        let room = rid("r-general");
+        let send = |app: &mut App, update| {
+            crate::app::update::update(
+                app,
+                Action::RtSubscription {
+                    room: room.clone(),
+                    update,
+                },
+            );
+        };
+        send(
+            &mut app,
+            UnreadUpdate {
+                alert: Some(true),
+                unread: Some(4),
+                user_mentions: Some(1),
+                group_mentions: Some(1),
+            },
+        );
+        let held = counts(&app, "r-general");
+        assert_eq!((held.count, held.mentions), (4, 2));
+        // An update with none of the keys, and one that is only about something else, change nothing.
+        send(&mut app, UnreadUpdate::default());
+        assert_eq!(counts(&app, "r-general"), held);
+        // Mentions-only update keeps the count.
+        send(
+            &mut app,
+            UnreadUpdate {
+                user_mentions: Some(3),
+                ..UnreadUpdate::default()
+            },
+        );
+        let held = counts(&app, "r-general");
+        assert_eq!((held.count, held.mentions), (4, 3));
+        // Read elsewhere: a zero count clears the mentions too.
+        send(&mut app, alert(false));
+        let held = counts(&app, "r-general");
+        assert_eq!(held, crate::data::Unread::default());
+        assert!(!held.is_unread());
+    }
+
+    #[test]
+    fn alert_with_a_zero_count_stays_unread() {
+        let mut app = fixture_app();
+        crate::app::update::update(
+            &mut app,
+            Action::RtSubscription {
+                room: rid("r-general"),
+                update: UnreadUpdate {
+                    alert: Some(true),
+                    unread: Some(0),
+                    ..UnreadUpdate::default()
+                },
+            },
+        );
+        let held = counts(&app, "r-general");
+        assert!(held.is_unread());
+        assert_eq!(held.count, 0);
+    }
+
     #[test]
     fn subscription_update_sets_and_clears_unread() {
         let mut app = fixture_app();
         let quiet = app
             .rooms
             .iter()
-            .find(|r| !r.unread)
+            .find(|r| !r.unread.is_unread())
             .map(|r| r.id.clone())
             .expect("a read room");
         update(
             &mut app,
             Action::RtSubscription {
                 room: quiet.clone(),
-                unread: true,
+                update: alert(true),
             },
         );
-        assert!(app.rooms.iter().find(|r| r.id == quiet).unwrap().unread);
+        assert!(
+            app.rooms
+                .iter()
+                .find(|r| r.id == quiet)
+                .unwrap()
+                .unread
+                .is_unread()
+        );
         assert!(sidebar::rows(&app).iter().any(|row| matches!(
             row,
             sidebar::SidebarRow::Room { id, .. } if id == &quiet
@@ -836,16 +919,23 @@ mod tests {
             &mut app,
             Action::RtSubscription {
                 room: quiet.clone(),
-                unread: false,
+                update: alert(false),
             },
         );
-        assert!(!app.rooms.iter().find(|r| r.id == quiet).unwrap().unread);
+        assert!(
+            !app.rooms
+                .iter()
+                .find(|r| r.id == quiet)
+                .unwrap()
+                .unread
+                .is_unread()
+        );
         // An unknown room is ignored.
         update(
             &mut app,
             Action::RtSubscription {
                 room: rid("nope"),
-                unread: true,
+                update: alert(true),
             },
         );
     }
@@ -857,14 +947,14 @@ mod tests {
         let other = app
             .rooms
             .iter()
-            .find(|r| !r.unread && r.id != before)
+            .find(|r| !r.unread.is_unread() && r.id != before)
             .map(|r| r.id.clone())
             .expect("a read room");
         update(
             &mut app,
             Action::RtSubscription {
                 room: other,
-                unread: true,
+                update: alert(true),
             },
         );
         assert_eq!(sidebar::selected_room(&app), Some(before));
@@ -886,13 +976,18 @@ mod tests {
     fn read_room(app: &App) -> RoomId {
         app.rooms
             .iter()
-            .find(|r| r.id != rid("r-general") && !r.encrypted && !r.unread)
+            .find(|r| r.id != rid("r-general") && !r.encrypted && !r.unread.is_unread())
             .map(|r| r.id.clone())
             .expect("a read room")
     }
 
     fn is_unread(app: &App, room: &str) -> bool {
-        app.rooms.iter().find(|r| r.id == rid(room)).unwrap().unread
+        app.rooms
+            .iter()
+            .find(|r| r.id == rid(room))
+            .unwrap()
+            .unread
+            .is_unread()
     }
 
     #[test]
@@ -1002,7 +1097,7 @@ mod tests {
             &mut app,
             Action::RtSubscription {
                 room: rid("r-general"),
-                unread: false,
+                update: alert(false),
             },
         );
         app.read.pending = None;
@@ -1010,7 +1105,7 @@ mod tests {
             &mut app,
             Action::RtSubscription {
                 room: rid("r-general"),
-                unread: true,
+                update: alert(true),
             },
         );
         assert!(app.read.pending.is_some());

@@ -12,7 +12,7 @@
 
 use crate::app::history::HistoryState;
 use crate::app::{App, realtime};
-use crate::data::{MessageKind, RoomId};
+use crate::data::{MessageKind, RoomId, UnreadUpdate};
 use crate::effect::Effect;
 
 /// A mark-read waiting for its timer. `generation` changes on every (re)start, so the loop can
@@ -54,7 +54,9 @@ pub fn divider_before<'a>(app: &'a App, room: &RoomId) -> Option<&'a str> {
 }
 
 fn is_unread(app: &App, room: &RoomId) -> bool {
-    app.rooms.iter().any(|r| &r.id == room && r.unread)
+    app.rooms
+        .iter()
+        .any(|r| &r.id == room && r.unread.is_unread())
 }
 
 /// Ask the server to mark `room` read, when it is unread.
@@ -178,7 +180,15 @@ pub fn on_done(app: &mut App, room: &RoomId) {
     if let (Some(newest), Some(held)) = (newest, app.rooms.iter_mut().find(|r| &r.id == room)) {
         held.last_seen = Some(held.last_seen.map_or(newest, |seen| seen.max(newest)));
     }
-    realtime::on_subscription(app, room, false);
+    realtime::on_subscription(
+        app,
+        room,
+        UnreadUpdate {
+            alert: Some(false),
+            unread: Some(0),
+            ..UnreadUpdate::default()
+        },
+    );
 }
 
 /// Keeps one timer in step with `ReadState::pending` for the event loop, which has the clock. It

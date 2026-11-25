@@ -71,6 +71,13 @@ pub struct WireSub {
     pub f: bool,
     #[serde(default)]
     pub unread: u32,
+    /// The server's alert flag: the room stays unread with a zero count.
+    #[serde(default)]
+    pub alert: bool,
+    #[serde(default, rename = "userMentions")]
+    pub user_mentions: u32,
+    #[serde(default, rename = "groupMentions")]
+    pub group_mentions: u32,
     pub prid: Option<String>,
     pub category: Option<String>,
     pub status: Option<String>,
@@ -290,7 +297,7 @@ pub struct WireAttach {
 }
 
 /// The part of a subscription document of a `subscriptions-changed` stream event that the live
-/// unread flag needs. Everything else (names, settings) is not declared, so serde skips it.
+/// unread state needs. Everything else (names, settings) is not declared, so serde skips it.
 #[derive(Deserialize)]
 pub struct WireSubDoc {
     pub rid: String,
@@ -298,6 +305,10 @@ pub struct WireSubDoc {
     /// message is followed by a second update that carries neither key).
     pub alert: Option<bool>,
     pub unread: Option<u32>,
+    #[serde(rename = "userMentions")]
+    pub user_mentions: Option<u32>,
+    #[serde(rename = "groupMentions")]
+    pub group_mentions: Option<u32>,
 }
 
 #[derive(Deserialize)]

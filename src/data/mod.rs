@@ -23,6 +23,73 @@ pub enum RoomKind {
     DirectMessage,
 }
 
+/// The server's unread state of a room: the alert flag, the unread message count and the mention
+/// total (user mentions plus group mentions). Never computed from the messages the app holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unread {
+    pub flagged: bool,
+    pub count: u32,
+    pub mentions: u32,
+}
+
+/// What one live subscription update says about the unread state. A key the update lacks is `None`
+/// and leaves the held value alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnreadUpdate {
+    pub alert: Option<bool>,
+    pub unread: Option<u32>,
+    pub user_mentions: Option<u32>,
+    pub group_mentions: Option<u32>,
+}
+
+impl UnreadUpdate {
+    /// True when the update carries none of the unread keys (it is about something else).
+    pub fn is_empty(&self) -> bool {
+        self.alert.is_none()
+            && self.unread.is_none()
+            && self.user_mentions.is_none()
+            && self.group_mentions.is_none()
+    }
+}
+
+impl Unread {
+    /// An unread room with no count: what a test or the fake data needs.
+    pub fn flag() -> Self {
+        Unread {
+            flagged: true,
+            ..Unread::default()
+        }
+    }
+
+    /// Whether the room is unread: the server flagged it or it holds a positive count.
+    pub fn is_unread(&self) -> bool {
+        self.flagged || self.count > 0
+    }
+
+    /// Apply a live update; only the keys it carries change. `flagged` follows `alert` (absent
+    /// means not alerting, as long as the update speaks of unread at all). A zero count with no
+    /// mention keys also clears the mentions, since a read room has none.
+    pub fn merge(&mut self, update: UnreadUpdate) {
+        if update.is_empty() {
+            return;
+        }
+        if update.alert.is_some() || update.unread.is_some() {
+            self.flagged = update.alert.unwrap_or(false);
+        }
+        if let Some(count) = update.unread {
+            self.count = count;
+        }
+        if update.user_mentions.is_some() || update.group_mentions.is_some() {
+            self.mentions = update
+                .user_mentions
+                .unwrap_or(0)
+                .saturating_add(update.group_mentions.unwrap_or(0));
+        } else if update.unread == Some(0) {
+            self.mentions = 0;
+        }
+    }
+}
+
 /// A room as the sidebar sees it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Room {
@@ -33,7 +100,7 @@ pub struct Room {
     /// True when the server room type is `p`; it selects `groups.history`. Private groups are
     /// always `p`, discussions and teams can be either.
     pub private: bool,
-    pub unread: bool,
+    pub unread: Unread,
     /// Unix seconds when the user last read the room (`ls` of the subscription); `None` when the
     /// server has none (a room never read). Only the unread divider uses it.
     pub last_seen: Option<i64>,

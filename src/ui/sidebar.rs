@@ -8,9 +8,9 @@ use crate::ui::pane_block;
 use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// The default glyph drawn before a room name for its kind; `Markers::default` takes its glyphs
 /// from here. The app draws it; it never comes from the name, so a room cannot pose as another
@@ -27,7 +27,10 @@ pub fn kind_glyph(kind: RoomKind) -> &'static str {
 
 /// The list item for one sidebar row. A row is one line of one style, so a room name is a
 /// contiguous run of identically styled cells.
-fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
+///
+/// `width` is the columns the row may use; it only matters for an unread room, whose name is cut
+/// (with `…`) before its count and mention badge are.
+fn row_item(app: &App, row: &SidebarRow, width: usize) -> ListItem<'static> {
     match row {
         SidebarRow::Header(section) => {
             ListItem::new(Line::styled(section.label(), app.theme.sidebar_header))
@@ -60,7 +63,7 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
             };
             let indent = "  ".repeat(usize::from(*indent));
             // The placeholder is as wide as the unread marker, so read rooms stay aligned.
-            let unread = if room.unread {
+            let unread = if room.unread.is_unread() {
                 app.theme.markers.unread.clone()
             } else {
                 " ".repeat(app.theme.markers.unread.width())
@@ -72,23 +75,77 @@ fn row_item(app: &App, row: &SidebarRow) -> ListItem<'static> {
             } else {
                 ""
             };
-            let style = if room.unread {
+            let style = if room.unread.is_unread() {
                 app.theme.sidebar_unread
             } else {
                 app.theme.sidebar_room
             };
-            ListItem::new(Line::styled(
-                format!("{indent}{unread}{glyph}{name}{tag}"),
-                style,
-            ))
+            let count = if room.unread.count > 0 {
+                format!(" ({})", capped(room.unread.count))
+            } else {
+                String::new()
+            };
+            let mention = if room.unread.mentions > 0 {
+                format!(" @{}", capped(room.unread.mentions))
+            } else {
+                String::new()
+            };
+            let prefix = format!("{indent}{unread}{glyph}");
+            let fixed = prefix.width() + tag.width() + count.width() + mention.width();
+            let name = if (count.is_empty() && mention.is_empty()) || fixed + name.width() <= width
+            {
+                name.into_owned()
+            } else {
+                truncate_to(&name, width.saturating_sub(fixed))
+            };
+            let mut spans = vec![Span::styled(format!("{prefix}{name}{tag}{count}"), style)];
+            if !mention.is_empty() {
+                spans.push(Span::styled(mention, app.theme.sidebar_mention));
+            }
+            ListItem::new(Line::from(spans))
         }
     }
+}
+
+/// A count as shown in the sidebar: `99+` over 99.
+fn capped(n: u32) -> String {
+    if n > 99 {
+        "99+".to_string()
+    } else {
+        n.to_string()
+    }
+}
+
+/// `text` cut to at most `max` columns, ending in `…` when something was dropped.
+fn truncate_to(text: &str, max: usize) -> String {
+    if text.width() <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Sidebar;
     let rows = sidebar::rows(app);
-    let items: Vec<ListItem> = rows.iter().map(|row| row_item(app, row)).collect();
+    // The pane's borders and the cursor marker take their columns.
+    let width = usize::from(area.width)
+        .saturating_sub(2)
+        .saturating_sub(app.theme.markers.cursor.width());
+    let items: Vec<ListItem> = rows.iter().map(|row| row_item(app, row, width)).collect();
     let highlight = if focused {
         app.theme.sidebar_cursor
     } else {
@@ -149,6 +206,113 @@ mod tests {
         sidebar::on_rows_changed(&mut app);
         let terminal = draw(&app);
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    /// Give the fake room `name` this unread state and draw the sidebar, unfocused.
+    fn draw_with(app: &mut App, name: &str, unread: crate::data::Unread) -> Vec<String> {
+        app.rooms
+            .iter_mut()
+            .find(|r| r.name == name)
+            .expect("room")
+            .unread = unread;
+        press(app, "<C-w>l");
+        screen_rows(&draw(app))
+    }
+
+    fn row_of<'a>(rows: &'a [String], name: &str) -> &'a str {
+        rows.iter().find(|r| r.contains(name)).expect("row")
+    }
+
+    #[test]
+    fn count_and_mention_after_the_name() {
+        use crate::data::Unread;
+        let mut app = app_80x24();
+        let rows = draw_with(
+            &mut app,
+            "general",
+            Unread {
+                flagged: true,
+                count: 3,
+                mentions: 2,
+            },
+        );
+        assert!(row_of(&rows, "general").contains("#general (3) @2"));
+        let rows = draw_with(
+            &mut app,
+            "general",
+            Unread {
+                flagged: false,
+                count: 12,
+                mentions: 0,
+            },
+        );
+        let row = row_of(&rows, "general");
+        assert!(
+            row.contains("#general (12)") && !row.contains('@'),
+            "{row:?}"
+        );
+        // Flagged with a zero count: unread, no number, no badge.
+        let rows = draw_with(&mut app, "general", Unread::flag());
+        let row = row_of(&rows, "general");
+        assert!(row.contains("* #general") && !row.contains('(') && !row.contains('@'));
+        let rows = draw_with(
+            &mut app,
+            "general",
+            Unread {
+                flagged: true,
+                count: 250,
+                mentions: 120,
+            },
+        );
+        assert!(row_of(&rows, "general").contains("(99+) @99+"));
+    }
+
+    #[test]
+    fn a_long_name_is_cut_before_the_count_and_badge() {
+        use crate::data::Unread;
+        let mut app = app_80x24();
+        app.rooms
+            .iter_mut()
+            .find(|r| r.name == "general")
+            .unwrap()
+            .name = "a-very-long-room-name-indeed".to_string();
+        let rows = draw_with(
+            &mut app,
+            "a-very-long-room-name-indeed",
+            Unread {
+                flagged: true,
+                count: 7,
+                mentions: 1,
+            },
+        );
+        let row = row_of(&rows, "a-very-long");
+        assert!(row.contains("… (7) @1"), "{row:?}");
+    }
+
+    #[test]
+    fn the_mention_badge_is_red_bold_and_themeable() {
+        use crate::data::Unread;
+        let unread = Unread {
+            flagged: true,
+            count: 3,
+            mentions: 1,
+        };
+        for (theme, fg) in [
+            ("", Color::Red),
+            ("[sidebar.mention]\nfg = \"yellow\"\n", Color::Yellow),
+        ] {
+            let mut app = app_with_config(config_from_theme(theme), 80, 24);
+            let rows = draw_with(&mut app, "general", unread);
+            let y = rows.iter().position(|r| r.contains("general")).unwrap();
+            let byte = rows[y].find(" @1").expect("badge") + 1;
+            let x = u16::try_from(rows[y][..byte].chars().count()).unwrap();
+            let terminal = draw(&app);
+            let cell = &terminal.backend().buffer()[(x, u16::try_from(y).unwrap())];
+            assert_eq!(cell.fg, fg);
+            if fg == Color::Red {
+                assert!(cell.modifier.contains(Modifier::BOLD));
+            }
+        }
     }
 
     #[test]

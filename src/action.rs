@@ -6,7 +6,7 @@
 //! `Action` carries typed, pasted and message text, so its `Debug` is written by hand and never
 //! derived (T-01-03).
 
-use crate::data::{Folder, Message, Room, RoomId};
+use crate::data::{Folder, Message, Room, RoomId, UnreadUpdate};
 use crossterm::event::KeyEvent;
 
 #[derive(Clone, PartialEq)]
@@ -217,10 +217,10 @@ pub enum Action {
     /// A new message arrived on the realtime stream, already mapped (sanitizing and the
     /// encrypted-message rule included). Its `Debug` never prints the body.
     RtMessage(Message),
-    /// The server reported a change to the user's subscription to `room`: whether it is unread.
+    /// The server reported a change to the user's subscription to `room`: what it now says about unread (alert, counts, mentions).
     RtSubscription {
         room: RoomId,
-        unread: bool,
+        update: UnreadUpdate,
     },
     /// A message of `room` was deleted (`stream-notify-room` `<rid>/deleteMessage`). The payload
     /// has only the id, so there is no text to print.
@@ -395,8 +395,8 @@ impl std::fmt::Debug for Action {
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),
             Action::RtMessage(message) => write!(f, "RtMessage({message:?})"),
-            Action::RtSubscription { room, unread } => {
-                write!(f, "RtSubscription({room:?}, unread={unread})")
+            Action::RtSubscription { room, update } => {
+                write!(f, "RtSubscription({room:?}, {update:?})")
             }
             Action::RtDeleted { room, id } => write!(f, "RtDeleted({room:?}, {id})"),
             Action::KeyTimeout => write!(f, "KeyTimeout"),

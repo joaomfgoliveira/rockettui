@@ -178,7 +178,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),
         Action::RtMessage(message) => realtime::on_message(app, message),
-        Action::RtSubscription { room, unread } => realtime::on_subscription(app, &room, unread),
+        Action::RtSubscription { room, update } => realtime::on_subscription(app, &room, update),
         Action::RtDeleted { room, id } => realtime::on_deleted(app, &room, &id),
         Action::Resize(w, h) => {
             app.size = Size::new(w, h);

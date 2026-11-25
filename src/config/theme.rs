@@ -23,6 +23,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "sidebar.folder",
     "sidebar.room",
     "sidebar.unread",
+    "sidebar.mention",
     "sidebar.cursor",
     "sidebar.cursor_unfocused",
     "status.mode",
@@ -214,6 +215,8 @@ pub struct Theme {
     pub sidebar_folder: Style,
     pub sidebar_room: Style,
     pub sidebar_unread: Style,
+    /// The `@N` mention badge after an unread room's count.
+    pub sidebar_mention: Style,
     pub sidebar_cursor: Style,
     pub sidebar_cursor_unfocused: Style,
     pub status_mode: Style,
@@ -307,6 +310,7 @@ impl Default for Theme {
             sidebar_folder: plain,
             sidebar_room: plain,
             sidebar_unread: plain.add_modifier(Modifier::BOLD),
+            sidebar_mention: plain.fg(Color::Red).add_modifier(Modifier::BOLD),
             sidebar_cursor: plain.add_modifier(Modifier::REVERSED),
             sidebar_cursor_unfocused: plain.add_modifier(Modifier::BOLD),
             status_mode: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
@@ -374,6 +378,7 @@ impl Theme {
             ("sidebar", "folder") => Some(&mut self.sidebar_folder),
             ("sidebar", "room") => Some(&mut self.sidebar_room),
             ("sidebar", "unread") => Some(&mut self.sidebar_unread),
+            ("sidebar", "mention") => Some(&mut self.sidebar_mention),
             ("sidebar", "cursor") => Some(&mut self.sidebar_cursor),
             ("sidebar", "cursor_unfocused") => Some(&mut self.sidebar_cursor_unfocused),
             ("status", "mode") => Some(&mut self.status_mode),
@@ -954,8 +959,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            55,
-            "16 chrome and border paths, the fourteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            56,
+            "17 chrome and border paths, the fourteen messages elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -974,7 +979,7 @@ mod tests {
             theme.sidebar_header.add_modifier,
             Modifier::BOLD | Modifier::DIM
         );
-        assert_eq!(theme.status_error.fg, Some(Color::Indexed(10)));
+        assert_eq!(theme.status_error.fg, Some(Color::Indexed(11)));
         assert_eq!(theme.messages_author.add_modifier, Modifier::BOLD);
         assert_eq!(theme.messages_cursor.add_modifier, Modifier::REVERSED);
         // The edited marker and the deleted line are dim unless the theme says otherwise.
@@ -1004,6 +1009,19 @@ mod tests {
         // Untouched elements keep their built-in style.
         assert_eq!(theme.reactions_border, t.reactions_border);
         assert_eq!(theme.messages_reactions_own, t.messages_reactions_own);
+    }
+
+    #[test]
+    fn the_mention_badge_is_red_bold_by_default_and_themeable() {
+        let t = Theme::default();
+        assert_eq!(
+            t.sidebar_mention,
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        );
+        assert_ne!(t.sidebar_mention, t.sidebar_unread);
+        let (theme, out) = parse_str("[sidebar.mention]\nfg = \"yellow\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.sidebar_mention.fg, Some(Color::Yellow));
     }
 
     #[test]

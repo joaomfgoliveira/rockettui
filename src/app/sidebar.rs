@@ -77,7 +77,7 @@ pub fn rows(app: &App) -> Vec<SidebarRow> {
         .rooms
         .iter()
         .map(|room| {
-            let home = if room.unread {
+            let home = if room.unread.is_unread() {
                 Home::Unread
             } else {
                 match app
@@ -121,7 +121,7 @@ pub fn rows(app: &App) -> Vec<SidebarRow> {
             let unread = app
                 .rooms
                 .iter()
-                .filter(|room| room.unread && folder.room_ids.contains(&room.id))
+                .filter(|room| room.unread.is_unread() && folder.room_ids.contains(&room.id))
                 .count();
             out.push(SidebarRow::Folder {
                 id: folder.id.clone(),
