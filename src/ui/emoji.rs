@@ -198,50 +198,64 @@ pub fn draw_shortcodes<'a>(
     if !text.contains(':') {
         return Cow::Borrowed(text);
     }
-    let chars: Vec<char> = text.chars().collect();
+    let spans = shortcode_spans(text, &mut false, |name| {
+        lookup_found(name, aliases, view.custom)
+    });
+    if spans.is_empty() {
+        return Cow::Borrowed(text);
+    }
     let mut out = String::with_capacity(text.len());
-    let mut in_code = false;
-    let mut changed = false;
+    let mut at = 0;
+    for (range, found) in spans {
+        out.push_str(&text[at..range.start]);
+        match found {
+            Found::Glyph(glyph) => out.push_str(&glyph),
+            Found::Custom(own) => out.push_str(&custom_cells(&own, view.look(&own))),
+        }
+        at = range.end;
+    }
+    out.push_str(&text[at..]);
+    Cow::Owned(out)
+}
+
+/// The shortcodes of `text` that count, as byte ranges (colons included) with what `resolve` made
+/// of each name, in order and without overlap. The rules are those of `draw_shortcodes`; a name
+/// that `resolve` answers `None` for is skipped and the scan goes on from the next character.
+/// `in_code` is the backtick state at the start of `text` and is left as it is at its end, so a
+/// caller scanning line after line (the draft) carries a fenced block across lines.
+pub fn shortcode_spans<T>(
+    text: &str,
+    in_code: &mut bool,
+    mut resolve: impl FnMut(&str) -> Option<T>,
+) -> Vec<(std::ops::Range<usize>, T)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |i: usize| chars.get(i).map_or(text.len(), |&(b, _)| b);
+    let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        let c = chars[i];
+        let c = chars[i].1;
         if c == '`' {
-            in_code = !in_code;
-        } else if c == ':' && !in_code && (i == 0 || !chars[i - 1].is_alphanumeric()) {
+            *in_code = !*in_code;
+        } else if c == ':' && !*in_code && (i == 0 || !chars[i - 1].1.is_alphanumeric()) {
             let start = i + 1;
             let mut end = start;
-            while end < chars.len() && end - start <= MAX_SHORTCODE && is_name_char(chars[end]) {
+            while end < chars.len() && end - start <= MAX_SHORTCODE && is_name_char(chars[end].1) {
                 end += 1;
             }
-            let closed = end < chars.len() && chars[end] == ':' && end > start;
-            let free = end + 1 >= chars.len() || !chars[end + 1].is_alphanumeric();
+            let closed = end < chars.len() && chars[end].1 == ':' && end > start;
+            let free = end + 1 >= chars.len() || !chars[end + 1].1.is_alphanumeric();
             if closed && free {
-                let name: String = chars[start..end].iter().collect();
-                match lookup_found(&name, aliases, view.custom) {
-                    Some(Found::Glyph(glyph)) => {
-                        out.push_str(&glyph);
-                        changed = true;
-                        i = end + 1;
-                        continue;
-                    }
-                    Some(Found::Custom(own)) => {
-                        out.push_str(&custom_cells(&own, view.look(&own)));
-                        changed = true;
-                        i = end + 1;
-                        continue;
-                    }
-                    None => {}
+                let name = &text[at(start)..at(end)];
+                if let Some(found) = resolve(name) {
+                    out.push((at(i)..at(end + 1), found));
+                    i = end + 1;
+                    continue;
                 }
             }
         }
-        out.push(c);
         i += 1;
     }
-    if changed {
-        Cow::Owned(out)
-    } else {
-        Cow::Borrowed(text)
-    }
+    out
 }
 
 /// Turn the client's own cells in the spans of wrapped rows into what is drawn: the colon cells of
@@ -661,6 +675,7 @@ mod tests {
         let list = custom_list();
         let view = EmojiView {
             custom: &list,
+            aliases: &crate::ui::emoji::NO_ALIASES,
             ..EmojiView::none()
         };
         let drawn = draw_shortcodes("a :rtship: b `:rtshipit:` :nope:", &none(), &view);

@@ -109,8 +109,7 @@ pub fn start(app: &mut App) {
     app.prev_focus = app.focus;
     app.focus = Focus::Input;
     app.mode = Mode::Insert;
-    let (width, height) = app.input_viewport();
-    app.input.settle(width, height);
+    app.settle_input();
 }
 
 /// Leave the editing state: the stashed draft comes back into the input bar. The mode and the
@@ -118,8 +117,7 @@ pub fn start(app: &mut App) {
 pub fn cancel(app: &mut App) {
     if let Some(editing) = app.editing.take() {
         app.input = editing.stash;
-        let (width, height) = app.input_viewport();
-        app.input.settle(width, height);
+        app.settle_input();
     }
 }
 
@@ -456,6 +454,29 @@ mod tests {
         press(&mut app, "e");
         assert_eq!(app.input.text(), "nice :tada: work");
         assert!(app.editing.is_some());
+    }
+
+    #[test]
+    fn saving_an_edit_with_a_drawn_custom_emoji_keeps_the_text_as_typed() {
+        let mut app = app_with(vec![row("m1", OWN, "nice :rtship:")]).tap(|app| cursor_at(app, 0));
+        app.graphics = crate::app::emoji::Graphics::Supported;
+        app.custom_emojis =
+            crate::app::emoji::CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+                name: "rtshipit".to_string(),
+                aliases: vec!["rtship".to_string()],
+                ext: "png".to_string(),
+                etag: "e".to_string(),
+            }]);
+        press(&mut app, "e");
+        assert_eq!(app.input.text(), "nice :rtship:");
+        // The alias is one unit now: one Backspace takes it whole, retyping it puts it back.
+        press(&mut app, "<BS>");
+        assert_eq!(app.input.text(), "nice ");
+        press(&mut app, ":rtshipit:<CR>");
+        assert_eq!(
+            edit_effects(&app),
+            [("m1".to_string(), "nice :rtshipit:".to_string())]
+        );
     }
 
     #[test]

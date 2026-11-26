@@ -412,8 +412,7 @@ pub fn retarget(app: &mut App, target: InputTarget) {
             app.drafts.insert(old, live);
         }
         app.input = app.drafts.remove(&new).unwrap_or_default();
-        let (width, height) = app.input_viewport();
-        app.input.settle(width, height);
+        app.settle_input();
     }
     app.input_target = target;
 }

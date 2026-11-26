@@ -2340,6 +2340,7 @@ mod tests {
                     let images = images_in(state);
                     let view = EmojiView {
                         custom: &list,
+                        aliases: &crate::ui::emoji::NO_ALIASES,
                         images: &images,
                         graphics: Graphics::Supported,
                         now_ms: 0,
@@ -2373,6 +2374,7 @@ mod tests {
         let images = images_in(Some(ready(true)));
         let view = EmojiView {
             custom: &list,
+            aliases: &crate::ui::emoji::NO_ALIASES,
             images: &images,
             graphics: Graphics::Supported,
             now_ms: 0,
@@ -2412,6 +2414,7 @@ mod tests {
         let images = images_in(None);
         let view = EmojiView {
             custom: &list,
+            aliases: &crate::ui::emoji::NO_ALIASES,
             images: &images,
             graphics: Graphics::Supported,
             now_ms: 0,
@@ -2436,6 +2439,7 @@ mod tests {
             let images = images_in(state);
             let view = EmojiView {
                 custom: &list,
+                aliases: &crate::ui::emoji::NO_ALIASES,
                 images: &images,
                 graphics: Graphics::Supported,
                 now_ms: 0,
@@ -2464,6 +2468,7 @@ mod tests {
             let images = images_in(state);
             let view = EmojiView {
                 custom: &list,
+                aliases: &crate::ui::emoji::NO_ALIASES,
                 images: &images,
                 graphics: Graphics::Unsupported,
                 now_ms: 0,
@@ -2490,6 +2495,7 @@ mod tests {
             let images = images_in(state);
             let view = EmojiView {
                 custom: &list,
+                aliases: &crate::ui::emoji::NO_ALIASES,
                 images: &images,
                 graphics: Graphics::Supported,
                 now_ms: 0,
@@ -2514,6 +2520,7 @@ mod tests {
         let images = images_in(Some(ready(true)));
         let view = EmojiView {
             custom: &list,
+            aliases: &crate::ui::emoji::NO_ALIASES,
             images: &images,
             graphics: Graphics::Supported,
             now_ms: 0,

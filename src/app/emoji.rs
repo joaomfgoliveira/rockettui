@@ -97,6 +97,8 @@ pub enum Look {
 #[derive(Clone, Copy)]
 pub struct EmojiView<'a> {
     pub custom: &'a CustomEmojis,
+    /// The user's `[emoji_aliases]`, which win over a custom emoji of the same name.
+    pub aliases: &'a std::collections::HashMap<String, String>,
     pub images: &'a Images,
     pub graphics: Graphics,
     /// Milliseconds since the program started, which picks the frame of an animated emoji. Rows
@@ -112,6 +114,7 @@ impl EmojiView<'static> {
     pub fn none() -> Self {
         EmojiView {
             custom: &NO_CUSTOM,
+            aliases: &crate::ui::emoji::NO_ALIASES,
             images: &NO_IMAGES,
             graphics: Graphics::Unsupported,
             now_ms: 0,
@@ -250,7 +253,7 @@ pub fn ensure_loaded(app: &mut App) {
 }
 
 /// Ask for the images of the custom emojis that the open room draws and that were not asked for
-/// before: its messages' bodies and reactions. Nothing is asked for unless the terminal can show
+/// before: its messages' bodies and reactions, and the draft in the input bar. Nothing is asked for unless the terminal can show
 /// images and the list has loaded. Each (name, etag) is asked for once per session, at most
 /// `MAX_IN_FLIGHT` run at a time, and the rest wait in order.
 pub fn request_images(app: &mut App) {
@@ -297,6 +300,24 @@ pub fn request_images(app: &mut App) {
             }
         }
     }
+    // The draft being edited: an emoji picked or typed gets its image before any message shows it.
+    let draft = app.input.text();
+    if draft.contains(':') {
+        let mut in_code = false;
+        for line in draft.split('\n') {
+            let found = crate::ui::emoji::shortcode_spans(line, &mut in_code, |name| {
+                match crate::ui::emoji::lookup_found(
+                    name,
+                    &app.settings.emoji_aliases,
+                    &app.custom_emojis,
+                ) {
+                    Some(crate::ui::emoji::Found::Custom(own)) => Some(own),
+                    _ => None,
+                }
+            });
+            wanted.extend(found.into_iter().map(|(_, own)| own));
+        }
+    }
     for name in wanted {
         let Some(emoji) = app.custom_emojis.find(&name) else {
             continue;
@@ -338,6 +359,7 @@ fn names_in_body(body: &str, app: &App, out: &mut Vec<String>) {
     // Drawn as names, whatever the images are doing, so every custom emoji shows between its colons.
     let view = EmojiView {
         custom: &app.custom_emojis,
+        aliases: &crate::ui::emoji::NO_ALIASES,
         images: &NO_IMAGES,
         graphics: Graphics::Unsupported,
         now_ms: 0,
@@ -748,6 +770,7 @@ mod tests {
         fn look(app: &App) -> Look {
             EmojiView {
                 custom: &app.custom_emojis,
+                aliases: &crate::ui::emoji::NO_ALIASES,
                 images: &app.images,
                 graphics: app.graphics,
                 now_ms: 0,
@@ -770,6 +793,7 @@ mod tests {
         let look = |app: &App| {
             EmojiView {
                 custom: &app.custom_emojis,
+                aliases: &crate::ui::emoji::NO_ALIASES,
                 images: &app.images,
                 graphics: app.graphics,
                 now_ms: 0,
@@ -877,5 +901,34 @@ mod tests {
         );
         app.images.take_uploads();
         assert!(!app.images.has_animation());
+    }
+
+    #[test]
+    fn a_custom_emoji_in_the_draft_is_requested_once() {
+        let mut app = room_app(&["rtshipit", "unused"], &[]);
+        app.input
+            .insert_str("ship it :rtshipit: `:unused:` :tada: :nope:");
+        tick(&mut app);
+        assert_eq!(fetches(&app), ["rtshipit"]);
+        app.effects.clear();
+        tick(&mut app);
+        assert!(fetches(&app).is_empty(), "asked for again");
+    }
+
+    #[test]
+    fn a_draft_emoji_whose_image_is_loaded_asks_for_nothing() {
+        let mut app = room_app(&["rtshipit"], &[":rtshipit:"]);
+        tick(&mut app);
+        update(
+            &mut app,
+            Action::EmojiImageReady {
+                emoji: done("rtshipit"),
+                image: pixel(),
+            },
+        );
+        app.effects.clear();
+        app.input.insert_str(":rtshipit:");
+        tick(&mut app);
+        assert!(fetches(&app).is_empty());
     }
 }
