@@ -12,16 +12,16 @@ expression: out
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┌ React ───────────────────────────────────────────┐
 │  ▾ People (1)            ││press / to search                                 │
-│  Recent                  ││* 👍  :+1:           3, you                        │
-│    #random               ││  🎉  :tada:         1                             │
-│    &secrets [e2e]        ││  🦜  :partyparrot:  2                             │
-│    #quiet                ││     :rt_unknown:   1                             │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-└──────────────────────────┘└───────── j/k move  Enter remove  / find  q close ┘
+│  Recent                  ││💬  🕑  😀  🐻  🍔  🌍  ⚽  💡  🔣  🏁                      │
+│    #random               ││On this message                                   │
+│    &secrets [e2e]        ││[👍 ]🎉  🦜  ··                                      │
+│    #quiet                ││Frequently used                                   │
+│                          ││ 🚀                                                │
+│                          ││Smileys & People                                  │
+│                          ││ 😀  😃  😄  😁  😆  😅  🤣  😂  🙂  🙃  🫠  😉  😊  😇  🥰  😍   │
+│                          ││ 🤩  😘  😗  ☺️  😚  😙  🥲  😋  😛  😜  🤪  😝  🤑  🤗  🤭  🫢   │
+│                          ││ 🫣  🤫  🤔  🫡  🤐  🤨  😐  😑  😶  🫥  😶‍🌫️  😏  😒  🙄  😬  😮‍💨   │
+│                          ││ 🤥  🫨  😌  😔  😪  🤤  😴  😷  🤒  🤕  🤢  🤮  🤧  🥵  🥶  🥴   │
+│                          ││:+1:  3, you                         tone: default│
+└──────────────────────────┘└──────────── hjkl  Enter remove  / find  C-t tone ┘
  NORMAL  general

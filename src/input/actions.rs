@@ -218,6 +218,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::ReactFailed { .. }
         | Action::CustomEmojisLoaded(_)
         | Action::CustomEmojisFailed
+        | Action::RecentsLoaded(_)
         | Action::EmojiImageReady { .. }
         | Action::EmojiImageFailed(_)
         | Action::RtConnected

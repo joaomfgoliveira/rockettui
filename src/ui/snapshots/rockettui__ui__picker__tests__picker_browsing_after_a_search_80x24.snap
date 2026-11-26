@@ -12,9 +12,9 @@ expression: out
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┌ React ───────────────────────────────────────────┐
 │  ▾ People (1)            ││/tad                                              │
-│  Recent                  ││* 🎉  :tada:     1, you                            │
-│    #random               ││  🏟️  :stadium:                                    │
-│    &secrets [e2e]        ││                                                  │
+│  Recent                  ││                                                  │
+│    #random               ││Results                                           │
+│    &secrets [e2e]        ││ 🎉 [🏟️ ]                                           │
 │    #quiet                ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
@@ -22,6 +22,6 @@ expression: out
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
-│                          ││                                                  │
-└──────────────────────────┘└──────────── j/k move  Enter add  / find  q close ┘
+│                          ││:stadium:                            tone: default│
+└──────────────────────────┘└─────────────── hjkl  Enter add  / find  C-t tone ┘
  NORMAL  general

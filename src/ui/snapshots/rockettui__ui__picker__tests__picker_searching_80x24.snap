@@ -12,16 +12,16 @@ expression: out
 │      ~design-review      │┃                                                  ┃
 │      +platform           │┌ React ───────────────────────────────────────────┐
 │  ▾ People (1)            ││/ship                                             │
-│  Recent                  ││  🚢  :ship:                                       │
-│    #random               ││*    :ship_it:           custom, 1, you           │
-│    &secrets [e2e]        ││  📜  :ship_log:          alias                    │
-│    #quiet                ││     :shipping_cart:     custom                   │
-│                          ││  🛳️  :passenger_ship:                             │
-│                          ││  🛐  :place_of_worship:                           │
+│  Recent                  ││                                                  │
+│    #random               ││Results                                           │
+│    &secrets [e2e]        ││[🚢 ]·· 📜  ·· 🛳️  🛐                                 │
+│    #quiet                ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
-└──────────────────────────┘└─────────────── C-n/C-p move  Enter add  Esc done ┘
+│                          ││                                                  │
+│                          ││:ship:                               tone: default│
+└──────────────────────────┘└──────────────── arrows move  Enter add  Esc done ┘
  NORMAL  general

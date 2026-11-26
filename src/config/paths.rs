@@ -21,6 +21,19 @@ pub fn config_dir(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathB
     Some(base.join("rockettui"))
 }
 
+/// `$XDG_STATE_HOME/rockettui` when that is an absolute path, else `$HOME/.local/state/rockettui`.
+/// The same rules as `config_dir`: a relative or empty variable is ignored, and `None` when no home
+/// is known. Only names the directory; this module never creates it.
+pub fn state_dir(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let base = match xdg.map(PathBuf::from) {
+        Some(p) if p.is_absolute() => p,
+        _ => PathBuf::from(home.filter(|h| !h.is_empty())?)
+            .join(".local")
+            .join("state"),
+    };
+    Some(base.join("rockettui"))
+}
+
 fn read_error(file: ConfigFile, message: String) -> Problem {
     Problem {
         file,
@@ -125,6 +138,20 @@ mod tests {
         assert_eq!(config_dir(None, os("/home/u")), home_cfg);
         assert_eq!(config_dir(None, os("")), None);
         assert_eq!(config_dir(None, None), None);
+    }
+
+    #[test]
+    fn state_dir_resolution() {
+        let home_state = Some(PathBuf::from("/home/u/.local/state/rockettui"));
+        assert_eq!(
+            state_dir(os("/x"), os("/home/u")),
+            Some(PathBuf::from("/x/rockettui"))
+        );
+        assert_eq!(state_dir(os("rel"), os("/home/u")), home_state);
+        assert_eq!(state_dir(os(""), os("/home/u")), home_state);
+        assert_eq!(state_dir(None, os("/home/u")), home_state);
+        assert_eq!(state_dir(None, os("")), None);
+        assert_eq!(state_dir(None, None), None);
     }
 
     #[test]

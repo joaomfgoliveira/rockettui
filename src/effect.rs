@@ -186,6 +186,13 @@ pub enum Effect {
     /// Fetch the server's custom emojis with `GET emoji-custom.list`. Answers
     /// `Action::CustomEmojisLoaded` or `Action::CustomEmojisFailed`.
     LoadCustomEmojis,
+    /// Read the emoji box's state file (`emoji-recents` under the state directory). Answers
+    /// `Action::RecentsLoaded`, with nothing in it when the file is missing or unusable. Needs no
+    /// server.
+    LoadRecents,
+    /// Write the emoji box's state file. Answers nothing: a file that cannot be written leaves the
+    /// picks of the session working in memory. Needs no server.
+    SaveRecents(crate::app::emoji_recents::Recents),
     /// Get the image of one custom emoji: from the disk cache when it holds this `etag`, else with
     /// `GET <server>/emoji-custom/<name>.<ext>`, then decode it. Answers
     /// `Action::EmojiImageReady` or `Action::EmojiImageFailed`.
@@ -201,6 +208,23 @@ pub enum Effect {
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
 /// HTTP client could not be built, which fails every effect with that error.
 pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action> {
+    // The state file needs no server, so these two run even when the client could not be built.
+    match effect {
+        Effect::LoadRecents => {
+            let dir = state_dir_from_env();
+            let recents = tokio::task::spawn_blocking(move || load_recents(dir.as_deref()))
+                .await
+                .unwrap_or_default();
+            return vec![Action::RecentsLoaded(recents)];
+        }
+        Effect::SaveRecents(recents) => {
+            let dir = state_dir_from_env();
+            let _ =
+                tokio::task::spawn_blocking(move || save_recents(dir.as_deref(), &recents)).await;
+            return Vec::new();
+        }
+        _ => {}
+    }
     let client = match client {
         Ok(client) => client,
         Err(error) => {
@@ -272,6 +296,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::FollowThread { follow, .. } => Action::FollowFailed { follow, error },
                 Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
                 Effect::FetchEmojiImage(emoji) => Action::EmojiImageFailed(emoji),
+                Effect::LoadRecents | Effect::SaveRecents(_) => return Vec::new(),
             }];
         }
     };
@@ -509,7 +534,75 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::FetchEmojiImage(emoji) => {
             vec![fetch_emoji_image(&client, cache_dir_from_env().as_deref(), emoji).await]
         }
+        // Handled before the client was looked at.
+        Effect::LoadRecents | Effect::SaveRecents(_) => Vec::new(),
     }
+}
+
+/// The state directory from the environment, `None` when there is no usable one.
+fn state_dir_from_env() -> Option<std::path::PathBuf> {
+    crate::config::paths::state_dir(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+}
+
+/// The file the emoji box's state lives in.
+const RECENTS_FILE: &str = "emoji-recents";
+
+/// Read the state file in `dir`. A missing, unreadable, oversized, not-UTF-8 or malformed file is
+/// an empty state, never an error, and nothing from it is logged. A file that is not a regular
+/// file is never opened.
+pub fn load_recents(dir: Option<&std::path::Path>) -> crate::app::emoji_recents::Recents {
+    use crate::app::emoji_recents::{MAX_FILE_BYTES, Recents};
+    use std::io::Read;
+    let Some(path) = dir.map(|d| d.join(RECENTS_FILE)) else {
+        return Recents::default();
+    };
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return Recents::default();
+    };
+    if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
+        return Recents::default();
+    }
+    let mut text = String::new();
+    // `take` as well: the file may have grown since the metadata was read.
+    let read = std::fs::File::open(&path)
+        .and_then(|file| file.take(MAX_FILE_BYTES + 1).read_to_string(&mut text));
+    if read.is_err() || text.len() as u64 > MAX_FILE_BYTES {
+        return Recents::default();
+    }
+    Recents::parse(&text)
+}
+
+/// Write the state file in `dir`: to a temporary file readable by its owner only, then renamed over
+/// the real one, so a crash leaves the old file or the new one. Returns whether it was written; the
+/// caller ignores a failure.
+pub fn save_recents(
+    dir: Option<&std::path::Path>,
+    recents: &crate::app::emoji_recents::Recents,
+) -> bool {
+    use std::io::Write;
+    let Some(dir) = dir else {
+        return false;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let target = dir.join(RECENTS_FILE);
+    let temp = dir.join(format!(".{RECENTS_FILE}.{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options
+        .open(&temp)
+        .and_then(|mut file| file.write_all(recents.format().as_bytes()));
+    if written.is_err() || std::fs::rename(&temp, &target).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return false;
+    }
+    true
 }
 
 /// The emoji cache directory from the environment, `None` when there is no usable one.
@@ -592,6 +685,86 @@ mod tests {
         let config = load_from_sources(&sources)
             .unwrap_or_else(|report| panic!("unexpected config errors: {report}"));
         Client::new(&config.connection.expect("connection")).expect("client")
+    }
+
+    fn recents_dir(tag: &str) -> std::path::PathBuf {
+        crate::test_util::temp_config_dir(tag, &[])
+    }
+
+    #[test]
+    fn recents_survive_a_save_and_a_load() {
+        use crate::app::emoji_recents::Recents;
+        let dir = recents_dir("recents-roundtrip");
+        let mut recents = Recents::default();
+        recents.record("tada");
+        recents.record("tada");
+        recents.tone = 2;
+        // The directory is created when it is missing.
+        let inner = dir.join("state").join("rockettui");
+        assert!(save_recents(Some(&inner), &recents));
+        assert_eq!(load_recents(Some(&inner)), recents);
+        // No temporary file is left behind.
+        let names: Vec<_> = std::fs::read_dir(&inner)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from("emoji-recents")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_state_file_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = recents_dir("recents-mode");
+        assert!(save_recents(Some(&dir), &Default::default()));
+        let mode = std::fs::metadata(dir.join("emoji-recents"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_oversized_or_odd_state_file_reads_as_empty() {
+        use crate::app::emoji_recents::{MAX_FILE_BYTES, Recents};
+        let dir = recents_dir("recents-bad");
+        // Missing, and no directory at all.
+        assert_eq!(load_recents(Some(&dir)), Recents::default());
+        assert_eq!(load_recents(None), Recents::default());
+        // Larger than 64 KiB: not read, even though every line is good.
+        let big: String = (0..=(MAX_FILE_BYTES / 8))
+            .map(|n| format!("e{n} 1 1\n"))
+            .collect();
+        assert!(big.len() as u64 > MAX_FILE_BYTES);
+        std::fs::write(dir.join("emoji-recents"), big).unwrap();
+        assert_eq!(load_recents(Some(&dir)), Recents::default());
+        // Not UTF-8.
+        std::fs::write(dir.join("emoji-recents"), [0xff, 0xfe, 0x00]).unwrap();
+        assert_eq!(load_recents(Some(&dir)), Recents::default());
+        // A directory where the file should be.
+        std::fs::remove_file(dir.join("emoji-recents")).unwrap();
+        std::fs::create_dir(dir.join("emoji-recents")).unwrap();
+        assert_eq!(load_recents(Some(&dir)), Recents::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_state_directory_that_cannot_be_written_is_not_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = recents_dir("recents-readonly");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let inner = dir.join("rockettui");
+        // Running as root ignores the mode, so only the answer of a refusing directory is checked.
+        let saved = save_recents(Some(&inner), &Default::default());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !saved {
+            assert!(!inner.join("emoji-recents").exists());
+        }
+        assert!(!save_recents(None, &Default::default()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn load_history_effect() -> Effect {

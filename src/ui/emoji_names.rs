@@ -13,10 +13,12 @@
 //! The table is a measurement of the server version the probe ran against.
 
 mod data;
+mod tone_data;
 
 use data::{SEND_AS, UNSENDABLE};
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use tone_data::TONE_REFUSED;
 
 /// The other direction: a name the server uses for an emoji, to the first shortcode the crate
 /// knows it by. Built once from `SEND_AS`.
@@ -48,6 +50,36 @@ pub fn send_name(first: &'static str) -> Option<&'static str> {
             .find(|(from, _)| *from == first)
             .map_or(first, |(_, to)| *to),
     )
+}
+
+/// True when the server accepts `<name>_tone1..5` for the emoji whose first shortcode is `first`.
+/// `tone_data` (a second probe, `--tones`) lists the exceptions; an emoji without tones is not one.
+pub fn tone_sendable(first: &str) -> bool {
+    !TONE_REFUSED.contains(&first)
+}
+
+/// The name to send for the emoji whose first shortcode is `first` in skin tone `tone` (1 to 5):
+/// the name it is sent under plus `_tone<N>`. `None` when the emoji is not offered at all, when the
+/// tone is not 1 to 5 or when the server refuses its toned names.
+pub fn tone_name(first: &'static str, tone: u8) -> Option<String> {
+    tone_name_unless(first, tone, TONE_REFUSED)
+}
+
+/// `tone_name` against a given list of refused emoji, so a test can name one.
+fn tone_name_unless(first: &'static str, tone: u8, refused: &[&str]) -> Option<String> {
+    if !(1..=5).contains(&tone) || refused.contains(&first) {
+        return None;
+    }
+    send_name(first).map(|name| format!("{name}_tone{tone}"))
+}
+
+/// `name` with a `_tone<N>` ending cut off, when `name` has one: what a toned name is a
+/// variant of. Returns `name` itself otherwise.
+pub fn strip_tone(name: &str) -> &str {
+    match name.rsplit_once("_tone") {
+        Some((base, n)) if !base.is_empty() && matches!(n, "1" | "2" | "3" | "4" | "5") => base,
+        _ => name,
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +129,71 @@ mod tests {
     fn a_renamed_emoji_is_sent_under_the_name_the_server_accepted() {
         assert_eq!(send_name("afghanistan"), Some("flag_af"));
         assert_eq!(send_name("hand"), Some("raised_hand"));
+    }
+
+    #[test]
+    fn a_toned_name_is_the_sent_name_plus_the_tone() {
+        assert_eq!(tone_name("+1", 2).as_deref(), Some("+1_tone2"));
+        assert_eq!(tone_name("+1", 0), None);
+        assert_eq!(tone_name("+1", 6), None);
+    }
+
+    #[test]
+    fn a_toned_name_follows_the_name_the_server_wants() {
+        // `hand` is sent as `raised_hand`, so its toned name is built from that.
+        assert_eq!(tone_name("hand", 3).as_deref(), Some("raised_hand_tone3"));
+    }
+
+    #[test]
+    fn an_emoji_whose_toned_name_the_server_refuses_has_no_toned_name() {
+        assert_eq!(tone_name_unless("+1", 2, &["+1"]), None);
+        assert_eq!(
+            tone_name_unless("+1", 2, &["wave"]).as_deref(),
+            Some("+1_tone2")
+        );
+        // Nothing in the generated list is an unknown emoji or one listed twice.
+        let mut seen = std::collections::HashSet::new();
+        for first in TONE_REFUSED {
+            let emoji = emojis::get_by_shortcode(first)
+                .unwrap_or_else(|| panic!("TONE_REFUSED names an unknown emoji: {first}"));
+            assert!(
+                emoji.with_skin_tone(emojis::SkinTone::Light).is_some(),
+                "{first}"
+            );
+            assert!(seen.insert(*first), "{first} twice");
+            assert!(!tone_sendable(first));
+        }
+    }
+
+    #[test]
+    fn a_tone_ending_is_cut_off_only_when_it_is_one() {
+        assert_eq!(strip_tone("+1_tone2"), "+1");
+        assert_eq!(strip_tone("raised_hand_tone5"), "raised_hand");
+        assert_eq!(strip_tone("+1_tone6"), "+1_tone6");
+        assert_eq!(strip_tone("_tone2"), "_tone2");
+        assert_eq!(strip_tone("tada"), "tada");
+    }
+
+    /// Not a test: writes `first<TAB>sent name` for every emoji with skin tones to the file named by
+    /// `EMOJI_TONES`, for `dev/probe_react_names.py --tones`. Run with
+    /// `EMOJI_TONES=/tmp/tones.tsv cargo test --lib dump_toned_names -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dump_toned_names() {
+        let path = std::env::var("EMOJI_TONES").expect("EMOJI_TONES names the output file");
+        let mut out = String::new();
+        for emoji in emojis::iter() {
+            let Some(first) = emoji.shortcodes().next() else {
+                continue;
+            };
+            let Some(sent) = send_name(first) else {
+                continue;
+            };
+            if emoji.with_skin_tone(emojis::SkinTone::Light).is_some() {
+                out.push_str(&format!("{first}\t{sent}\n"));
+            }
+        }
+        std::fs::write(path, out).expect("write the dump");
     }
 
     /// Not a test: writes `glyph<TAB>first<TAB>second<TAB>..` for every emoji with a shortcode to the

@@ -141,6 +141,12 @@ impl EmojiView<'_> {
 }
 
 impl Images {
+    /// How many emoji were asked for so far, for tests.
+    #[cfg(test)]
+    pub fn requested_count(&self) -> usize {
+        self.requested.len()
+    }
+
     /// Put `state` for `name`, for tests that draw with an image in a given state.
     #[cfg(test)]
     pub fn set_state(&mut self, name: &str, state: ImageState) {
@@ -278,10 +284,10 @@ pub fn request_images(app: &mut App) {
             }
         }
     }
-    // The rows of the reaction picker that are on screen: the custom emojis it offers.
+    // The rows of the reaction picker's grid that are on screen: the custom emojis it offers.
     if let Some(view) = crate::app::react::view(app) {
-        let from = view.selected.saturating_sub(15);
-        for candidate in view.candidates.iter().skip(from).take(40) {
+        let visible = crate::ui::picker::visible_cells(app, &view);
+        for candidate in &view.candidates[visible] {
             if let Some(crate::ui::emoji::Found::Custom(own)) = crate::ui::emoji::lookup_found(
                 &candidate.name,
                 &app.settings.emoji_aliases,

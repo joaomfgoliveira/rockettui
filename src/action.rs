@@ -273,6 +273,9 @@ pub enum Action {
     CustomEmojisLoaded(Vec<crate::data::CustomEmoji>),
     /// The custom emojis could not be fetched; the picker goes on without them.
     CustomEmojisFailed,
+    /// The emoji box's state file was read (`Effect::LoadRecents`): empty when it was missing or
+    /// unusable.
+    RecentsLoaded(crate::app::emoji_recents::Recents),
     /// The image of a custom emoji was fetched and decoded (`Effect::FetchEmojiImage`).
     EmojiImageReady {
         emoji: crate::effect::EmojiRef,
@@ -514,6 +517,7 @@ impl std::fmt::Debug for Action {
             Action::ReactFailed { error } => write!(f, "ReactFailed({error:?})"),
             Action::CustomEmojisLoaded(list) => write!(f, "CustomEmojisLoaded(<{}>)", list.len()),
             Action::CustomEmojisFailed => write!(f, "CustomEmojisFailed"),
+            Action::RecentsLoaded(recents) => write!(f, "RecentsLoaded({recents:?})"),
             Action::EmojiImageReady { emoji, image } => {
                 write!(f, "EmojiImageReady({emoji:?}, {image:?})")
             }
