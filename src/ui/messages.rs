@@ -88,16 +88,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
     let ctx = app.pane_row_ctx(room, msgs);
+    let joins = wrap::continuation_flags(msgs, &ctx);
     for (i, msg) in msgs.iter().enumerate() {
-        // The divider belongs to the message below it but is not part of its highlight.
+        // The dividers belong to the message below them but are not part of its highlight.
         let prev = i.checked_sub(1).map(|p| &msgs[p]);
-        lines.extend(wrap::divider_row(msg, prev, inner.width, &ctx));
-        lines.extend(wrap::unread_row(msg, inner.width, &ctx));
-        let rows = wrap::render_rows(msg, inner.width, &ctx);
+        let (dividers, block) = wrap::block_lines(msg, prev, joins[i], inner.width, &ctx);
         if i == v.cursor {
-            cursor_rows = lines.len()..lines.len() + rows.len();
+            cursor_rows = lines.len() + dividers..lines.len() + block.len();
         }
-        lines.extend(rows);
+        lines.extend(block);
     }
     // The default highlights set no foreground, so author colors survive on the cursor rows
     // (REVERSED swaps them into the background). A theme.toml fg on messages.cursor or
@@ -1610,5 +1609,153 @@ mod tests {
                 .contains("deploy done 🎉")
         );
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    // --- message grouping -------------------------------------------------------------------
+
+    const NOON: i64 = 1_767_268_800;
+
+    fn gmsg(id: &str, author: &str, ts: i64) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: RoomId("quiet".to_string()),
+            author: author.to_string(),
+            ts,
+            body: format!("text {id}"),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+            edited: false,
+            plain_text: true,
+            reactions: Vec::new(),
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
+            followers: None,
+        }
+    }
+
+    /// `quiet` open in the two-line layout with a burst by bob (3 messages, a minute apart), the
+    /// same author 20 minutes later, then alice.
+    fn grouped_app() -> App {
+        let mut app = App::with_fake_data(Size::new(80, 25));
+        let room = RoomId("quiet".to_string());
+        app.message_layout = crate::ui::wrap::MessageLayout::TwoLine;
+        app.own_username = Some("bob".to_string());
+        app.messages.insert(
+            room.clone(),
+            vec![
+                gmsg("1", "bob", NOON),
+                gmsg("2", "bob", NOON + 60),
+                gmsg("3", "bob", NOON + 120),
+                gmsg("4", "bob", NOON + 120 + 1200),
+                gmsg("5", "alice", NOON + 120 + 1210),
+            ],
+        );
+        app.open_room(room);
+        app
+    }
+
+    fn count_in(lines: &[String], needle: &str) -> usize {
+        lines.iter().filter(|l| l.contains(needle)).count()
+    }
+
+    #[test]
+    fn a_burst_shares_one_header_and_a_gap_or_author_starts_another() {
+        let app = grouped_app();
+        let lines = pane_lines(&render_pane(&app));
+        // Headers: bob (burst), bob (after the gap), alice. Every body is drawn.
+        assert_eq!(count_in(&lines, "bob"), 2, "{lines:#?}");
+        assert_eq!(count_in(&lines, "alice"), 1, "{lines:#?}");
+        for id in 1..=5 {
+            assert_eq!(count_in(&lines, &format!("text {id}")), 1, "{lines:#?}");
+        }
+        // The first header carries the first message's time; grouped bodies carry none.
+        let first = lines
+            .iter()
+            .position(|l| l.contains("bob"))
+            .expect("header");
+        assert!(lines[first].ends_with("12:00"), "{lines:#?}");
+        assert!(lines[first + 1].starts_with("text 1"), "{lines:#?}");
+        assert!(lines[first + 2].starts_with("text 2"), "{lines:#?}");
+        assert!(lines[first + 3].starts_with("text 3"), "{lines:#?}");
+    }
+
+    #[test]
+    fn row_starts_agrees_with_the_rows_drawn() {
+        let app = grouped_app();
+        let room = RoomId("quiet".to_string());
+        let starts = row_starts(&app, &room);
+        let msgs = &app.messages[&room];
+        let ctx = app.pane_row_ctx(&room, msgs);
+        let (width, _) = crate::app::messages::viewport(&app);
+        let joins = crate::ui::wrap::continuation_flags(msgs, &ctx);
+        let mut drawn = 0;
+        for (i, m) in msgs.iter().enumerate() {
+            assert_eq!(starts[i], drawn, "message {i}");
+            let prev = i.checked_sub(1).map(|p| &msgs[p]);
+            drawn += crate::ui::wrap::block_lines(m, prev, joins[i], width, &ctx)
+                .1
+                .len();
+        }
+        assert_eq!(starts[msgs.len()], drawn);
+        // Grouping saved the two headers of the burst.
+        let off = {
+            let mut app = grouped_app();
+            app.settings.message_grouping_seconds = 0;
+            row_starts(&app, &room)
+        };
+        assert_eq!(off[msgs.len()], drawn + 2);
+    }
+
+    #[test]
+    fn the_cursor_steps_over_a_group_and_highlights_only_its_rows() {
+        let mut app = grouped_app();
+        let room = RoomId("quiet".to_string());
+        press(&mut app, "3gg");
+        assert_eq!(view(&app, &room).cursor, 2);
+        press(&mut app, "k");
+        assert_eq!(view(&app, &room).cursor, 1);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let reversed = |y: u16| buffer[(1, y)].modifier.contains(Modifier::REVERSED);
+        let marked: Vec<String> = (1..buffer.area.height - 1)
+            .filter(|&y| reversed(y))
+            .map(|y| row_text(&terminal, y).trim().to_string())
+            .collect();
+        assert_eq!(marked.len(), 1, "{marked:?}");
+        assert!(marked[0].contains("text 2"), "{marked:?}");
+    }
+
+    #[test]
+    fn delete_acts_on_the_message_under_the_cursor_in_a_group() {
+        let mut app = grouped_app();
+        press(&mut app, "2gg");
+        press(&mut app, "dd");
+        match &app.confirm {
+            Some(crate::app::edit::Confirm::Delete { id, .. }) => assert_eq!(id, "2"),
+            other => panic!("no delete prompt: {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn compact_layout_is_not_grouped() {
+        let mut app = grouped_app();
+        app.message_layout = crate::ui::wrap::MessageLayout::Compact;
+        let lines = pane_lines(&render_pane(&app));
+        assert_eq!(count_in(&lines, "bob"), 4, "{lines:#?}");
+    }
+
+    #[test]
+    fn a_live_message_continues_the_newest_group() {
+        let mut app = grouped_app();
+        let room = RoomId("quiet".to_string());
+        app.messages
+            .get_mut(&room)
+            .expect("room")
+            .push(gmsg("6", "alice", NOON + 120 + 1220));
+        let lines = pane_lines(&render_pane(&app));
+        assert_eq!(count_in(&lines, "alice"), 1, "{lines:#?}");
+        assert_eq!(count_in(&lines, "text 6"), 1, "{lines:#?}");
     }
 }

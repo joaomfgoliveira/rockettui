@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Display settings
-`config.toml` SHALL support `keymap_preset` (`vim` or `vim-extras`), `sidebar_width` (10-60), `history_size` (1-1000, default 50), `timestamp_format` (strftime-style, default `%H:%M`), `message_layout` (`compact` by default, or `two_line`), `key_timeout_ms` (100-5000, default 1000) and `mark_read_delay_ms` (0-60000, default 3000; `0` marks an open room read at once) and `message_grouping_seconds` (0-3600, default 300; `0` turns message grouping off, see `message-grouping`). Out-of-range or invalid values SHALL be config errors.
+`config.toml` SHALL support `keymap_preset` (`vim` or `vim-extras`), `sidebar_width` (10-60), `history_size` (1-1000, default 50), `timestamp_format` (strftime-style, default `%H:%M`), `message_layout` (`compact` by default, or `two_line`), `key_timeout_ms` (100-5000, default 1000) and `mark_read_delay_ms` (0-60000, default 3000; `0` marks an open room read at once) and `message_grouping_seconds` (0-3600, default 180; `0` turns message grouping off, see `message-grouping`). Out-of-range or invalid values SHALL be config errors.
 
 #### Scenario: Sidebar width
 - **WHEN** the user sets `sidebar_width = 40`

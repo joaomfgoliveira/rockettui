@@ -467,13 +467,20 @@ impl App {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
         }
+    }
+
+    /// The grouping gap of the lists that group: `message_grouping_seconds`, `None` when it is 0.
+    fn grouping(&self) -> Option<u32> {
+        Some(self.settings.message_grouping_seconds).filter(|&s| s > 0)
     }
 
     /// `row_ctx` for the thread pane: the same, with replies drawn without the channel tag.
     pub fn thread_row_ctx(&self, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
         ctx.in_thread = true;
+        ctx.grouping = self.grouping();
         ctx.unread_threads = self
             .thread
             .as_ref()
@@ -495,6 +502,9 @@ impl App {
     pub fn pane_row_ctx(&self, room: &RoomId, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
         ctx.unread_before = read::divider_before(self, room);
+        if self.message_layout == crate::ui::wrap::MessageLayout::TwoLine {
+            ctx.grouping = self.grouping();
+        }
         ctx.unread_threads = self.unread_threads_of(room);
         ctx
     }
@@ -894,5 +904,24 @@ mod tests {
         assert_eq!(App::new(Size::new(80, 24)).zone, Zone::Utc);
         let app = app_with_config(config_from_toml("sidebar_width = 30\n"), 80, 24);
         assert_eq!(app.zone, Zone::Utc);
+    }
+
+    #[test]
+    fn only_the_room_pane_in_two_line_and_the_thread_pane_group() {
+        let mut app = App::new(Size::new(80, 24));
+        let room = RoomId("general".to_string());
+        // The room pane follows the layout.
+        assert_eq!(app.pane_row_ctx(&room, &[]).grouping, None);
+        app.message_layout = crate::ui::wrap::MessageLayout::TwoLine;
+        assert_eq!(app.pane_row_ctx(&room, &[]).grouping, Some(180));
+        // The thread pane always groups; every other list never does.
+        app.message_layout = crate::ui::wrap::MessageLayout::Compact;
+        assert_eq!(app.thread_row_ctx(&[]).grouping, Some(180));
+        app.message_layout = crate::ui::wrap::MessageLayout::TwoLine;
+        assert_eq!(app.row_ctx(&[]).grouping, None, "results and context");
+        // 0 turns it off everywhere.
+        app.settings.message_grouping_seconds = 0;
+        assert_eq!(app.pane_row_ctx(&room, &[]).grouping, None);
+        assert_eq!(app.thread_row_ctx(&[]).grouping, None);
     }
 }

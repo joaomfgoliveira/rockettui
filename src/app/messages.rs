@@ -85,9 +85,10 @@ pub fn view(app: &App, room: &RoomId) -> MsgView {
 pub fn row_starts_of(msgs: &[Message], width: u16, ctx: &RowCtx) -> Vec<usize> {
     let mut starts = vec![0];
     let mut total = 0;
+    let joins = wrap::continuation_flags(msgs, ctx);
     for (i, msg) in msgs.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &msgs[p]);
-        total += wrap::block_rows(msg, prev, width, ctx);
+        total += wrap::block_rows(msg, prev, joins[i], width, ctx);
         starts.push(total);
     }
     starts
@@ -425,10 +426,13 @@ mod tests {
         let (width, _) = viewport(&app);
         let msgs = &app.messages[&general()];
         let ctx = app.row_ctx(msgs);
+        let joins = wrap::continuation_flags(msgs, &ctx);
         let expected: usize = msgs
             .iter()
             .enumerate()
-            .map(|(i, m)| wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), width, &ctx))
+            .map(|(i, m)| {
+                wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), joins[i], width, &ctx)
+            })
             .sum();
         let starts = row_starts(&app, &general());
         assert_eq!(starts.last().copied(), Some(expected));
@@ -718,10 +722,13 @@ mod tests {
             let (width, _) = viewport(&app);
             let msgs = &app.messages[&general()];
             let ctx = app.row_ctx(msgs);
+            let joins = wrap::continuation_flags(msgs, &ctx);
             let expected: usize = msgs
                 .iter()
                 .enumerate()
-                .map(|(i, m)| wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), width, &ctx))
+                .map(|(i, m)| {
+                    wrap::block_rows(m, i.checked_sub(1).map(|p| &msgs[p]), joins[i], width, &ctx)
+                })
                 .sum();
             let starts = row_starts(&app, &general());
             assert_eq!(starts.last().copied(), Some(expected), "{w}x{h}");

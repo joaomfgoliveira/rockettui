@@ -67,14 +67,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let ctx = app.thread_row_ctx(msgs);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_rows = 0..0;
+    let joins = wrap::continuation_flags(msgs, &ctx);
     for (i, msg) in msgs.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &msgs[p]);
-        lines.extend(wrap::divider_row(msg, prev, inner.width, &ctx));
-        let rows = wrap::render_rows(msg, inner.width, &ctx);
+        let (dividers, block) = wrap::block_lines(msg, prev, joins[i], inner.width, &ctx);
         if i == v.cursor {
-            cursor_rows = lines.len()..lines.len() + rows.len();
+            cursor_rows = lines.len() + dividers..lines.len() + block.len();
         }
-        lines.extend(rows);
+        lines.extend(block);
     }
     if let Some(text) = status {
         lines.push(Line::styled(text, notice));
@@ -311,6 +311,26 @@ mod tests {
         assert!(column[1].contains("1970-01-02"), "{column:?}");
         // The header shows the hour only.
         assert!(!out.contains("1970-01-01 00:"), "{out}");
+    }
+
+    #[test]
+    fn the_pane_groups_replies_by_one_author_and_off_turns_it_off() {
+        let mut app = app_with_thread(160, 24);
+        if let Some(pane) = app.thread.as_mut() {
+            // Both replies by bob, a minute apart: the second continues the first.
+            pane.messages[2].author = "bob".to_string();
+            pane.messages[2].ts = 180;
+        }
+        let headers = |app: &App| {
+            render_to_string(app, 160, 24)
+                .lines()
+                .map(|l| l.rsplit('┃').nth(1).unwrap_or("").to_string())
+                .filter(|l| l.contains("bob"))
+                .count()
+        };
+        assert_eq!(headers(&app), 1);
+        app.settings.message_grouping_seconds = 0;
+        assert_eq!(headers(&app), 2);
     }
 
     #[test]

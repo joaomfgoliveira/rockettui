@@ -6,9 +6,9 @@ Someone who sends several messages in a row gets a full author and time header f
 
 ## What Changes
 
-- In the two-line layout, a message that follows another from the same author within a configurable gap is drawn without its own header row: the author and time show once, and each message body sits under it, indented as before.
+- In the two-line layout, a message that follows another from the same author within a configurable gap of the group's first message is drawn without its own header row: the author and time show once, and each message body sits under it, indented as before.
 - A message after a longer gap, from another author, across a day change, or after an unread divider starts a new group with its own header and time.
-- A new `config.toml` key `message_grouping_seconds` sets the gap (default 300; `0` turns grouping off; out of range or invalid values are config errors).
+- A new `config.toml` key `message_grouping_seconds` sets the gap (default 180; `0` turns grouping off; out of range or invalid values are config errors).
 - Grouping applies to the room's message pane and to the thread pane. The compact layout, the search results list and the search-result context view are unchanged.
 - The cursor, selection, edit, delete and reaction keys keep acting on one message at a time, grouped or not.
 

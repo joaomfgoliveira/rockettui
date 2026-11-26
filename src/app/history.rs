@@ -846,6 +846,44 @@ mod tests {
     }
 
     #[test]
+    fn older_page_above_a_group_keeps_the_cursor_message_where_it_was() {
+        let mut app = loaded_general();
+        app.message_layout = crate::ui::wrap::MessageLayout::TwoLine;
+        let room = rid("r-general");
+        press(&mut app, "gg");
+        press(&mut app, "2j");
+        // Away from the epoch's midnight, so no day divider falls inside the run.
+        for m in app.messages.get_mut(&room).expect("room") {
+            m.ts += 1_000_000;
+        }
+        let id = app.messages[&room][2].id.clone();
+        let before = messages::view(&app, &room);
+        let starts = messages::row_starts(&app, &room);
+        let offset = starts[before.cursor] as isize - before.top_row as isize;
+
+        // The older page ends a minute before the first held message, by the same author, so the
+        // held first message now continues it and loses its header row.
+        let older: Vec<Message> = run("a", 0, 50)
+            .into_iter()
+            .map(|m| Message {
+                ts: m.ts + 1_000_000 - 100,
+                ..m
+            })
+            .collect();
+        update(&mut app, older_action(older, Some("x")));
+        let held = &app.messages[&room];
+        let ctx = app.pane_row_ctx(&room, held);
+        assert!(crate::ui::wrap::continuation_flags(held, &ctx)[50]);
+        let after = messages::view(&app, &room);
+        assert_eq!(held[after.cursor].id, id);
+        let starts = messages::row_starts(&app, &room);
+        assert_eq!(
+            starts[after.cursor] as isize - after.top_row as isize,
+            offset
+        );
+    }
+
+    #[test]
     fn older_prepend_keeps_screen_row_when_cursor_moved_down() {
         let mut app = loaded_general();
         press(&mut app, "gg");

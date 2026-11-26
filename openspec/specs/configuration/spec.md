@@ -28,7 +28,7 @@ Unknown keys and sections SHALL be ignored on a normal start, and listed as warn
 - **THEN** the app starts normally
 
 ### Requirement: Display settings
-`config.toml` SHALL support `keymap_preset` (`vim` or `vim-extras`), `sidebar_width` (10-60), `history_size` (1-1000, default 50), `timestamp_format` (strftime-style, default `%H:%M`), `message_layout` (`compact` by default, or `two_line`), `key_timeout_ms` (100-5000, default 1000) and `mark_read_delay_ms` (0-60000, default 3000; `0` marks an open room read at once). Out-of-range or invalid values SHALL be config errors.
+`config.toml` SHALL support `keymap_preset` (`vim` or `vim-extras`), `sidebar_width` (10-60), `history_size` (1-1000, default 50), `timestamp_format` (strftime-style, default `%H:%M`), `message_layout` (`compact` by default, or `two_line`), `key_timeout_ms` (100-5000, default 1000) and `mark_read_delay_ms` (0-60000, default 3000; `0` marks an open room read at once) and `message_grouping_seconds` (0-3600, default 180; `0` turns message grouping off, see `message-grouping`). Out-of-range or invalid values SHALL be config errors.
 
 #### Scenario: Sidebar width
 - **WHEN** the user sets `sidebar_width = 40`
@@ -36,6 +36,14 @@ Unknown keys and sections SHALL be ignored on a normal start, and listed as warn
 
 #### Scenario: Invalid width
 - **WHEN** the user sets `sidebar_width = 5`
+- **THEN** the error screen reports the value and the allowed range
+
+#### Scenario: Grouping gap
+- **WHEN** the user sets `message_grouping_seconds = 120`
+- **THEN** messages of one author more than 2 minutes apart have their own headers
+
+#### Scenario: Invalid grouping gap
+- **WHEN** the user sets `message_grouping_seconds = 100000`
 - **THEN** the error screen reports the value and the allowed range
 
 #### Scenario: Mark read delay
@@ -47,7 +55,11 @@ Unknown keys and sections SHALL be ignored on a normal start, and listed as warn
 - **THEN** the error screen reports the value and the allowed range
 
 ### Requirement: Timestamps in local time
-The app SHALL render message timestamps in the system local time using the configured format. A message row SHALL show only its time. A divider line with the date as `YYYY-MM-DD` in the local time zone SHALL be drawn above the first message of each day, including the first message of the list, wherever the messages pane or the results list shows messages.
+The app SHALL render message timestamps in the system local time using the configured format. A message header SHALL show only its time; a message that continues a group (see `message-grouping`) has no header and so shows no time of its own. A divider line with the date as `YYYY-MM-DD` in the local time zone SHALL be drawn above the first message of each day, including the first message of the list, wherever the messages pane or the results list shows messages.
+
+#### Scenario: Grouped message
+- **WHEN** a message continues the one before it
+- **THEN** it shows no time and the group's header shows the time of its first message
 
 #### Scenario: Custom format
 - **WHEN** `timestamp_format = "%H:%M:%S"`
