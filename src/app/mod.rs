@@ -442,10 +442,31 @@ impl App {
     pub fn emoji_view(&self) -> emoji::EmojiView<'_> {
         emoji::EmojiView {
             custom: &self.custom_emojis,
+            aliases: &self.settings.emoji_aliases,
             images: &self.images,
             graphics: self.graphics,
             now_ms: self.anim_ms,
         }
+    }
+
+    /// The live draft with the emoji view, borrowed apart so that an edit can read the one while it
+    /// changes the other.
+    pub fn input_and_view(&mut self) -> (&mut input_buf::InputBuffer, emoji::EmojiView<'_>) {
+        let view = emoji::EmojiView {
+            custom: &self.custom_emojis,
+            aliases: &self.settings.emoji_aliases,
+            images: &self.images,
+            graphics: self.graphics,
+            now_ms: self.anim_ms,
+        };
+        (&mut self.input, view)
+    }
+
+    /// Keep the live draft's view on its cursor and the cursor on a unit edge.
+    pub fn settle_input(&mut self) {
+        let (width, height) = self.input_viewport();
+        let (input, view) = self.input_and_view();
+        input.settle(width, height, &view);
     }
 
     /// The row context for `msgs`: layout, author and time columns, time format, zone and theme. It is
@@ -535,7 +556,7 @@ impl App {
     /// `MAX_INPUT_ROWS`.
     pub fn input_rows(&self) -> u16 {
         let width = self.probe_areas().input.width.saturating_sub(2);
-        Self::rows_of(self.room_bar_buffer(), width)
+        Self::rows_of(self.room_bar_buffer(), width, &self.emoji_view())
     }
 
     /// Content rows of the thread's own input bar, 1 while it has none.
@@ -543,11 +564,19 @@ impl App {
         let Some(bar) = self.probe_areas().thread_input else {
             return 1;
         };
-        Self::rows_of(self.thread_bar_buffer(), bar.width.saturating_sub(2))
+        Self::rows_of(
+            self.thread_bar_buffer(),
+            bar.width.saturating_sub(2),
+            &self.emoji_view(),
+        )
     }
 
-    fn rows_of(buffer: Option<&input_buf::InputBuffer>, width: u16) -> u16 {
-        let rows = buffer.map_or(1, |b| b.visual_row_count(width));
+    fn rows_of(
+        buffer: Option<&input_buf::InputBuffer>,
+        width: u16,
+        view: &emoji::EmojiView,
+    ) -> u16 {
+        let rows = buffer.map_or(1, |b| b.visual_row_count(width, view));
         u16::try_from(rows)
             .unwrap_or(u16::MAX)
             .clamp(1, input_buf::MAX_INPUT_ROWS)
@@ -624,8 +653,7 @@ impl App {
             self.current_room = Some(id);
             read::on_open(self);
             emoji::ensure_loaded(self);
-            let (width, height) = self.input_viewport();
-            self.input.settle(width, height);
+            self.settle_input();
         }
         self.focus = Focus::Messages;
     }

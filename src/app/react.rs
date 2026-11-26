@@ -1123,7 +1123,7 @@ fn fall_through(app: &mut App, text: &str) {
     let Some(picker) = app.emoji_box.take() else {
         return;
     };
-    edit_input(app, |input| {
+    edit_input(app, |input, _| {
         input.insert_str(&picker.query);
         input.insert_str(text);
     });
@@ -1145,9 +1145,9 @@ fn insert_selected(app: &mut App) {
     app.emoji_recents.record(&counted);
     app.effects
         .push(Effect::SaveRecents(app.emoji_recents.clone()));
-    edit_input(app, |input| {
+    edit_input(app, |input, view| {
         if input.text_before_cursor().ends_with(':') {
-            input.backspace();
+            input.backspace(view);
         }
         input.insert_str(&text);
     });

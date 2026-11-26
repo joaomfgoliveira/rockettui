@@ -3,11 +3,11 @@
 
 use crate::app::input_buf::InputBuffer;
 use crate::app::{App, Focus, InputTarget, Mode};
+use crate::ui::emoji::{expand, keep_image_ids};
 use crate::ui::pane_block;
-use crate::ui::sanitize::sanitize_line;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 /// Where the hardware cursor goes: on the draft in Insert mode and in Normal mode while the
@@ -24,8 +24,9 @@ fn cursor_in(app: &App, area: Rect, buffer: &InputBuffer) -> Option<Position> {
     if !editing || inner.width == 0 || inner.height == 0 {
         return None;
     }
-    let (x, y) = buffer.cursor_visual(inner.width);
-    let top = u16::try_from(buffer.view_top(inner.width, inner.height)).unwrap_or(u16::MAX);
+    let view = app.emoji_view();
+    let (x, y) = buffer.cursor_visual(inner.width, &view);
+    let top = u16::try_from(buffer.view_top(inner.width, inner.height, &view)).unwrap_or(u16::MAX);
     Some(Position::new(
         inner.x + x.min(inner.width - 1),
         inner.y + y.saturating_sub(top).min(inner.height - 1),
@@ -95,17 +96,25 @@ fn bar(
     }
     match buffer.filter(|b| !b.is_empty()) {
         Some(buffer) => {
-            let top = buffer.view_top(inner.width, inner.height);
-            // The buffer is already sanitized; drawing through sanitize_line keeps the
-            // every-renderer rule of T-01-01 and leaves the cursor math untouched.
+            let view = app.emoji_view();
+            let top = buffer.view_top(inner.width, inner.height, &view);
+            // `drawn_rows` cleans the text it draws (T-01-01) and swaps each custom emoji for the
+            // cells of its image or stand-in, which `expand` turns into what is painted, as for
+            // a message. The cursor math reads the same units, so it stays where the text ends.
+            let mut inside = false;
             let rows: Vec<Line> = buffer
-                .visual_rows(inner.width)
-                .iter()
+                .drawn_rows(inner.width, &view)
+                .into_iter()
                 .skip(top)
                 .take(usize::from(inner.height))
-                .map(|row| Line::styled(sanitize_line(row).into_owned(), app.theme.input_text))
+                .map(|row| {
+                    let spans = vec![Span::styled(row, app.theme.input_text)];
+                    let spans = expand(spans, app.theme.messages_custom_emoji, &mut inside);
+                    Line::from(spans).style(app.theme.input_text)
+                })
                 .collect();
             frame.render_widget(Paragraph::new(rows), inner);
+            keep_image_ids(frame.buffer_mut(), inner);
         }
         None if live && app.mode == Mode::Insert => {}
         None => {
@@ -211,5 +220,121 @@ mod tests {
         for x in area.x + 1..area.x + 3 {
             assert_eq!(buffer[(x, area.y + 1)].fg, Color::Indexed(2), "cell {x}");
         }
+    }
+
+    // ---- custom emojis in the draft (draft-emoji) ----
+
+    use crate::app::emoji::{CustomEmojis, Graphics, ImageState};
+
+    fn emoji_app(size: (u16, u16), graphics: Graphics, image: bool, draft: &str) -> App {
+        let mut app = App::new(ratatui::layout::Size::new(size.0, size.1));
+        app.graphics = graphics;
+        app.custom_emojis = CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+            name: "rtshipit".to_string(),
+            aliases: vec!["rtship".to_string()],
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        if image {
+            app.images.set_state(
+                "rtshipit",
+                ImageState::Ready {
+                    etag: String::new(),
+                    image: crate::emoji_image::Rgba {
+                        width: 1,
+                        height: 1,
+                        pixels: vec![0, 0, 0, 255].into(),
+                        ..Default::default()
+                    },
+                    id: 9,
+                    uploaded: true,
+                },
+            );
+        }
+        press(&mut app, "<C-w>ji");
+        app.input.insert_str(draft);
+        app
+    }
+
+    /// The rows of the input bar, as drawn.
+    fn bar_rows(app: &App, size: (u16, u16)) -> String {
+        let area = input_area(app);
+        render_to_string(app, size.0, size.1)
+            .lines()
+            .skip(usize::from(area.y))
+            .take(usize::from(area.height))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_custom_emoji_in_the_draft_is_drawn_as_its_image() {
+        let app = emoji_app((80, 24), Graphics::Supported, true, "ship it :rtshipit:");
+        let buffer = render_buffer(&app, 80, 24);
+        let area = input_area(&app);
+        let cells: Vec<(u16, Color)> = (area.x..area.right())
+            .map(|x| (x, &buffer[(x, area.y + 1)]))
+            .filter(|(_, c)| c.symbol().starts_with(crate::kitty::PLACEHOLDER))
+            .map(|(x, c)| (x, c.fg))
+            .collect();
+        // Two cells, side by side after "ship it " inside the border, carrying image id 9.
+        assert_eq!(cells.len(), 2, "{}", bar_rows(&app, (80, 24)));
+        assert_eq!(cells[0].0 + 1, cells[1].0);
+        assert_eq!(cells[0].0, area.x + 1 + 8);
+        assert_eq!(cells[0].1, Color::Rgb(0, 0, 9));
+        // The hardware cursor is two columns past the text before it, where the drawing ends.
+        assert_eq!(
+            cursor_position(&app, area),
+            Some(Position::new(area.x + 1 + 10, area.y + 1))
+        );
+        insta::assert_snapshot!(bar_rows(&app, (80, 24)));
+    }
+
+    #[test]
+    fn an_alias_is_drawn_like_the_name() {
+        let by_alias = emoji_app((80, 24), Graphics::Supported, true, "a :rtship:");
+        let by_name = emoji_app((80, 24), Graphics::Supported, true, "a :rtshipit:");
+        assert_eq!(bar_rows(&by_alias, (80, 24)), bar_rows(&by_name, (80, 24)));
+    }
+
+    #[test]
+    fn a_custom_emoji_without_its_image_is_two_stand_in_cells() {
+        let app = emoji_app((80, 24), Graphics::Supported, false, "ship it :rtshipit:");
+        let rows = bar_rows(&app, (80, 24));
+        assert!(!rows.contains("rtshipit"), "{rows}");
+        insta::assert_snapshot!(rows);
+    }
+
+    #[test]
+    fn a_terminal_without_images_draws_the_draft_as_written() {
+        let app = emoji_app((80, 24), Graphics::Unsupported, false, "ship it :rtshipit:");
+        let rows = bar_rows(&app, (80, 24));
+        assert!(rows.contains("ship it :rtshipit:"), "{rows}");
+        insta::assert_snapshot!(rows);
+    }
+
+    #[test]
+    fn a_narrow_bar_wraps_by_the_drawn_width_and_keeps_an_emoji_whole() {
+        let size = (50, 20);
+        let app = emoji_app(
+            size,
+            Graphics::Supported,
+            true,
+            "abc,:rtshipit::rtshipit: and a longer line of text :rtshipit:",
+        );
+        let buffer = render_buffer(&app, size.0, size.1);
+        let area = input_area(&app);
+        // Every row fits inside the border and every emoji has both of its cells on the same row.
+        for y in area.y + 1..area.bottom() - 1 {
+            let n = (area.x..area.right())
+                .filter(|&x| {
+                    buffer[(x, y)]
+                        .symbol()
+                        .starts_with(crate::kitty::PLACEHOLDER)
+                })
+                .count();
+            assert_eq!(n % 2, 0, "row {y}: {}", bar_rows(&app, size));
+        }
+        insta::assert_snapshot!(bar_rows(&app, size));
     }
 }

@@ -1,5 +1,12 @@
 //! Multiline input buffer for the input bar (D-14) with the Normal-mode motions of D-18.
-use crate::ui::sanitize::sanitize;
+//!
+//! The buffer holds plain text. The layout and the motions walk *units* instead of graphemes: a
+//! unit is a grapheme, or a custom emoji (`:name:`) that the bar draws as a two-column image
+//! (`draft-emoji`). What is a unit depends on the `EmojiView` (the list, the images, the terminal),
+//! so every function that lays out or moves takes one; `EmojiView::none()` gives plain graphemes.
+use crate::app::emoji::{EmojiView, Graphics, Look};
+use crate::ui::emoji::{Found, custom_cells, lookup_found, shortcode_spans};
+use crate::ui::sanitize::{sanitize, sanitize_line};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -7,6 +14,8 @@ use unicode_width::UnicodeWidthStr;
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 /// Most text rows the input bar shows before it scrolls (A3).
 pub const MAX_INPUT_ROWS: u16 = 5;
+/// Columns a drawn custom emoji takes, as in a message.
+const EMOJI_WIDTH: usize = 2;
 
 /// The draft of the input bar: at least one line, no line ever holds a line break, `col` is a byte
 /// index on a grapheme boundary and `top` is the stored first visible visual row.
@@ -44,44 +53,112 @@ fn display_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
 
-/// The grapheme boundary before `col` (0 when there is none).
-fn prev_boundary(line: &str, col: usize) -> usize {
-    line[..col]
-        .grapheme_indices(true)
-        .next_back()
-        .map_or(0, |(i, _)| i)
+/// One step of the layout: a byte range of a line, the columns it is drawn in, and for a drawn
+/// custom emoji the cells it is drawn as.
+#[derive(Clone, Debug)]
+struct Unit {
+    start: usize,
+    end: usize,
+    width: usize,
+    cells: Option<String>,
 }
 
-/// The grapheme boundary after `col` (the line end when there is none).
-fn next_boundary(line: &str, col: usize) -> usize {
-    line[col..]
-        .graphemes(true)
-        .next()
-        .map_or(line.len(), |g| col + g.len())
+/// The units of `line`: its graphemes, with each custom emoji that is drawn as an image (a
+/// shortcode that counts, of a custom emoji whose look is not its text) as one unit. `in_code` is
+/// the backtick state at the start of the line.
+fn units_of(line: &str, in_code: bool, view: &EmojiView) -> Vec<Unit> {
+    let spans = if line.contains(':')
+        && view.graphics == Graphics::Supported
+        && !view.custom.list().is_empty()
+    {
+        shortcode_spans(line, &mut { in_code }, |name| {
+            match lookup_found(name, view.aliases, view.custom) {
+                Some(Found::Custom(own)) => match view.look(&own) {
+                    Look::Text => None,
+                    look => Some(custom_cells(&own, look)),
+                },
+                _ => None,
+            }
+        })
+    } else {
+        Vec::new()
+    };
+    let mut spans = spans.into_iter().peekable();
+    let mut out = Vec::new();
+    let mut graphemes = line.grapheme_indices(true);
+    while let Some((i, g)) = graphemes.next() {
+        // A span that began inside an earlier unit is not on a grapheme edge: ignore it.
+        while spans.next_if(|(r, _)| r.start < i).is_some() {}
+        if let Some((range, cells)) = spans.next_if(|(r, _)| r.start == i) {
+            let mut end = i + g.len();
+            while end < range.end {
+                match graphemes.next() {
+                    Some((j, g2)) => end = j + g2.len(),
+                    None => break,
+                }
+            }
+            out.push(Unit {
+                start: i,
+                end,
+                width: EMOJI_WIDTH,
+                cells: Some(cells),
+            });
+        } else {
+            out.push(Unit {
+                start: i,
+                end: i + g.len(),
+                width: display_width(g),
+                cells: None,
+            });
+        }
+    }
+    out
 }
 
-/// The largest grapheme boundary at or before `col`.
-fn floor_boundary(line: &str, col: usize) -> usize {
-    let col = col.min(line.len());
-    line.grapheme_indices(true)
-        .map(|(i, _)| i)
-        .chain(std::iter::once(line.len()))
-        .take_while(|&i| i <= col)
-        .last()
+/// The unit edge before `col` (0 when there is none).
+fn prev_boundary(units: &[Unit], col: usize) -> usize {
+    units
+        .iter()
+        .rev()
+        .find(|u| u.start < col)
+        .map_or(0, |u| u.start)
+}
+
+/// The unit edge after `col` (`len` when there is none).
+fn next_boundary(units: &[Unit], col: usize, len: usize) -> usize {
+    units.iter().find(|u| u.end > col).map_or(len, |u| u.end)
+}
+
+/// The largest unit edge at or before `col`.
+fn floor_boundary(units: &[Unit], col: usize) -> usize {
+    units
+        .iter()
+        .flat_map(|u| [u.start, u.end])
+        .filter(|&edge| edge <= col)
+        .max()
         .unwrap_or(0)
 }
 
-/// The grapheme boundary of `line` whose display column is nearest to `target`; a tie goes left.
-fn col_at_display(line: &str, target: usize) -> usize {
+/// The columns drawn before `col`, which is on a unit edge.
+fn width_before(units: &[Unit], col: usize) -> usize {
+    units
+        .iter()
+        .take_while(|u| u.end <= col)
+        .map(|u| u.width)
+        .sum()
+}
+
+/// The unit edge whose display column is nearest to `target`; a tie goes left.
+fn col_at_display(units: &[Unit], target: usize) -> usize {
     let mut width = 0;
     let mut best_col = 0;
     let mut best_diff = target;
-    for (i, g) in line.grapheme_indices(true) {
-        width += display_width(g);
+    for u in units {
+        width += u.width;
         let diff = width.abs_diff(target);
         if diff < best_diff {
             best_diff = diff;
-            best_col = i + g.len();
+            best_col = u.end;
         }
     }
     best_col
@@ -94,29 +171,28 @@ struct Span {
     width: usize,
 }
 
-/// Hard-wrap `line` by display width at grapheme boundaries. Always at least one span; a grapheme
-/// wider than `width` gets a row of its own.
-fn wrap_spans(line: &str, width: usize) -> Vec<Span> {
+/// Hard-wrap a line of `len` bytes by display width at unit edges. Always at least one span; a
+/// unit wider than `width` gets a row of its own.
+fn wrap_spans(units: &[Unit], len: usize, width: usize) -> Vec<Span> {
     let width = width.max(1);
     let mut spans = Vec::new();
     let mut start = 0;
     let mut row_width = 0;
-    for (i, g) in line.grapheme_indices(true) {
-        let gw = display_width(g);
-        if row_width > 0 && row_width + gw > width {
+    for u in units {
+        if row_width > 0 && row_width + u.width > width {
             spans.push(Span {
                 start,
-                end: i,
+                end: u.start,
                 width: row_width,
             });
-            start = i;
+            start = u.start;
             row_width = 0;
         }
-        row_width += gw;
+        row_width += u.width;
     }
     spans.push(Span {
         start,
-        end: line.len(),
+        end: len,
         width: row_width,
     });
     spans
@@ -169,8 +245,37 @@ impl InputBuffer {
         self.lines.iter().map(String::len).sum::<usize>() + self.lines.len() - 1
     }
 
-    fn snap(&mut self) {
-        self.col = floor_boundary(&self.lines[self.row], self.col);
+    /// The units of line `row`. A fenced block can open on an earlier line, so the backtick state
+    /// comes from the lines above.
+    fn line_units(&self, row: usize, view: &EmojiView) -> Vec<Unit> {
+        let line = &self.lines[row];
+        if !line.contains(':') {
+            return units_of(line, false, view);
+        }
+        let ticks: usize = self.lines[..row]
+            .iter()
+            .map(|l| l.matches('`').count())
+            .sum();
+        units_of(line, ticks % 2 == 1, view)
+    }
+
+    /// The units of every line.
+    fn all_units(&self, view: &EmojiView) -> Vec<Vec<Unit>> {
+        let mut in_code = false;
+        self.lines
+            .iter()
+            .map(|line| {
+                let units = units_of(line, in_code, view);
+                in_code ^= line.matches('`').count() % 2 == 1;
+                units
+            })
+            .collect()
+    }
+
+    /// Round the column down to a unit edge.
+    fn snap(&mut self, view: &EmojiView) {
+        let units = self.line_units(self.row, view);
+        self.col = floor_boundary(&units, self.col.min(self.lines[self.row].len()));
     }
 
     /// Insert one typed character. Line breaks are refused (lines are made by `newline` and
@@ -217,7 +322,8 @@ impl InputBuffer {
             self.lines.splice(at..at, rest);
         }
         self.lines[self.row].push_str(&tail);
-        self.snap();
+        // Where the text went in is a grapheme edge; a custom emoji is not a unit to an insert.
+        self.snap(&EmojiView::none());
         truncated
     }
 
@@ -231,12 +337,12 @@ impl InputBuffer {
         self.col = 0;
     }
 
-    /// Delete the grapheme before the cursor; at column 0 join with the previous line.
-    pub fn backspace(&mut self) {
+    /// Delete the unit before the cursor (a grapheme, or a whole drawn emoji); at column 0 join
+    /// with the previous line.
+    pub fn backspace(&mut self, view: &EmojiView) {
         if self.col > 0 {
-            let line = &mut self.lines[self.row];
-            let start = prev_boundary(line, self.col);
-            line.replace_range(start..self.col, "");
+            let start = prev_boundary(&self.line_units(self.row, view), self.col);
+            self.lines[self.row].replace_range(start..self.col, "");
             self.col = start;
         } else if self.row > 0 {
             let current = self.lines.remove(self.row);
@@ -247,9 +353,9 @@ impl InputBuffer {
     }
 
     /// Delete whitespace then a word before the cursor; at column 0 join with the previous line.
-    pub fn delete_word_back(&mut self) {
+    pub fn delete_word_back(&mut self, view: &EmojiView) {
         if self.col == 0 {
-            self.backspace();
+            self.backspace(view);
             return;
         }
         let line = &self.lines[self.row];
@@ -265,7 +371,7 @@ impl InputBuffer {
             }
             start = i;
         }
-        let start = floor_boundary(line, start);
+        let start = floor_boundary(&self.line_units(self.row, view), start);
         self.lines[self.row].replace_range(start..self.col, "");
         self.col = start;
     }
@@ -275,32 +381,33 @@ impl InputBuffer {
         self.col = 0;
     }
 
-    /// One grapheme left, crossing to the end of the previous line at column 0.
-    pub fn left(&mut self) {
+    /// One unit left, crossing to the end of the previous line at column 0.
+    pub fn left(&mut self, view: &EmojiView) {
         if self.col > 0 {
-            self.col = prev_boundary(&self.lines[self.row], self.col);
+            self.col = prev_boundary(&self.line_units(self.row, view), self.col);
         } else if self.row > 0 {
             self.row -= 1;
             self.col = self.lines[self.row].len();
         }
     }
 
-    /// One grapheme right, crossing to the start of the next line at the line end.
-    pub fn right(&mut self) {
-        if self.col < self.lines[self.row].len() {
-            self.col = next_boundary(&self.lines[self.row], self.col);
+    /// One unit right, crossing to the start of the next line at the line end.
+    pub fn right(&mut self, view: &EmojiView) {
+        let len = self.lines[self.row].len();
+        if self.col < len {
+            self.col = next_boundary(&self.line_units(self.row, view), self.col, len);
         } else if self.row + 1 < self.lines.len() {
             self.row += 1;
             self.col = 0;
         }
     }
 
-    pub fn up(&mut self) {
-        self.move_line(-1);
+    pub fn up(&mut self, view: &EmojiView) {
+        self.move_line(-1, view);
     }
 
-    pub fn down(&mut self) {
-        self.move_line(1);
+    pub fn down(&mut self, view: &EmojiView) {
+        self.move_line(1, view);
     }
 
     pub fn home(&mut self) {
@@ -318,29 +425,31 @@ impl InputBuffer {
         text
     }
 
-    /// Step `n` graphemes left without leaving the line (Normal-mode `h`).
-    pub fn left_in_line(&mut self, n: usize) {
+    /// Step `n` units left without leaving the line (Normal-mode `h`).
+    pub fn left_in_line(&mut self, n: usize, view: &EmojiView) {
+        let units = self.line_units(self.row, view);
         for _ in 0..n {
             if self.col == 0 {
                 break;
             }
-            self.col = prev_boundary(&self.lines[self.row], self.col);
+            self.col = prev_boundary(&units, self.col);
         }
     }
 
-    /// Step `n` graphemes right without leaving the line (Normal-mode `l`).
-    pub fn right_in_line(&mut self, n: usize) {
+    /// Step `n` units right without leaving the line (Normal-mode `l`).
+    pub fn right_in_line(&mut self, n: usize, view: &EmojiView) {
         let len = self.lines[self.row].len();
+        let units = self.line_units(self.row, view);
         for _ in 0..n {
             if self.col >= len {
                 break;
             }
-            self.col = next_boundary(&self.lines[self.row], self.col);
+            self.col = next_boundary(&units, self.col, len);
         }
     }
 
     /// Move `delta` logical lines, clamped to the first and last line, keeping the display column.
-    pub fn move_line(&mut self, delta: i64) {
+    pub fn move_line(&mut self, delta: i64, view: &EmojiView) {
         let last = self.lines.len() - 1;
         let steps = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
         let target = if delta < 0 {
@@ -351,9 +460,9 @@ impl InputBuffer {
         if target == self.row {
             return;
         }
-        let want = display_width(&self.lines[self.row][..self.col]);
+        let want = width_before(&self.line_units(self.row, view), self.col);
         self.row = target;
-        self.col = col_at_display(&self.lines[self.row], want);
+        self.col = col_at_display(&self.line_units(self.row, view), want);
     }
 
     /// Jump to line `idx` (clamped to the last line), column 0.
@@ -362,14 +471,40 @@ impl InputBuffer {
         self.col = 0;
     }
 
-    /// The draft hard-wrapped to `width` columns, one string per visual row.
-    pub fn visual_rows(&self, width: u16) -> Vec<String> {
+    /// The draft hard-wrapped to `width` columns, one string per visual row, as written.
+    pub fn visual_rows(&self, width: u16, view: &EmojiView) -> Vec<String> {
+        self.rows(width, view, false)
+    }
+
+    /// The same rows as `visual_rows`, with each drawn custom emoji as the cells it is drawn as
+    /// (`ui::emoji::expand` turns them into what is painted) and the rest cleaned for drawing.
+    pub fn drawn_rows(&self, width: u16, view: &EmojiView) -> Vec<String> {
+        self.rows(width, view, true)
+    }
+
+    fn rows(&self, width: u16, view: &EmojiView, drawn: bool) -> Vec<String> {
         let width = usize::from(width).max(1);
         let mut rows = Vec::new();
-        for (r, line) in self.lines.iter().enumerate() {
-            let spans = wrap_spans(line, width);
+        for (r, (line, units)) in self.lines.iter().zip(self.all_units(view)).enumerate() {
+            let spans = wrap_spans(&units, line.len(), width);
             let full = spans.last().is_some_and(|s| s.width >= width);
-            rows.extend(spans.iter().map(|s| line[s.start..s.end].to_string()));
+            for s in &spans {
+                if !drawn {
+                    rows.push(line[s.start..s.end].to_string());
+                    continue;
+                }
+                let mut row = String::new();
+                for u in units
+                    .iter()
+                    .filter(|u| u.start >= s.start && u.end <= s.end)
+                {
+                    match &u.cells {
+                        Some(cells) => row.push_str(cells),
+                        None => row.push_str(&sanitize_line(&line[u.start..u.end])),
+                    }
+                }
+                rows.push(row);
+            }
             if r == self.row && self.col == line.len() && full {
                 rows.push(String::new());
             }
@@ -378,11 +513,11 @@ impl InputBuffer {
     }
 
     /// Number of visual rows `visual_rows(width)` yields.
-    pub fn visual_row_count(&self, width: u16) -> usize {
+    pub fn visual_row_count(&self, width: u16, view: &EmojiView) -> usize {
         let width = usize::from(width).max(1);
         let mut count = 0;
-        for (r, line) in self.lines.iter().enumerate() {
-            let spans = wrap_spans(line, width);
+        for (r, (line, units)) in self.lines.iter().zip(self.all_units(view)).enumerate() {
+            let spans = wrap_spans(&units, line.len(), width);
             count += spans.len();
             let full = spans.last().is_some_and(|s| s.width >= width);
             if r == self.row && self.col == line.len() && full {
@@ -393,14 +528,15 @@ impl InputBuffer {
     }
 
     /// The cursor as (x, y) inside the visual rows of `visual_rows(width)`.
-    pub fn cursor_visual(&self, width: u16) -> (u16, u16) {
+    pub fn cursor_visual(&self, width: u16, view: &EmojiView) -> (u16, u16) {
         let width = usize::from(width).max(1);
-        let above: usize = self.lines[..self.row]
-            .iter()
-            .map(|l| wrap_spans(l, width).len())
+        let all = self.all_units(view);
+        let above: usize = (0..self.row)
+            .map(|r| wrap_spans(&all[r], self.lines[r].len(), width).len())
             .sum();
         let line = &self.lines[self.row];
-        let spans = wrap_spans(line, width);
+        let units = &all[self.row];
+        let spans = wrap_spans(units, line.len(), width);
         let (x, dy) = if self.col >= line.len() {
             let last = &spans[spans.len() - 1];
             if last.width >= width {
@@ -409,11 +545,18 @@ impl InputBuffer {
                 (last.width, spans.len() - 1)
             }
         } else {
+            // A column inside a drawn emoji (its image arrived under the cursor) is drawn at its start.
+            let col = floor_boundary(units, self.col);
             let i = spans
                 .iter()
-                .position(|s| self.col < s.end)
+                .position(|s| col < s.end)
                 .unwrap_or(spans.len() - 1);
-            (display_width(&line[spans[i].start..self.col]), i)
+            let x = units
+                .iter()
+                .filter(|u| u.start >= spans[i].start && u.end <= col)
+                .map(|u| u.width)
+                .sum();
+            (x, i)
         };
         (
             u16::try_from(x).unwrap_or(u16::MAX),
@@ -423,9 +566,9 @@ impl InputBuffer {
 
     /// First visible visual row: the stored top moved just far enough to show the cursor, then
     /// clamped. Pure, so the renderer and the reducer agree.
-    pub fn view_top(&self, width: u16, height: u16) -> usize {
-        let rows = self.visual_row_count(width);
-        let cursor_y = usize::from(self.cursor_visual(width).1);
+    pub fn view_top(&self, width: u16, height: u16, view: &EmojiView) -> usize {
+        let rows = self.visual_row_count(width, view);
+        let cursor_y = usize::from(self.cursor_visual(width, view).1);
         let height = usize::from(height);
         let mut top = self.top;
         if cursor_y < top {
@@ -436,21 +579,30 @@ impl InputBuffer {
         top.min(rows.saturating_sub(height))
     }
 
-    /// Store the effective view top, so scrolling stays put between keys.
-    pub fn settle(&mut self, width: u16, height: u16) {
-        self.top = self.view_top(width, height);
+    /// Store the effective view top, so scrolling stays put between keys, and put the cursor on a
+    /// unit edge (a custom emoji's image may have arrived under it).
+    pub fn settle(&mut self, width: u16, height: u16, view: &EmojiView) {
+        self.snap(view);
+        self.top = self.view_top(width, height, view);
     }
 
     /// Ctrl-d / Ctrl-u: scroll the view and the cursor by half the visible rows, `n` times. Does
     /// nothing while the whole draft fits in the bar.
-    pub fn half_page(&mut self, width: u16, height: u16, n: usize, forward: bool) {
-        let rows = self.visual_row_count(width);
+    pub fn half_page(
+        &mut self,
+        width: u16,
+        height: u16,
+        n: usize,
+        forward: bool,
+        view: &EmojiView,
+    ) {
+        let rows = self.visual_row_count(width, view);
         let h = usize::from(height);
         if rows <= h {
             return;
         }
         let delta = (h / 2).max(1).saturating_mul(n);
-        let top = self.view_top(width, height);
+        let top = self.view_top(width, height, view);
         self.top = if forward {
             top.saturating_add(delta)
         } else {
@@ -458,7 +610,7 @@ impl InputBuffer {
         }
         .min(rows - h);
         let lines = i64::try_from(delta).unwrap_or(i64::MAX);
-        self.move_line(if forward { lines } else { -lines });
+        self.move_line(if forward { lines } else { -lines }, view);
     }
 }
 
@@ -467,6 +619,10 @@ mod tests {
     use super::*;
     use crate::app::App;
     use ratatui::layout::Size;
+
+    fn nv() -> EmojiView<'static> {
+        EmojiView::none()
+    }
 
     fn buf(s: &str) -> InputBuffer {
         let mut b = InputBuffer::new();
@@ -498,34 +654,34 @@ mod tests {
     fn backspace_by_grapheme() {
         for cluster in ["\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}", "e\u{301}"] {
             let mut b = buf(&format!("a{cluster}"));
-            b.backspace();
+            b.backspace(&nv());
             assert_eq!(b.text(), "a", "{cluster:?}");
         }
         let mut b = buf("ab\ncd");
         b.goto_line(1);
-        b.backspace();
+        b.backspace(&nv());
         assert_eq!(b.text(), "abcd");
         assert_eq!((b.row(), b.col()), (0, 2));
         let mut empty = InputBuffer::new();
-        empty.backspace();
+        empty.backspace(&nv());
         assert!(empty.is_empty());
     }
 
     #[test]
     fn delete_word_back() {
         let mut b = buf("hello world  ");
-        b.delete_word_back();
+        b.delete_word_back(&nv());
         assert_eq!(b.text(), "hello ");
         let mut j = buf("ab\ncd");
         j.goto_line(1);
-        j.delete_word_back();
+        j.delete_word_back(&nv());
         assert_eq!(j.text(), "abcd");
     }
 
     #[test]
     fn delete_to_line_start() {
         let mut b = buf("hello");
-        b.left_in_line(2);
+        b.left_in_line(2, &nv());
         b.delete_to_line_start();
         assert_eq!(b.text(), "lo");
         assert_eq!(b.col(), 0);
@@ -537,15 +693,15 @@ mod tests {
     fn left_right_cross_lines() {
         let mut b = buf("ab\ncd");
         b.goto_line(1);
-        b.left();
+        b.left(&nv());
         assert_eq!((b.row(), b.col()), (0, 2));
-        b.right();
+        b.right(&nv());
         assert_eq!((b.row(), b.col()), (1, 0));
         let mut g = buf("e\u{301}x");
         g.home();
-        g.right();
+        g.right(&nv());
         assert_eq!(g.col(), 3);
-        g.left();
+        g.left(&nv());
         assert_eq!(g.col(), 0);
     }
 
@@ -553,15 +709,15 @@ mod tests {
     fn up_down_keep_display_column() {
         let mut b = buf("\u{65e5}\u{672c}\u{8a9e}\nabcdef");
         b.home();
-        b.right_in_line(4);
-        b.up();
+        b.right_in_line(4, &nv());
+        b.up(&nv());
         // Display column 4 is the boundary after two CJK characters (6 bytes).
         assert_eq!((b.row(), b.col()), (0, 6));
-        b.down();
+        b.down(&nv());
         assert_eq!((b.row(), b.col()), (1, 4));
         // Display column 3 sits between boundaries 2 and 4: the nearest, leftmost wins.
-        b.left_in_line(1);
-        b.up();
+        b.left_in_line(1, &nv());
+        b.up(&nv());
         assert_eq!((b.row(), b.col()), (0, 3));
     }
 
@@ -575,7 +731,7 @@ mod tests {
         assert_eq!(b.take(), "abc\ndef");
         assert!(b.is_empty());
         assert_eq!((b.row(), b.col(), b.line_count()), (0, 0, 1));
-        assert_eq!(b.view_top(10, 5), 0);
+        assert_eq!(b.view_top(10, 5, &nv()), 0);
     }
 
     #[test]
@@ -606,26 +762,26 @@ mod tests {
     #[test]
     fn visual_rows_hard_wrap() {
         assert_eq!(
-            buf("abcdefghijkl").visual_rows(5),
+            buf("abcdefghijkl").visual_rows(5, &nv()),
             vec!["abcde", "fghij", "kl"]
         );
         assert_eq!(
-            buf("\u{65e5}\u{672c}\u{8a9e}").visual_rows(5),
+            buf("\u{65e5}\u{672c}\u{8a9e}").visual_rows(5, &nv()),
             vec!["\u{65e5}\u{672c}", "\u{8a9e}"]
         );
-        assert_eq!(buf("a\n\nb").visual_rows(5), vec!["a", "", "b"]);
+        assert_eq!(buf("a\n\nb").visual_rows(5, &nv()), vec!["a", "", "b"]);
     }
 
     #[test]
     fn cursor_visual_exact_width() {
         let mut b = buf("abcd");
-        assert_eq!(b.cursor_visual(5), (4, 0));
+        assert_eq!(b.cursor_visual(5, &nv()), (4, 0));
         b.insert_char('e');
-        assert_eq!(b.cursor_visual(5), (0, 1));
-        assert_eq!(b.visual_rows(5), vec!["abcde", ""]);
+        assert_eq!(b.cursor_visual(5, &nv()), (0, 1));
+        assert_eq!(b.visual_rows(5, &nv()), vec!["abcde", ""]);
         b.home();
-        assert_eq!(b.cursor_visual(5), (0, 0));
-        assert_eq!(buf("ab\ncd").cursor_visual(5), (2, 1));
+        assert_eq!(b.cursor_visual(5, &nv()), (0, 0));
+        assert_eq!(buf("ab\ncd").cursor_visual(5, &nv()), (2, 1));
     }
 
     #[test]
@@ -664,7 +820,7 @@ mod tests {
     #[test]
     fn insert_char_never_breaks_line() {
         let mut b = buf("ab");
-        b.left_in_line(1);
+        b.left_in_line(1, &nv());
         for c in ['\n', '\r', '\u{2028}', '\u{2029}'] {
             assert!(!b.insert_char(c), "{:x}", c as u32);
             assert_eq!(b.text(), "ab");
@@ -684,13 +840,13 @@ mod tests {
     #[test]
     fn left_right_in_line_stop_at_line_ends() {
         let mut b = buf("abc\ndef");
-        b.left_in_line(2);
+        b.left_in_line(2, &nv());
         assert_eq!((b.row(), b.col()), (1, 1));
-        b.left_in_line(99);
+        b.left_in_line(99, &nv());
         assert_eq!((b.row(), b.col()), (1, 0));
-        b.right_in_line(99);
+        b.right_in_line(99, &nv());
         assert_eq!((b.row(), b.col()), (1, 3));
-        b.right_in_line(1);
+        b.right_in_line(1, &nv());
         assert_eq!((b.row(), b.col()), (1, 3));
     }
 
@@ -698,12 +854,12 @@ mod tests {
     fn move_line_and_goto_line() {
         let mut b = buf("abc\nabc\nabc\nabc");
         b.goto_line(0);
-        b.right_in_line(2);
-        b.move_line(2);
+        b.right_in_line(2, &nv());
+        b.move_line(2, &nv());
         assert_eq!((b.row(), b.col()), (2, 2));
-        b.move_line(99);
+        b.move_line(99, &nv());
         assert_eq!(b.row(), 3);
-        b.move_line(-99);
+        b.move_line(-99, &nv());
         assert_eq!(b.row(), 0);
         b.goto_line(1);
         assert_eq!((b.row(), b.col()), (1, 0));
@@ -715,39 +871,235 @@ mod tests {
     fn view_top_keeps_cursor_visible() {
         let mut b = buf(&lines_n(12));
         assert_eq!(b.row(), 11);
-        assert_eq!(b.view_top(10, 5), 7);
+        assert_eq!(b.view_top(10, 5, &nv()), 7);
         b.goto_line(0);
-        assert_eq!(b.view_top(10, 5), 0);
+        assert_eq!(b.view_top(10, 5, &nv()), 0);
     }
 
     #[test]
     fn half_page_only_when_scrolling() {
         let mut short = buf("a\nb\nc");
-        short.half_page(10, 5, 1, true);
+        short.half_page(10, 5, 1, true, &nv());
         assert_eq!(short.row(), 2);
-        assert_eq!(short.view_top(10, 5), 0);
+        assert_eq!(short.view_top(10, 5, &nv()), 0);
         short.goto_line(0);
-        short.half_page(10, 5, 1, true);
+        short.half_page(10, 5, 1, true, &nv());
         assert_eq!(short.row(), 0);
 
         let mut b = buf(&lines_n(12));
         b.goto_line(0);
-        b.half_page(10, 5, 1, true);
-        assert_eq!((b.row(), b.view_top(10, 5)), (2, 2));
-        b.half_page(10, 5, 1, false);
-        assert_eq!((b.row(), b.view_top(10, 5)), (0, 0));
-        b.half_page(10, 5, 3, true);
-        assert_eq!((b.row(), b.view_top(10, 5)), (6, 6));
+        b.half_page(10, 5, 1, true, &nv());
+        assert_eq!((b.row(), b.view_top(10, 5, &nv())), (2, 2));
+        b.half_page(10, 5, 1, false, &nv());
+        assert_eq!((b.row(), b.view_top(10, 5, &nv())), (0, 0));
+        b.half_page(10, 5, 3, true, &nv());
+        assert_eq!((b.row(), b.view_top(10, 5, &nv())), (6, 6));
     }
 
     #[test]
     fn text_before_cursor_spans_lines_up_to_the_cursor() {
         let mut b = buf("ab\ncd");
         assert_eq!(b.text_before_cursor(), "ab\ncd");
-        b.left();
+        b.left(&nv());
         assert_eq!(b.text_before_cursor(), "ab\nc");
-        b.up();
+        b.up(&nv());
         b.home();
         assert_eq!(b.text_before_cursor(), "");
+    }
+
+    // ---- custom emojis drawn as units (draft-emoji) ----
+
+    use crate::app::emoji::{CustomEmojis, Graphics, NO_IMAGES};
+    use crate::data::CustomEmoji;
+
+    fn list() -> CustomEmojis {
+        CustomEmojis::Loaded(vec![CustomEmoji {
+            name: "rtshipit".to_string(),
+            aliases: vec!["rtship".to_string()],
+            ext: "png".to_string(),
+            etag: "e".to_string(),
+        }])
+    }
+
+    fn view(list: &CustomEmojis, graphics: Graphics) -> EmojiView<'_> {
+        EmojiView {
+            custom: list,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            images: &NO_IMAGES,
+            graphics,
+            now_ms: 0,
+        }
+    }
+
+    /// The byte ranges that `line` draws as an emoji, the line opening outside code.
+    fn drawn(line: &str, view: &EmojiView) -> Vec<(usize, usize)> {
+        units_of(line, false, view)
+            .iter()
+            .filter(|u| u.cells.is_some())
+            .map(|u| (u.start, u.end))
+            .collect()
+    }
+
+    #[test]
+    fn a_custom_name_or_alias_is_one_unit_two_columns_wide() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        assert_eq!(drawn("ship :rtshipit:", &v), [(5, 15)]);
+        assert_eq!(drawn(":rtship:", &v), [(0, 8)]);
+        assert_eq!(drawn("(:rtshipit:)", &v), [(1, 11)]);
+        let units = units_of(":rtshipit:", false, &v);
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].width, 2);
+    }
+
+    #[test]
+    fn what_is_not_a_custom_emoji_stays_graphemes() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        assert!(drawn(":rt_not_an_emoji:", &v).is_empty());
+        assert!(drawn(":tada:", &v).is_empty());
+        assert!(drawn("a:rtshipit:", &v).is_empty());
+        assert!(drawn(":rtshipit", &v).is_empty());
+        assert!(drawn("`:rtshipit:`", &v).is_empty());
+        // Without images the terminal draws the text, so the units are its graphemes.
+        let off = view(&l, Graphics::Unsupported);
+        assert!(drawn(":rtshipit:", &off).is_empty());
+        assert_eq!(units_of(":rtshipit:", false, &off).len(), 10);
+        assert!(drawn(":rtshipit:", &nv()).is_empty());
+    }
+
+    #[test]
+    fn a_fenced_block_covers_the_lines_between_its_fences() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let b = buf("```\n:rtshipit:\n```\n:rtshipit:");
+        let all = b.all_units(&v);
+        let emoji = |row: usize| all[row].iter().filter(|u| u.cells.is_some()).count();
+        assert_eq!((emoji(0), emoji(1), emoji(2), emoji(3)), (0, 0, 0, 1));
+        assert_eq!(b.line_units(1, &v).len(), 10);
+        assert_eq!(b.line_units(3, &v).len(), 1);
+    }
+
+    #[test]
+    fn wrap_counts_two_columns_per_emoji_and_never_splits_one() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        // The emoji would start in the last column of the row: it goes to the next one whole.
+        let b = buf("abcd,:rtshipit:");
+        assert_eq!(b.visual_rows(6, &v), vec!["abcd,", ":rtshipit:"]);
+        assert_eq!(b.visual_row_count(6, &v), 2);
+        let c = buf("ab,:rtshipit::rtshipit::rtshipit:");
+        assert_eq!(
+            c.visual_rows(6, &v),
+            vec!["ab,:rtshipit:", ":rtshipit::rtshipit:"]
+        );
+        // As text the same draft wraps by its characters.
+        assert_eq!(b.visual_rows(6, &nv()), vec!["abcd,:", "rtship", "it:"]);
+    }
+
+    #[test]
+    fn the_drawn_rows_hold_cells_and_are_as_many_as_the_rows() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let b = buf("ab :rtshipit:\nx");
+        let rows = b.drawn_rows(20, &v);
+        assert_eq!(rows.len(), b.visual_rows(20, &v).len());
+        assert_eq!(
+            rows[0],
+            format!(
+                "ab {}",
+                crate::ui::emoji::custom_cells("rtshipit", Look::Standin)
+            )
+        );
+        assert_eq!(rows[1], "x");
+        assert_eq!(b.drawn_rows(20, &nv()), b.visual_rows(20, &nv()));
+    }
+
+    #[test]
+    fn the_cursor_column_follows_the_drawn_width() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let b = buf("a :rtshipit:");
+        assert_eq!(b.cursor_visual(20, &v), (4, 0));
+        assert_eq!(b.cursor_visual(20, &nv()), (12, 0));
+        // An emoji that fills the row puts the cursor on the next one.
+        assert_eq!(buf("ab :rtshipit:").cursor_visual(5, &v), (0, 1));
+        // A column inside an emoji (its image arrived under the cursor) is drawn at its start.
+        let mut inside = buf("a :rtshipit:");
+        inside.home();
+        inside.right_in_line(5, &nv());
+        assert_eq!(inside.cursor_visual(20, &v), (2, 0));
+        inside.settle(20, 5, &v);
+        assert_eq!(inside.col(), 2);
+    }
+
+    #[test]
+    fn the_cursor_passes_over_an_emoji_whole() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let mut b = buf("a :rtshipit: b");
+        b.left(&v);
+        b.left(&v);
+        assert_eq!(b.col(), 12);
+        b.left(&v);
+        assert_eq!(b.col(), 2);
+        b.right(&v);
+        assert_eq!(b.col(), 12);
+        b.home();
+        b.right_in_line(3, &v);
+        assert_eq!(b.col(), 12);
+        b.left_in_line(1, &v);
+        assert_eq!(b.col(), 2);
+        // As text the cursor goes one character at a time.
+        let mut t = buf("a :rtshipit: b");
+        t.left(&nv());
+        t.left(&nv());
+        t.left(&nv());
+        assert_eq!(t.col(), 11);
+    }
+
+    #[test]
+    fn one_backspace_deletes_the_whole_shortcode() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let mut b = buf("ship :rtshipit:");
+        b.backspace(&v);
+        assert_eq!(b.text(), "ship ");
+        let mut t = buf("ship :rtshipit:");
+        t.backspace(&nv());
+        assert_eq!(t.text(), "ship :rtshipit");
+        // The word before the cursor goes whole too, and never half an emoji.
+        let mut w = buf("hi :rtshipit:");
+        w.delete_word_back(&v);
+        assert_eq!(w.text(), "hi ");
+    }
+
+    #[test]
+    fn up_and_down_land_on_a_unit_edge() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        // Display column 2 is inside the emoji of the first line (columns 1 to 3): the tie goes left.
+        let mut b = buf("(:rtshipit:)\nabcd");
+        b.home();
+        b.right_in_line(2, &v);
+        assert_eq!((b.row(), b.col()), (1, 2));
+        b.up(&v);
+        assert_eq!((b.row(), b.col()), (0, 1));
+        b.right(&v);
+        b.down(&v);
+        assert_eq!((b.row(), b.col()), (1, 3));
+    }
+
+    #[test]
+    fn typing_the_closing_colon_makes_the_unit_and_a_deletion_undoes_it() {
+        let l = list();
+        let v = view(&l, Graphics::Supported);
+        let mut b = buf(":rtshipit");
+        assert!(drawn(&b.text(), &v).is_empty());
+        b.insert_char(':');
+        assert_eq!(drawn(&b.text(), &v), [(0, 10)]);
+        assert_eq!(b.col(), 10);
+        b.backspace(&v);
+        assert_eq!(b.text(), "");
     }
 }

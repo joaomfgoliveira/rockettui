@@ -1,0 +1,8 @@
+---
+source: src/ui/input.rs
+expression: "bar_rows(&app, size)"
+---
+│                          │┏ Input ━━━━━━━━━━━━━┓
+│                          │┃abc,􎻮̅̅􎻮̅̍􎻮̅̅􎻮̅̍ and a longe┃
+│                          │┃r line of text 􎻮̅̅􎻮̅̍   ┃
+└──────────────────────────┘┗━━━━━━━━━━━━━━━━━━━━┛

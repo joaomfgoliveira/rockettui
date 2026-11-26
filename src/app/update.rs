@@ -3,6 +3,7 @@
 //! Key bindings never live here; keys are resolved through `app.keymap` (D-07).
 
 use crate::action::Action;
+use crate::app::emoji::EmojiView;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, follow, help,
@@ -307,7 +308,7 @@ fn reduce(app: &mut App, action: Action) {
             }
             Mode::Insert => {
                 let mut inserted = false;
-                edit_input(app, |input| inserted = input.insert_char(c));
+                edit_input(app, |input, _| inserted = input.insert_char(c));
                 if c == ':' && inserted {
                     react::open_insert(app);
                 }
@@ -323,15 +324,15 @@ fn reduce(app: &mut App, action: Action) {
             Mode::Insert => edit_input(app, InputBuffer::backspace),
             Mode::Normal => {}
         },
-        Action::InsertNewline => edit_input(app, InputBuffer::newline),
+        Action::InsertNewline => edit_input(app, |input, _| input.newline()),
         Action::DeleteWordBack => edit_input(app, InputBuffer::delete_word_back),
-        Action::DeleteToLineStart => edit_input(app, InputBuffer::delete_to_line_start),
+        Action::DeleteToLineStart => edit_input(app, |input, _| input.delete_to_line_start()),
         Action::CursorLeft => edit_input(app, InputBuffer::left),
         Action::CursorRight => edit_input(app, InputBuffer::right),
         Action::CursorUp => edit_input(app, InputBuffer::up),
         Action::CursorDown => edit_input(app, InputBuffer::down),
-        Action::CursorHome => edit_input(app, InputBuffer::home),
-        Action::CursorEnd => edit_input(app, InputBuffer::end),
+        Action::CursorHome => edit_input(app, |input, _| input.home()),
+        Action::CursorEnd => edit_input(app, |input, _| input.end()),
         Action::SubmitInput => {
             if app.editing.is_some() {
                 edit::save(app);
@@ -387,7 +388,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::Paste(text) if app.switcher.is_some() => switcher::paste(app, &text),
         Action::Paste(text) if app.thread_list.is_some() => thread_list::paste(app, &text),
         Action::Paste(text) => match app.mode {
-            Mode::Insert => edit_input(app, |input| {
+            Mode::Insert => edit_input(app, |input, _| {
                 input.insert_str(&text);
             }),
             Mode::Command => {
@@ -421,13 +422,13 @@ fn own_username_loaded(app: &mut App, name: String) {
 }
 
 /// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
-pub(super) fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
+pub(super) fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer, &EmojiView)) {
     if app.mode != Mode::Insert {
         return;
     }
-    edit(&mut app.input);
-    let (width, height) = app.input_viewport();
-    app.input.settle(width, height);
+    let (input, view) = app.input_and_view();
+    edit(input, &view);
+    app.settle_input();
 }
 
 /// A key while the context popup is open: it closes and does nothing else. The one exception is
@@ -562,18 +563,19 @@ fn input_motion(app: &mut App, motion: &Action, count: Option<u32>) {
     let n = count.map_or(1, |c| c as usize);
     let jump = count.map(|c| (c as usize).saturating_sub(1));
     let (width, height) = app.input_viewport();
+    let (input, view) = app.input_and_view();
     match motion {
-        Action::MoveLeft => app.input.left_in_line(n),
-        Action::MoveRight => app.input.right_in_line(n),
-        Action::MoveDown => app.input.move_line(i64::from(count.unwrap_or(1))),
-        Action::MoveUp => app.input.move_line(-i64::from(count.unwrap_or(1))),
-        Action::GotoTop => app.input.goto_line(jump.unwrap_or(0)),
-        Action::GotoBottom => app.input.goto_line(jump.unwrap_or(usize::MAX)),
-        Action::HalfPageDown => app.input.half_page(width, height, n, true),
-        Action::HalfPageUp => app.input.half_page(width, height, n, false),
+        Action::MoveLeft => input.left_in_line(n, &view),
+        Action::MoveRight => input.right_in_line(n, &view),
+        Action::MoveDown => input.move_line(i64::from(count.unwrap_or(1)), &view),
+        Action::MoveUp => input.move_line(-i64::from(count.unwrap_or(1)), &view),
+        Action::GotoTop => input.goto_line(jump.unwrap_or(0)),
+        Action::GotoBottom => input.goto_line(jump.unwrap_or(usize::MAX)),
+        Action::HalfPageDown => input.half_page(width, height, n, true, &view),
+        Action::HalfPageUp => input.half_page(width, height, n, false, &view),
         _ => return,
     }
-    app.input.settle(width, height);
+    input.settle(width, height, &view);
 }
 
 #[cfg(test)]
@@ -1231,5 +1233,60 @@ mod tests {
             &app.status_msg,
             Some(crate::app::StatusMsg::Error(msg)) if msg == "Unknown command: bogus"
         ));
+    }
+
+    // ---- custom emojis in the draft (draft-emoji) ----
+
+    fn draft_emoji_app(text: &str) -> App {
+        let mut app = open_general_app();
+        app.graphics = crate::app::emoji::Graphics::Supported;
+        app.custom_emojis =
+            crate::app::emoji::CustomEmojis::Loaded(vec![crate::data::CustomEmoji {
+                name: "rtshipit".to_string(),
+                aliases: vec!["rtship".to_string()],
+                ext: "png".to_string(),
+                etag: "e".to_string(),
+            }]);
+        press(&mut app, "i");
+        app.input.insert_str(text);
+        app
+    }
+
+    #[test]
+    fn one_backspace_removes_a_whole_drawn_emoji_and_left_passes_over_it() {
+        let mut app = draft_emoji_app("ship :rtshipit:");
+        press(&mut app, "<Left>");
+        assert_eq!(app.input.col(), 5);
+        press(&mut app, "<Right><BS>");
+        assert_eq!(app.input.text(), "ship ");
+    }
+
+    #[test]
+    fn the_sent_text_is_the_typed_text_whatever_is_drawn() {
+        for typed in ["nice :rtshipit:", "nice :rtship:"] {
+            let mut app = draft_emoji_app(typed);
+            app.effects.clear();
+            press(&mut app, "<CR>");
+            let sent: Vec<String> = app
+                .effects
+                .iter()
+                .filter_map(|e| match e {
+                    crate::effect::Effect::SendMessage { text, .. } => {
+                        Some(text.as_str().to_string())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sent, [typed], "{typed}");
+        }
+    }
+
+    #[test]
+    fn the_draft_kept_for_a_room_holds_the_same_text() {
+        let mut app = draft_emoji_app("keep :rtshipit:");
+        let other = app.rooms[1].id.clone();
+        app.open_room(other);
+        app.open_room(general());
+        assert_eq!(app.input.text(), "keep :rtshipit:");
     }
 }
