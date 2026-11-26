@@ -7,7 +7,7 @@ Shows which threads have replies the user has not read, on the thread itself and
 ## ADDED Requirements
 
 ### Requirement: Unread mark on a thread
-A thread whose id the server lists as unread for the user SHALL show `new` at the end of its marker row. A thread that is not listed SHALL show nothing extra. The state SHALL be the server's and SHALL NOT be computed from the replies the app receives.
+A thread whose id the server lists as unread for the user SHALL show `new` at the end of its marker row, and the whole row SHALL be drawn in the unread style. In the thread list, its row SHALL start the last line with `new` in the same style. A thread that is not listed SHALL show nothing extra. The state SHALL be the server's and SHALL NOT be computed from the replies the app receives.
 
 #### Scenario: Unread thread
 - **WHEN** the server lists a thread as unread for the user
@@ -41,18 +41,22 @@ A room that has unread threads but no unread messages SHALL be listed in the Unr
 
 #### Scenario: Only a thread is unread
 - **WHEN** a room has no unread messages and one unread thread
-- **THEN** it is in Unread, bold, showing `T1`
+- **THEN** it is in Unread, bold, showing `T(1)`
 
 #### Scenario: Thread read
 - **WHEN** the last unread thread of such a room is read
 - **THEN** the room leaves Unread
 
 ### Requirement: Marking a thread read
-A thread that is open in the pane SHALL be marked read on the server after it has stayed open for a short delay, using the same delay rule as the room mark-read. Closing the pane or opening another thread before the delay SHALL cancel the mark. A reply that arrives live in a thread that is open and focused SHALL be marked read too. The request is best effort: its failure SHALL NOT be shown as an error and the thread SHALL stay unread.
+A thread that is open and focused in the pane SHALL be marked read on the server after its replies have loaded and it has stayed open for a short delay, using the same delay rule as the room mark-read. Closing the pane or opening another thread before the delay SHALL cancel the mark. A reply that arrives live in a thread that is open and focused SHALL be marked read too. The request is best effort: its failure SHALL NOT be shown as an error and the thread SHALL stay unread.
 
 #### Scenario: Read after a delay
 - **WHEN** the user opens an unread thread and keeps it open past the delay
 - **THEN** the thread is marked read and `new` disappears
+
+#### Scenario: Not focused
+- **WHEN** the delay ends while the pane does not have the focus
+- **THEN** the thread stays unread
 
 #### Scenario: Quick close
 - **WHEN** the user opens an unread thread and closes it at once
@@ -61,6 +65,20 @@ A thread that is open in the pane SHALL be marked read on the server after it ha
 #### Scenario: Failure
 - **WHEN** the mark-read request fails
 - **THEN** no error is shown and the thread stays unread
+
+### Requirement: Thread opens on its newest reply
+Opening a thread SHALL put the pane's cursor on the newest reply held once its first page has loaded, and the pane SHALL scroll to show it.
+
+#### Scenario: Open
+- **WHEN** the user opens a thread with several replies
+- **THEN** the cursor is on the newest loaded reply
+
+### Requirement: Thread summary in the messages pane border
+While a room is open, the right end of the messages pane's top border SHALL read `Threads (<key>) unread (<n>)`: the first key bound to `list_threads` (left out with its parentheses when none is bound) and the number of the room's unread threads. It SHALL be drawn in the unread style when the number is above 0 and SHALL be left out when the pane is too narrow to hold it beside the room name.
+
+#### Scenario: Label
+- **WHEN** the open room has 2 unread threads and `gT` is bound to `list_threads`
+- **THEN** the border reads `Threads (gT) unread (2)`
 
 ### Requirement: Unread state stays in step
 A live subscription update SHALL carry the thread unread state to the rooms and the parents. A field the update does not contain SHALL keep the value the app holds; an update with none of the thread fields SHALL change nothing. A thread read from another client SHALL lose its `new` mark and its share of the badge without any command.
