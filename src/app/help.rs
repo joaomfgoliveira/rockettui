@@ -41,7 +41,7 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
     ("focus_next", "focus the next pane"),
     ("focus_prev", "focus the previous pane"),
     ("enter_command", "start a : command"),
-    ("enter_insert", "type a message (Insert mode)"),
+    ("enter_insert", "type a message (: for emoji)"),
     ("cancel", "cancel, or leave the mode"),
     ("delete_back", "delete the character before the cursor"),
     ("insert_newline", "insert a newline"),

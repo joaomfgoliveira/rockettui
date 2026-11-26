@@ -1,0 +1,11 @@
+---
+source: src/ui/picker.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┌ Emoji ───┐
+│  Unread                  ││:         │
+│> * #general              │└──────────┘
+│  * &dev-team             │┏ Input ━━━┓
+│  * @alice                │┃:         ┃
+└──────────────────────────┘┗━━━━━━━━━━┛
+ INSERT  -

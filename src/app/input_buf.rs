@@ -142,6 +142,16 @@ impl InputBuffer {
         self.lines.join("\n")
     }
 
+    /// The draft from its start up to the cursor, lines joined by LF.
+    pub fn text_before_cursor(&self) -> String {
+        let mut out = self.lines[..self.row].join("\n");
+        if self.row > 0 {
+            out.push('\n');
+        }
+        out.push_str(&self.lines[self.row][..self.col]);
+        out
+    }
+
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -728,5 +738,16 @@ mod tests {
         assert_eq!((b.row(), b.view_top(10, 5)), (0, 0));
         b.half_page(10, 5, 3, true);
         assert_eq!((b.row(), b.view_top(10, 5)), (6, 6));
+    }
+
+    #[test]
+    fn text_before_cursor_spans_lines_up_to_the_cursor() {
+        let mut b = buf("ab\ncd");
+        assert_eq!(b.text_before_cursor(), "ab\ncd");
+        b.left();
+        assert_eq!(b.text_before_cursor(), "ab\nc");
+        b.up();
+        b.home();
+        assert_eq!(b.text_before_cursor(), "");
     }
 }

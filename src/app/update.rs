@@ -35,7 +35,7 @@ fn reduce(app: &mut App, action: Action) {
                 return;
             }
             // An open reaction picker takes every key, so letters are the search (see `app::react`).
-            if app.react_picker.is_some() {
+            if app.emoji_box.is_some() {
                 react::key(app, chord);
                 return;
             }
@@ -88,7 +88,7 @@ fn reduce(app: &mut App, action: Action) {
             if app.search_prompt.is_some()
                 || app.context
                 || app.reactions_popup.is_some()
-                || app.react_picker.is_some()
+                || app.emoji_box.is_some()
                 || app.switcher.is_some()
                 || app.thread_list.as_ref().is_some_and(|l| l.searching)
             {
@@ -305,9 +305,13 @@ fn reduce(app: &mut App, action: Action) {
                     app.cmdline.push(c);
                 }
             }
-            Mode::Insert => edit_input(app, |input| {
-                input.insert_char(c);
-            }),
+            Mode::Insert => {
+                let mut inserted = false;
+                edit_input(app, |input| inserted = input.insert_char(c));
+                if c == ':' && inserted {
+                    react::open_insert(app);
+                }
+            }
             Mode::Normal => {}
         },
         Action::DeleteBack => match app.mode {
@@ -379,7 +383,7 @@ fn reduce(app: &mut App, action: Action) {
         }
         // A paste is one insert and never a submit (T-01-22).
         Action::Paste(text) if app.search_prompt.is_some() => search::prompt_paste(app, &text),
-        Action::Paste(text) if app.react_picker.is_some() => react::paste(app, &text),
+        Action::Paste(text) if app.emoji_box.is_some() => react::paste(app, &text),
         Action::Paste(text) if app.switcher.is_some() => switcher::paste(app, &text),
         Action::Paste(text) if app.thread_list.is_some() => thread_list::paste(app, &text),
         Action::Paste(text) => match app.mode {
@@ -417,7 +421,7 @@ fn own_username_loaded(app: &mut App, name: String) {
 }
 
 /// Apply an edit to the draft (Insert mode only), then keep the view on the cursor.
-fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
+pub(super) fn edit_input(app: &mut App, edit: impl FnOnce(&mut InputBuffer)) {
     if app.mode != Mode::Insert {
         return;
     }

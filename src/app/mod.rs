@@ -238,7 +238,7 @@ pub struct App {
     /// The custom emoji images of the session: fetched, failed and in flight (`app::emoji`).
     pub images: emoji::Images,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
-    pub react_picker: Option<react::ReactPicker>,
+    pub emoji_box: Option<react::EmojiBox>,
     /// What the emoji box remembers: "Frequently used" and the skin tone. Loaded once at start from
     /// the state file and saved after a pick or a tone change (`app::emoji_recents`).
     pub emoji_recents: emoji_recents::Recents,
@@ -342,7 +342,7 @@ impl App {
             graphics: emoji::Graphics::default(),
             images: emoji::Images::default(),
             anim_ms: 0,
-            react_picker: None,
+            emoji_box: None,
             emoji_recents: emoji_recents::Recents::default(),
             switcher: None,
             thread_list: None,

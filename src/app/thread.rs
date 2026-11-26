@@ -1939,8 +1939,10 @@ mod tests {
     fn plus_in_the_pane_opens_the_picker_on_the_reply() {
         let mut app = own_pane();
         press(&mut app, "+");
-        let picker = app.react_picker.as_ref().expect("the picker opens");
-        assert_eq!(picker.id, "r-2");
+        let picker = app.emoji_box.as_ref().expect("the picker opens");
+        assert!(
+            matches!(&picker.target, crate::app::react::Target::React { id, .. } if id == "r-2")
+        );
         assert!(crate::app::react::view(&app).is_some());
     }
 
@@ -2295,5 +2297,27 @@ mod tests {
         app.focus = crate::app::Focus::Messages;
         update(&mut app, thread_unread_update());
         assert!(app.read.thread_pending.is_none());
+    }
+
+    #[test]
+    fn a_colon_opens_the_emoji_box_in_the_panes_bar_and_while_editing() {
+        let mut app = own_pane();
+        press(&mut app, "i");
+        assert_eq!(app.input_target, InputTarget::thread("p-1".to_string()));
+        press(&mut app, ":");
+        assert!(app.emoji_box.is_some());
+        press(&mut app, "tada");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "\u{1F389}");
+        press(&mut app, "<Esc>");
+
+        let mut app = own_pane();
+        press(&mut app, "e");
+        assert_eq!(app.input.text(), "body of r-2");
+        press(&mut app, "<Space>:");
+        assert!(app.emoji_box.is_some());
+        press(&mut app, "tada");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "body of r-2 \u{1F389}");
     }
 }

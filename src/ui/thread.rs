@@ -434,4 +434,27 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn the_emoji_box_from_a_colon_in_the_threads_bar_sits_above_that_bar() {
+        let mut app = app_with_thread(160, 24);
+        app.focus = Focus::Thread;
+        press(&mut app, "i");
+        press(&mut app, ":");
+        assert!(
+            app.thread_bar_is_live(),
+            "the thread's own bar is the live one"
+        );
+        assert!(app.emoji_box.is_some(), "the box opened");
+        let out = render_to_string(&app, 160, 24);
+        let lines: Vec<&str> = out.lines().collect();
+        let title = lines
+            .iter()
+            .position(|l| l.contains(" Emoji "))
+            .expect("title row");
+        // The box is in the thread column (to the right), not over the room's bar on the left.
+        let col = lines[title].find(" Emoji ").unwrap();
+        assert!(col > 60, "the box starts in the thread column: {out}");
+        insta::assert_snapshot!(out);
+    }
 }

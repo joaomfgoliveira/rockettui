@@ -27,6 +27,9 @@ const MAX_INNER_HEIGHT: u16 = 12;
 /// What the search line starts with: the key that starts a search, as in vim.
 const PROMPT: &str = "/";
 
+/// What the search line starts with in the box opened from a colon: the colon the user typed.
+const INSERT_PROMPT: &str = ":";
+
 /// What the search line says while browsing with no search to show.
 const PRESS_TO_SEARCH: &str = "press / to search";
 
@@ -39,15 +42,35 @@ const STAND_IN: &str = "··";
 
 /// The panel and its inner area. The height is the same whatever the list holds, so the search
 /// line stays where it is while results come and go as the user types; it is the most that fits.
-fn panel(areas: &Areas) -> (Rect, Rect) {
-    let column_bottom = areas.input.y + areas.input.height;
-    let available = column_bottom.saturating_sub(areas.messages.y);
+///
+/// The reaction box sits at the bottom of the message column. The box opened from a colon ends at
+/// the top edge of the live input bar (the thread's own bar when that is the live one), with that
+/// bar's x and width, so the draft stays visible.
+fn panel(app: &App, areas: &Areas) -> (Rect, Rect) {
+    let insert = app
+        .emoji_box
+        .as_ref()
+        .is_some_and(|b| b.target == react::Target::Insert);
+    let (bottom, x, width) = if insert {
+        let bar = match areas.thread_input {
+            Some(bar) if app.thread_bar_is_live() => bar,
+            _ => areas.input,
+        };
+        (bar.y, bar.x, bar.width)
+    } else {
+        (
+            areas.input.y + areas.input.height,
+            areas.messages.x,
+            areas.messages.width,
+        )
+    };
+    let available = bottom.saturating_sub(areas.messages.y);
     let inner_height = MAX_INNER_HEIGHT.min(available.saturating_sub(2));
     let height = inner_height + 2;
     let area = Rect {
-        x: areas.messages.x,
-        y: column_bottom.saturating_sub(height),
-        width: areas.messages.width,
+        x,
+        y: bottom.saturating_sub(height),
+        width,
         height,
     };
     let inner = Block::default().borders(Borders::ALL).inner(area);
@@ -71,7 +94,7 @@ fn areas_of(app: &App) -> Areas {
 
 /// Cells in one row of the grid on this screen: what up and down move by. At least one.
 pub fn columns(app: &App) -> usize {
-    let (_, inner) = panel(&areas_of(app));
+    let (_, inner) = panel(app, &areas_of(app));
     cells_per_row(inner.width)
 }
 
@@ -86,6 +109,9 @@ fn cells_per_row(width: u16) -> usize {
 /// otherwise. The longest form of each state still fits next to the title in the standard
 /// 52-column pane.
 fn hint_for(view: &react::View) -> String {
+    if view.insert {
+        return " arrows move  Enter insert  Esc close ".to_string();
+    }
     let verb = if view.candidates.get(view.selected).is_some_and(|c| c.own) {
         "remove"
     } else {
@@ -123,7 +149,7 @@ pub fn cursor_position(app: &App, areas: &Areas) -> Option<Position> {
     if !view.typing {
         return None;
     }
-    let (_, inner) = panel(areas);
+    let (_, inner) = panel(app, areas);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -157,7 +183,7 @@ fn split(inner_height: u16) -> Split {
 /// The flat indexes of the cells on the rows of the grid that are on screen, for the open picker.
 /// `request_images` asks for the images of these and no others.
 pub fn visible_cells(app: &App, view: &react::View) -> std::ops::Range<usize> {
-    let (_, inner) = panel(&areas_of(app));
+    let (_, inner) = panel(app, &areas_of(app));
     let rows = Grid::new(&view.sections, cells_per_row(inner.width));
     let (start, end) = rows.window(view.selected, split(inner.height).grid_rows);
     let mut cells = rows.rows[start..end].iter().filter_map(|row| match row {
@@ -225,10 +251,10 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
         return;
     };
     let theme = &app.theme;
-    let (area, inner) = panel(areas);
+    let (area, inner) = panel(app, areas);
     frame.render_widget(Clear, area);
 
-    let title = " React ";
+    let title = if view.insert { " Emoji " } else { " React " };
     let hint = hint_for(&view);
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -250,7 +276,10 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     // Searching: live input. Browsing: dim, showing the last search, or saying how to start one.
     let search_line = if view.typing {
         Line::from(vec![
-            Span::styled(PROMPT, theme.picker_item),
+            Span::styled(
+                if view.insert { INSERT_PROMPT } else { PROMPT },
+                theme.picker_item,
+            ),
             Span::styled(typed, theme.picker_input),
         ])
     } else if query.is_empty() {
@@ -444,7 +473,7 @@ mod tests {
 
     fn open_picker(app: &mut crate::app::App) {
         press(app, "+");
-        assert!(app.react_picker.is_some(), "the picker opened");
+        assert!(app.emoji_box.is_some(), "the picker opened");
     }
 
     /// Custom emoji `rtshipit` loaded, the terminal able to show images and its image on screen.
@@ -495,7 +524,7 @@ mod tests {
 
     /// Where the panel's inner area is on the screen of `app`.
     fn inner_of(app: &crate::app::App) -> Rect {
-        panel(&areas_of(app)).1
+        panel(app, &areas_of(app)).1
     }
 
     /// The first cell of the panel's inner area that draws `symbol`.
@@ -918,7 +947,7 @@ mod tests {
             None,
             "browsing has no text input"
         );
-        let (_, inner) = panel(&areas);
+        let (_, inner) = panel(&app, &areas);
         press(&mut app, "/");
         assert_eq!(
             cursor_position(&app, &areas),
@@ -1129,5 +1158,53 @@ mod tests {
         );
         let out = render_to_string(&app, 80, 24);
         assert!(!out.contains('\u{1b}'), "{out:?}");
+    }
+
+    /// Insert mode on the room's bar with the box opened by a colon.
+    fn insert_box(app: &mut crate::app::App) {
+        press(app, "i");
+        press(app, ":");
+        assert!(
+            app.emoji_box
+                .as_ref()
+                .is_some_and(|b| b.target == react::Target::Insert),
+            "the box opened from a colon"
+        );
+    }
+
+    #[test]
+    fn the_box_from_a_colon_sits_above_the_input_bar_and_says_enter_inserts() {
+        let mut app = app_80x24();
+        insert_box(&mut app);
+        let out = render_to_string(&app, 80, 24);
+        let lines: Vec<&str> = out.lines().collect();
+        let title = lines
+            .iter()
+            .position(|l| l.contains(" Emoji "))
+            .expect("title row");
+        let bottom = lines
+            .iter()
+            .enumerate()
+            .skip(title + 1)
+            .find(|(_, l)| l.contains('\u{2518}'))
+            .map(|(i, _)| i)
+            .expect("bottom border");
+        let all = lines[title..=bottom].join("\n");
+        assert!(all.contains("Enter insert"), "{out}");
+        assert!(!all.contains("On this message"), "{out}");
+        // The bar and its draft, a lone colon, are drawn right below the box.
+        assert!(lines[bottom + 2].contains(':'), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn the_box_from_a_colon_fits_the_smallest_size() {
+        let mut app = app_80x24();
+        app.size = ratatui::layout::Size::new(40, 8);
+        insert_box(&mut app);
+        let out = render_to_string(&app, 40, 8);
+        assert!(out.contains(" Emoji "), "{out}");
+        assert!(out.contains(':'), "{out}");
+        insta::assert_snapshot!(out);
     }
 }
