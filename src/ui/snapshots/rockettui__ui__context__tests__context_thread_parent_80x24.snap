@@ -2,7 +2,7 @@
 source: src/ui/context.rs
 expression: out
 ---
-┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓
 │  Unread                  │┃? alice  sample                                   ┃
 │> * #general              │┃         -> 3 replies                             ┃
 │  * &dev-team             │┃                                                  ┃

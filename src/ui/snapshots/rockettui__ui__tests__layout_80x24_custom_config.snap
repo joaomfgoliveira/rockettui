@@ -2,7 +2,7 @@
 source: src/ui/mod.rs
 expression: draw_80x24(&app).backend()
 ---
-"┌ Rooms ─────────────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┌ Rooms ─────────────────────────┐┏ general ━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "│  Unread                        │┃  let's sync on this tomorrow               ┃"
 "│> * #general                    │┃bob                                Sat 09:46┃"
 "│  * &dev-team                   │┃  morning, anyone seen the build status?    ┃"

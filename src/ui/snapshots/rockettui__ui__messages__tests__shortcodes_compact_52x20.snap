@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ quiet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ quiet ━━━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃── 1970-01-01 ────────────────────────────────────┃"
 "┃09:34 alice  deploy done 🎉 thanks 👍             ┃" Hidden by multi-width symbols: [(27, " "), (37, " ")]
 "┃09:35 bob    meeting at 10:100:20 or use `:smile:`┃"

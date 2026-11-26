@@ -162,6 +162,19 @@ pub fn build(keymap: &Keymap) -> Vec<HelpLine> {
         lines.push(HelpLine::Row { keys, desc });
     }
     lines.push(HelpLine::Blank);
+    // What the thread unread marks mean. They are drawn, not bound, so the keys column shows them.
+    lines.push(HelpLine::Heading("Thread unread".to_string()));
+    for (keys, desc) in [
+        ("new", "thread has unread replies"),
+        ("T(2)", "room has 2 unread threads"),
+        ("", "open thread: read after delay"),
+    ] {
+        lines.push(HelpLine::Row {
+            keys: keys.to_string(),
+            desc: desc.to_string(),
+        });
+    }
+    lines.push(HelpLine::Blank);
     lines.push(HelpLine::Heading("Commands".to_string()));
     for def in COMMANDS {
         let keys = def
@@ -225,6 +238,14 @@ mod tests {
         assert!(has(&lines, "?", "show what the selected object can do"));
         assert!(has(&lines, "dd", "delete your message under the cursor"));
         assert!(has(&lines, "<C-d>", "half a page down"));
+    }
+
+    #[test]
+    fn the_thread_unread_marks_are_explained() {
+        let lines = build(&default_keymap());
+        assert!(lines.contains(&HelpLine::Heading("Thread unread".to_string())));
+        assert!(has(&lines, "new", "thread has unread replies"));
+        assert!(has(&lines, "T(2)", "room has 2 unread threads"));
     }
 
     #[test]

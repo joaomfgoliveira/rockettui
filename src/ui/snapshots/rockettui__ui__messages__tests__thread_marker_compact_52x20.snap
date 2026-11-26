@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ quiet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ quiet ━━━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃── 1970-01-01 ────────────────────────────────────┃"
 "┃00:01 alice  deploy plan                          ┃"
 "┃             -> 3 replies, last 00:11             ┃"

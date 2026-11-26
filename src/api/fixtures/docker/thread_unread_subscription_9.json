@@ -1,0 +1,58 @@
+{
+  "_id": "6b0752985e8081cbfe2ac684",
+  "open": true,
+  "alert": true,
+  "unread": 0,
+  "userMentions": 0,
+  "groupMentions": 0,
+  "ts": "2026-11-25T21:26:48.117Z",
+  "rid": "6b0752985e8081cbfe2ac683",
+  "name": "rt-public",
+  "fname": "rt-public",
+  "t": "c",
+  "u": {
+    "_id": "3YaAXjSWY6QZLKLSk",
+    "username": "dev",
+    "name": "Dev"
+  },
+  "ls": "2026-11-26T11:24:13.557Z",
+  "roles": [
+    "owner"
+  ],
+  "_updatedAt": "2026-11-26T11:24:15.223Z",
+  "lr": "2026-11-26T11:24:15.217Z",
+  "tunread": [
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "T7",
+    "T8",
+    "T9",
+    "T10",
+    "T11",
+    "T12",
+    "T13",
+    "T14",
+    "T15",
+    "T16",
+    "T17",
+    "T18",
+    "T19",
+    "T20",
+    "T21",
+    "T22"
+  ],
+  "tunreadUser": [
+    "T6",
+    "T13",
+    "T21"
+  ],
+  "tunreadGroup": [
+    "T7",
+    "T14",
+    "T22"
+  ]
+}

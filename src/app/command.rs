@@ -190,6 +190,7 @@ mod tests {
             unread: Unread::default(),
             last_seen: None,
             last_activity: 0,
+            threads: Default::default(),
         }
     }
 

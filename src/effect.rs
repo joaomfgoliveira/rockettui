@@ -193,6 +193,9 @@ pub enum Effect {
     /// Mark `room` read with `POST subscriptions.read`. Answers `Action::MarkReadDone`; a failure
     /// answers nothing, the room just stays unread.
     MarkRead { room: RoomId },
+    /// Mark thread `parent_id` of `room` read with `POST chat.readThread`. Answers
+    /// `Action::MarkThreadReadDone`; a failure answers nothing, the thread just stays unread.
+    MarkThreadRead { room: RoomId, parent_id: String },
 }
 
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
@@ -206,7 +209,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 // LoadRooms already reports the client error; the username is best effort.
                 Effect::LoadMe => return Vec::new(),
                 // Best effort too: the room stays unread.
-                Effect::MarkRead { .. } => return Vec::new(),
+                Effect::MarkRead { .. } | Effect::MarkThreadRead { .. } => return Vec::new(),
                 Effect::LoadHistory { room, before, .. } => Action::HistoryFailed {
                     room,
                     older: before.is_some(),
@@ -493,6 +496,12 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
             Ok(()) => vec![Action::MarkReadDone { room }],
             Err(_) => Vec::new(),
         },
+        Effect::MarkThreadRead { room, parent_id } => {
+            match client.mark_thread_read(&parent_id).await {
+                Ok(()) => vec![Action::MarkThreadReadDone { room, parent_id }],
+                Err(_) => Vec::new(),
+            }
+        }
         Effect::LoadCustomEmojis => match client.custom_emojis().await {
             Ok(list) => vec![Action::CustomEmojisLoaded(list)],
             Err(_) => vec![Action::CustomEmojisFailed],
@@ -954,6 +963,43 @@ mod tests {
                 .is_empty()
         );
         // No client at all fails silently too.
+        assert!(run(Err(ApiError::Unauthorized), effect).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mark_thread_read_answers_done_on_success_and_nothing_on_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.readThread"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("{\"success\":true}", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let effect = Effect::MarkThreadRead {
+            room: general(),
+            parent_id: "p1".to_string(),
+        };
+        let actions = run(Ok(client_for(&server)), effect.clone()).await;
+        assert_eq!(
+            actions,
+            [Action::MarkThreadReadDone {
+                room: general(),
+                parent_id: "p1".to_string()
+            }]
+        );
+
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        assert!(
+            run(Ok(client_for(&failing)), effect.clone())
+                .await
+                .is_empty()
+        );
         assert!(run(Err(ApiError::Unauthorized), effect).await.is_empty());
     }
 

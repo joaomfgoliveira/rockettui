@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃alice                                        09:44┃"
 "┃  let's sync on this tomorrow                     ┃"
 "┃bob                                          09:46┃"

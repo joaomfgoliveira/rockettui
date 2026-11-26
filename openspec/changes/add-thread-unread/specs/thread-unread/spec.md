@@ -26,11 +26,11 @@ A room with unread threads SHALL show a badge `T` followed by the number of its 
 
 #### Scenario: Badge
 - **WHEN** a room has 2 unread threads and no unread messages
-- **THEN** its row shows `T2`
+- **THEN** its row shows `T(2)`
 
 #### Scenario: With count and mention
 - **WHEN** a room has 3 unread messages, 1 mention and 2 unread threads
-- **THEN** its row shows `(3)`, `@1` and `T2`, in that order
+- **THEN** its row shows `(3)`, `@1` and `T(2)`, in that order
 
 #### Scenario: Mention in a thread
 - **WHEN** the user is mentioned in one of the unread threads

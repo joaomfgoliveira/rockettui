@@ -72,6 +72,7 @@ fn rooms() -> Vec<Room> {
             },
             last_seen: None,
             last_activity: FAKE_EPOCH + offset,
+            threads: Default::default(),
         })
         .collect()
 }

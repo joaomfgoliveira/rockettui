@@ -71,13 +71,26 @@ pub fn on_subscription(app: &mut App, room: &RoomId, update: UnreadUpdate) {
     let Some(held) = app.rooms.iter_mut().find(|r| &r.id == room) else {
         return;
     };
-    let before = held.unread;
+    let before = (held.unread, held.threads.clone());
+    held.threads.merge(&update.threads);
     held.unread.merge(update);
-    if held.unread == before {
+    if (held.unread, &held.threads) == (before.0, &before.1) {
         return;
     }
     if held.unread.is_unread() {
         read::on_unread(app, room);
+    }
+    // The thread the user is looking at got a reply: the wait for reading it restarts.
+    let focused_thread_unread = app.focus == crate::app::Focus::Thread
+        && app.thread.as_ref().is_some_and(|pane| {
+            &pane.room == room
+                && app
+                    .rooms
+                    .iter()
+                    .any(|r| &r.id == room && r.threads.is_unread(&pane.parent_id))
+        });
+    if focused_thread_unread {
+        read::thread_restart(app);
     }
     let moved = selected.and_then(|id| {
         sidebar::rows(app).iter().position(
@@ -933,6 +946,7 @@ mod tests {
                 unread: Some(4),
                 user_mentions: Some(1),
                 group_mentions: Some(1),
+                ..UnreadUpdate::default()
             },
         );
         let held = counts(&app, "r-general");
@@ -955,6 +969,76 @@ mod tests {
         let held = counts(&app, "r-general");
         assert_eq!(held, crate::data::Unread::default());
         assert!(!held.is_unread());
+    }
+
+    fn thread_ids(list: &[&str]) -> Option<std::collections::HashSet<String>> {
+        Some(list.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn thread_unread_follows_updates_and_keeps_absent_fields() {
+        use crate::data::ThreadUnreadUpdate;
+        let mut app = fixture_app();
+        let room = rid("r-general");
+        let room_counts = counts(&app, "r-general");
+        let send = |app: &mut App, threads: ThreadUnreadUpdate| {
+            crate::app::update::update(
+                app,
+                Action::RtSubscription {
+                    room: room.clone(),
+                    update: UnreadUpdate {
+                        threads,
+                        ..UnreadUpdate::default()
+                    },
+                },
+            );
+        };
+        let held = |app: &App| {
+            app.rooms
+                .iter()
+                .find(|r| r.id == room)
+                .unwrap()
+                .threads
+                .clone()
+        };
+        // A full update.
+        send(
+            &mut app,
+            ThreadUnreadUpdate {
+                unread: thread_ids(&["a", "b"]),
+                user: thread_ids(&["b"]),
+                group: thread_ids(&["a"]),
+            },
+        );
+        assert_eq!(held(&app).count(), 2);
+        assert!(held(&app).has_mention());
+        // A partial update replaces only the field it carries.
+        send(
+            &mut app,
+            ThreadUnreadUpdate {
+                unread: thread_ids(&["a"]),
+                ..ThreadUnreadUpdate::default()
+            },
+        );
+        let now = held(&app);
+        assert_eq!(now.count(), 1);
+        assert_eq!(now.user.len(), 1, "an absent field keeps the held set");
+        // An update with no thread field (and none of the unread keys) changes nothing.
+        send(&mut app, ThreadUnreadUpdate::default());
+        assert_eq!(held(&app), now);
+        // An empty field replaces the held set: the thread was read, elsewhere or here.
+        send(
+            &mut app,
+            ThreadUnreadUpdate {
+                unread: thread_ids(&[]),
+                user: thread_ids(&[]),
+                group: thread_ids(&[]),
+            },
+        );
+        assert_eq!(held(&app).count(), 0);
+        assert!(!held(&app).has_mention());
+        // The room's own counts were not touched by any of it.
+        assert_eq!(counts(&app, "r-general"), room_counts);
     }
 
     #[test]

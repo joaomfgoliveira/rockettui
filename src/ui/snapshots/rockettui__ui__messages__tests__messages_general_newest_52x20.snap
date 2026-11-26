@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃             トメッセージです。                   ┃" Hidden by multi-width symbols: [(15, " "), (17, " "), (19, " "), (21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " ")]
 "┃09:34 dave   I'll take a look after the meeting   ┃"
 "┃09:36 alice  nice catch, thanks!                  ┃"

@@ -465,6 +465,7 @@ impl App {
             own_user: self.own_username.as_deref(),
             own_id: self.own_user_id.as_deref(),
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
         }
     }
@@ -473,7 +474,19 @@ impl App {
     pub fn thread_row_ctx(&self, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
         ctx.in_thread = true;
+        ctx.unread_threads = self
+            .thread
+            .as_ref()
+            .and_then(|pane| self.unread_threads_of(&pane.room));
         ctx
+    }
+
+    /// The ids of the threads of `room` the server lists as unread, if the room is known.
+    fn unread_threads_of(&self, room: &RoomId) -> Option<&std::collections::HashSet<String>> {
+        self.rooms
+            .iter()
+            .find(|r| &r.id == room)
+            .map(|r| &r.threads.unread)
     }
 
     /// `row_ctx` for the messages pane of `room`: the same, plus the message the `unread` divider
@@ -482,6 +495,7 @@ impl App {
     pub fn pane_row_ctx(&self, room: &RoomId, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
         ctx.unread_before = read::divider_before(self, room);
+        ctx.unread_threads = self.unread_threads_of(room);
         ctx
     }
 

@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┌ general ─────────────────────────────────────────┐"
+"┌ general ──────────────── Threads (gT) unread (0) ┐"
 "│09:36 alice  nice catch, thanks!                  │"
 "│09:38 bob    the deploy finished without errors   │"
 "│09:40 carol  heads up: maintenance window tonight │"

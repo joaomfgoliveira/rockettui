@@ -24,6 +24,8 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "sidebar.room",
     "sidebar.unread",
     "sidebar.mention",
+    "sidebar.thread_badge",
+    "sidebar.thread_badge_mention",
     "sidebar.cursor",
     "sidebar.cursor_unfocused",
     "status.mode",
@@ -52,6 +54,7 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.custom_emoji",
     "messages.thread",
     "messages.thread_reply_hint",
+    "messages.thread_unread",
     "thread_pane.border",
     "help.border",
     "help.title",
@@ -220,6 +223,10 @@ pub struct Theme {
     pub sidebar_unread: Style,
     /// The `@N` mention badge after an unread room's count.
     pub sidebar_mention: Style,
+    /// The `T2` badge of a room with unread threads, after the count and the mention badge.
+    pub sidebar_thread_badge: Style,
+    /// The same badge when the user was mentioned in one of the unread threads.
+    pub sidebar_thread_badge_mention: Style,
     pub sidebar_cursor: Style,
     pub sidebar_cursor_unfocused: Style,
     pub status_mode: Style,
@@ -263,6 +270,8 @@ pub struct Theme {
     pub messages_thread: Style,
     /// The `[thread]` tag at the start of a reply that is also shown in the channel (the reply's text is italic).
     pub messages_thread_reply_hint: Style,
+    /// The `new` mark at the end of the marker row of a thread with replies the user has not read.
+    pub messages_thread_unread: Style,
     /// Added over the focused or unfocused pane border for the border of the thread pane. Plain by
     /// default: the pane then looks like the other panes, focus included.
     pub thread_pane_border: Style,
@@ -321,6 +330,8 @@ impl Default for Theme {
             sidebar_room: plain,
             sidebar_unread: plain.add_modifier(Modifier::BOLD),
             sidebar_mention: plain.fg(Color::Red).add_modifier(Modifier::BOLD),
+            sidebar_thread_badge: plain,
+            sidebar_thread_badge_mention: plain.fg(Color::Red).add_modifier(Modifier::BOLD),
             sidebar_cursor: plain.add_modifier(Modifier::REVERSED),
             sidebar_cursor_unfocused: plain.add_modifier(Modifier::BOLD),
             status_mode: plain.add_modifier(Modifier::REVERSED | Modifier::BOLD),
@@ -347,6 +358,7 @@ impl Default for Theme {
             messages_custom_emoji: plain.add_modifier(Modifier::ITALIC),
             messages_thread: plain.fg(Color::Cyan),
             messages_thread_reply_hint: plain.fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            messages_thread_unread: plain.fg(Color::Red),
             thread_pane_border: plain,
             help_border: plain,
             help_title: plain.add_modifier(Modifier::BOLD),
@@ -392,6 +404,8 @@ impl Theme {
             ("sidebar", "room") => Some(&mut self.sidebar_room),
             ("sidebar", "unread") => Some(&mut self.sidebar_unread),
             ("sidebar", "mention") => Some(&mut self.sidebar_mention),
+            ("sidebar", "thread_badge") => Some(&mut self.sidebar_thread_badge),
+            ("sidebar", "thread_badge_mention") => Some(&mut self.sidebar_thread_badge_mention),
             ("sidebar", "cursor") => Some(&mut self.sidebar_cursor),
             ("sidebar", "cursor_unfocused") => Some(&mut self.sidebar_cursor_unfocused),
             ("status", "mode") => Some(&mut self.status_mode),
@@ -418,6 +432,7 @@ impl Theme {
             ("messages", "custom_emoji") => Some(&mut self.messages_custom_emoji),
             ("messages", "thread") => Some(&mut self.messages_thread),
             ("messages", "thread_reply_hint") => Some(&mut self.messages_thread_reply_hint),
+            ("messages", "thread_unread") => Some(&mut self.messages_thread_unread),
             ("thread_pane", "border") => Some(&mut self.thread_pane_border),
             ("help", "border") => Some(&mut self.help_border),
             ("help", "title") => Some(&mut self.help_title),
@@ -975,8 +990,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            59,
-            "17 chrome and border paths, the seventeen messages and thread elements, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            62,
+            "17 chrome and border paths, the seventeen messages and thread elements, the two thread badge elements and the thread unread mark, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -995,7 +1010,7 @@ mod tests {
             theme.sidebar_header.add_modifier,
             Modifier::BOLD | Modifier::DIM
         );
-        assert_eq!(theme.status_error.fg, Some(Color::Indexed(11)));
+        assert_eq!(theme.status_error.fg, Some(Color::Indexed(13)));
         assert_eq!(theme.messages_author.add_modifier, Modifier::BOLD);
         assert_eq!(theme.messages_cursor.add_modifier, Modifier::REVERSED);
         // The edited marker and the deleted line are dim unless the theme says otherwise.
@@ -1079,6 +1094,44 @@ mod tests {
         let (theme, out) = parse_str("[sidebar.mention]\nfg = \"yellow\"\n");
         assert!(out.is_empty(), "{out:?}");
         assert_eq!(theme.sidebar_mention.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn the_thread_unread_elements_have_defaults_and_are_themeable() {
+        let t = Theme::default();
+        // The mention variant stands out from the plain badge; the `new` mark is readable.
+        assert_ne!(t.sidebar_thread_badge, t.sidebar_thread_badge_mention);
+        assert_ne!(t.messages_thread_unread, t.messages_thread);
+        assert!(t.messages_thread_unread.fg.is_some());
+        // A theme file that never heard of them still loads, with the defaults.
+        let (theme, out) = parse_str("[messages.body]\nfg = \"green\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.sidebar_thread_badge, t.sidebar_thread_badge);
+        assert_eq!(theme.messages_thread_unread, t.messages_thread_unread);
+        // Overrides.
+        let (theme, out) = parse_str(
+            "[sidebar.thread_badge]\nfg = \"magenta\"\n[sidebar.thread_badge_mention]\nbg = \"blue\"\n[messages.thread_unread]\nfg = \"green\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.sidebar_thread_badge.fg, Some(Color::Magenta));
+        assert_eq!(theme.sidebar_thread_badge_mention.bg, Some(Color::Blue));
+        assert_eq!(theme.messages_thread_unread.fg, Some(Color::Green));
+        // An override keeps the default modifiers (bold) when only a color is set.
+        assert_eq!(
+            theme.sidebar_thread_badge.add_modifier,
+            t.sidebar_thread_badge.add_modifier
+        );
+        // A misspelled element is reported by name and changes nothing.
+        let (theme, out) = parse_str("[sidebar.thread_badges]\nfg = \"red\"\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(
+            out[0]
+                .key
+                .as_deref()
+                .is_some_and(|k| k.contains("thread_badges")),
+            "{out:?}"
+        );
+        assert_eq!(theme.sidebar_thread_badge, t.sidebar_thread_badge);
     }
 
     #[test]

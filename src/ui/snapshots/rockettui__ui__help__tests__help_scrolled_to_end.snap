@@ -3,15 +3,15 @@ source: src/ui/help.rs
 expression: out
 ---
 ┏ Rooms ━━━━━━━━━━━━━━━━━━━┓┌ Help (q to close) ───────────────────────────────┐
-┃  Unread                  ┃│<C-c>              cancel, or leave the mode      │
-┃> * #general              ┃│<Esc>              cancel, or leave the mode      │
-┃  * &dev-team             ┃│<BS>               delete the character before the│
-┃  * @alice                ┃│<CR>               run the command line           │
+┃  Unread                  ┃│Thread list (focused)                             │
+┃> * #general              ┃│h / l              previous or next filter: all, f│
+┃  * &dev-team             ┃│q Esc              close the list                 │
+┃  * @alice                ┃│/                  search the threads (Enter keeps│
 ┃  Folders                 ┃│                                                  │
-┃  ▾ Work (1)              ┃│Thread list (focused)                             │
-┃      ~design-review      ┃│h / l              previous or next filter: all, f│
-┃      +platform           ┃│q Esc              close the list                 │
-┃  ▾ People (1)            ┃│/                  search the threads (Enter keeps│
+┃  ▾ Work (1)              ┃│Thread unread                                     │
+┃      ~design-review      ┃│new                thread has unread replies      │
+┃      +platform           ┃│T(2)               room has 2 unread threads      │
+┃  ▾ People (1)            ┃│                   open thread: read after delay  │
 ┃  Recent                  ┃│                                                  │
 ┃    #random               ┃│Commands                                          │
 ┃    &secrets [e2e]        ┃│:q :quit           quit (warns once if messages ar│

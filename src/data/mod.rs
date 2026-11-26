@@ -5,6 +5,8 @@
 
 pub mod fake;
 
+use std::collections::HashSet;
+
 /// Stable room identifier (the server room id in later phases).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RoomId(pub String);
@@ -34,12 +36,29 @@ pub struct Unread {
 
 /// What one live subscription update says about the unread state. A key the update lacks is `None`
 /// and leaves the held value alone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadUpdate {
     pub alert: Option<bool>,
     pub unread: Option<u32>,
     pub user_mentions: Option<u32>,
     pub group_mentions: Option<u32>,
+    pub threads: ThreadUnreadUpdate,
+}
+
+/// The thread fields of one live subscription update. A field the update lacks is `None` and keeps
+/// the held set; a field it carries, even empty, replaces the held set whole (so ids of deleted
+/// threads drop out).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadUnreadUpdate {
+    pub unread: Option<HashSet<String>>,
+    pub user: Option<HashSet<String>>,
+    pub group: Option<HashSet<String>>,
+}
+
+impl ThreadUnreadUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.unread.is_none() && self.user.is_none() && self.group.is_none()
+    }
 }
 
 impl UnreadUpdate {
@@ -49,6 +68,7 @@ impl UnreadUpdate {
             && self.unread.is_none()
             && self.user_mentions.is_none()
             && self.group_mentions.is_none()
+            && self.threads.is_empty()
     }
 }
 
@@ -90,6 +110,46 @@ impl Unread {
     }
 }
 
+/// The server's thread unread state of a room: the ids of the threads with replies the user has not
+/// read (`tunread`) and the subsets where the user (`tunreadUser`) or a group (`tunreadGroup`,
+/// `@all` and `@here`) was mentioned. Sets of ids, never counts: the app does not see every reply.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadUnread {
+    pub unread: HashSet<String>,
+    pub user: HashSet<String>,
+    pub group: HashSet<String>,
+}
+
+impl ThreadUnread {
+    /// The number of unread threads: what the sidebar badge shows.
+    pub fn count(&self) -> usize {
+        self.unread.len()
+    }
+
+    /// Whether the thread is unread.
+    pub fn is_unread(&self, thread: &str) -> bool {
+        self.unread.contains(thread)
+    }
+
+    /// Apply a live update: a field it carries replaces the held set, a field it lacks keeps it.
+    pub fn merge(&mut self, update: &ThreadUnreadUpdate) {
+        if let Some(unread) = &update.unread {
+            self.unread.clone_from(unread);
+        }
+        if let Some(user) = &update.user {
+            self.user.clone_from(user);
+        }
+        if let Some(group) = &update.group {
+            self.group.clone_from(group);
+        }
+    }
+
+    /// Whether the user was mentioned (by name or by group) in any unread thread.
+    pub fn has_mention(&self) -> bool {
+        !self.user.is_empty() || !self.group.is_empty()
+    }
+}
+
 /// A room as the sidebar sees it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Room {
@@ -106,6 +166,17 @@ pub struct Room {
     pub last_seen: Option<i64>,
     /// Unix seconds of the last activity in the room.
     pub last_activity: i64,
+    /// Which threads of the room have replies the user has not read, as the server says.
+    pub threads: ThreadUnread,
+}
+
+impl Room {
+    /// Whether the room counts as unread for the sidebar: the server flagged it, it holds unread
+    /// messages, or it has unread threads. The room's own count and flag stay what the server says
+    /// (`unread`); this is only the one place the sidebar asks "is this room unread".
+    pub fn is_unread(&self) -> bool {
+        self.unread.is_unread() || self.threads.count() > 0
+    }
 }
 
 /// A user-defined sidebar folder; membership is by room id (D-12).

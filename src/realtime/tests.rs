@@ -401,6 +401,7 @@ fn wanted_rooms_are_the_joined_rooms_that_can_show_messages() {
         unread: Unread::default(),
         last_seen: None,
         last_activity: 0,
+        threads: Default::default(),
     };
     let rooms = [room("b", false), room("secret", true), room("a", false)];
     assert_eq!(wanted_rooms(&rooms), set(&["a", "b"]));
@@ -540,6 +541,7 @@ async fn the_supervisor_publishes_the_room_list_of_the_app() {
         unread: Unread::default(),
         last_seen: None,
         last_activity: 0,
+        threads: Default::default(),
     };
     app.rooms = vec![room("r1", false), room("secret", true)];
     // Nothing runs yet, so nothing is published and nothing panics.

@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ quiet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ quiet ━━━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃Could not load history                            ┃"
 "┃                                                  ┃"
 "┃                                                  ┃"

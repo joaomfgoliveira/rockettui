@@ -1,0 +1,24 @@
+---
+source: src/ui/messages.rs
+expression: terminal.backend()
+---
+"┏ quiet ━━━━━━━━━━━━━━━━━━ Threads (gT) unread (1) ┓"
+"┃── 1970-01-01 ────────────────────────────────────┃"
+"┃00:01 alice  deploy plan                          ┃"
+"┃             -> 3 replies, last 00:11, new        ┃"
+"┃00:02 alice  who owns the rollback                ┃"
+"┃             -> 1 reply, last 00:11               ┃"
+"┃00:11 alice  [thread] done, also here             ┃"
+"┃00:12 alice  plain message                        ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┃                                                  ┃"
+"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"

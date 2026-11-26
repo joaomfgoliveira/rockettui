@@ -73,7 +73,7 @@ fn row_item(app: &App, row: &SidebarRow, width: usize) -> ListItem<'static> {
 /// whose name is cut (with `…`) before its count and badge are.
 pub fn room_line(app: &App, room: &Room, indent: &str, width: usize) -> Line<'static> {
     // The placeholder is as wide as the unread marker, so read rooms stay aligned.
-    let unread = if room.unread.is_unread() {
+    let unread = if room.is_unread() {
         app.theme.markers.unread.clone()
     } else {
         " ".repeat(app.theme.markers.unread.width())
@@ -85,7 +85,7 @@ pub fn room_line(app: &App, room: &Room, indent: &str, width: usize) -> Line<'st
     } else {
         ""
     };
-    let style = if room.unread.is_unread() {
+    let style = if room.is_unread() {
         app.theme.sidebar_unread
     } else {
         app.theme.sidebar_room
@@ -100,9 +100,16 @@ pub fn room_line(app: &App, room: &Room, indent: &str, width: usize) -> Line<'st
     } else {
         String::new()
     };
+    // The thread badge: `T` and the number of unread threads, after the count and the mention badge.
+    let threads = match room.threads.count() {
+        0 => String::new(),
+        n => format!(" T({})", capped(u32::try_from(n).unwrap_or(u32::MAX))),
+    };
     let prefix = format!("{indent}{unread}{glyph}");
-    let fixed = prefix.width() + tag.width() + count.width() + mention.width();
-    let name = if (count.is_empty() && mention.is_empty()) || fixed + name.width() <= width {
+    let fixed = prefix.width() + tag.width() + count.width() + mention.width() + threads.width();
+    let name = if (count.is_empty() && mention.is_empty() && threads.is_empty())
+        || fixed + name.width() <= width
+    {
         name.into_owned()
     } else {
         truncate_to(&name, width.saturating_sub(fixed))
@@ -110,6 +117,15 @@ pub fn room_line(app: &App, room: &Room, indent: &str, width: usize) -> Line<'st
     let mut spans = vec![Span::styled(format!("{prefix}{name}{tag}{count}"), style)];
     if !mention.is_empty() {
         spans.push(Span::styled(mention, app.theme.sidebar_mention));
+    }
+    if !threads.is_empty() {
+        let style = if room.threads.has_mention() {
+            app.theme.sidebar_thread_badge_mention
+        } else {
+            // The row's own style (the name's colour), plus whatever the theme adds.
+            style.patch(app.theme.sidebar_thread_badge)
+        };
+        spans.push(Span::styled(threads, style));
     }
     Line::from(spans)
 }
@@ -294,6 +310,128 @@ mod tests {
         );
         let row = row_of(&rows, "a-very-long");
         assert!(row.contains("… (7) @1"), "{row:?}");
+    }
+
+    /// Give the fake room `name` these unread threads (the first `mentioned` of them with a user
+    /// mention) and draw the sidebar, unfocused. The room's own unread state is left as it is.
+    fn draw_threads(app: &mut App, name: &str, threads: usize, mentioned: usize) -> Vec<String> {
+        let room = app.rooms.iter_mut().find(|r| r.name == name).expect("room");
+        room.threads.unread = (0..threads).map(|i| format!("t{i}")).collect();
+        room.threads.user = (0..mentioned).map(|i| format!("t{i}")).collect();
+        press(app, "<C-w>l");
+        screen_rows(&draw(app))
+    }
+
+    #[test]
+    fn the_thread_badge_follows_the_count_and_the_mention_badge() {
+        use crate::data::Unread;
+        let mut app = app_80x24();
+        // Only threads unread: `T(2)`, nothing else.
+        let rows = draw_threads(&mut app, "random", 2, 0);
+        let row = row_of(&rows, "random");
+        assert!(row.contains("#random T(2)"), "{row:?}");
+        let rest = row.replace("T(2)", "");
+        assert!(!rest.contains('(') && !rest.contains('@'), "{row:?}");
+        // Count, mention badge and thread badge, in that order.
+        app.rooms
+            .iter_mut()
+            .find(|r| r.name == "general")
+            .unwrap()
+            .unread = Unread {
+            flagged: true,
+            count: 3,
+            mentions: 1,
+        };
+        let rows = draw_threads(&mut app, "general", 2, 0);
+        assert!(row_of(&rows, "general").contains("#general (3) @1 T(2)"));
+        // A count over 99 is `99+`; no threads, no badge.
+        let rows = draw_threads(&mut app, "random", 250, 0);
+        assert!(row_of(&rows, "random").contains("T(99+)"));
+        let rows = draw_threads(&mut app, "random", 0, 0);
+        assert!(!row_of(&rows, "random").contains(" T"), "{rows:?}");
+    }
+
+    #[test]
+    fn the_old_badges_are_unchanged_without_threads() {
+        use crate::data::Unread;
+        let mut app = app_80x24();
+        let rows = draw_with(
+            &mut app,
+            "general",
+            Unread {
+                flagged: true,
+                count: 3,
+                mentions: 1,
+            },
+        );
+        let row = row_of(&rows, "general");
+        assert!(row.contains("#general (3) @1"), "{row:?}");
+        assert!(!row.contains(" T"), "{row:?}");
+    }
+
+    #[test]
+    fn a_long_name_is_cut_before_the_thread_badge_too() {
+        let mut app = app_80x24();
+        app.rooms
+            .iter_mut()
+            .find(|r| r.name == "random")
+            .unwrap()
+            .name = "a-very-long-room-name-indeed".to_string();
+        let rows = draw_threads(&mut app, "a-very-long-room-name-indeed", 3, 0);
+        let row = row_of(&rows, "a-very-long");
+        assert!(row.contains("… T(3)"), "{row:?}");
+    }
+
+    #[test]
+    fn the_thread_badge_stands_out_with_a_mention_and_is_themeable() {
+        for (theme, plain_fg, mention_fg) in [
+            ("", Color::Reset, Color::Red),
+            (
+                "[sidebar.thread_badge]\nfg = \"magenta\"\n",
+                Color::Magenta,
+                Color::Red,
+            ),
+        ] {
+            for (mentioned, want) in [(0, plain_fg), (1, mention_fg)] {
+                let mut app = app_with_config(config_from_theme(theme), 80, 24);
+                let rows = draw_threads(&mut app, "random", 2, mentioned);
+                let y = rows.iter().position(|r| r.contains("random")).unwrap();
+                let byte = rows[y].find(" T(2)").expect("badge") + 1;
+                let x = u16::try_from(rows[y][..byte].chars().count()).unwrap();
+                let terminal = draw(&app);
+                let cell = &terminal.backend().buffer()[(x, u16::try_from(y).unwrap())];
+                assert_eq!(cell.fg, want, "mentioned {mentioned}, theme {theme:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_room_with_only_unread_threads_is_bold_with_the_unread_marker() {
+        let mut app = app_80x24();
+        let rows = draw_threads(&mut app, "random", 1, 0);
+        let row = row_of(&rows, "random");
+        assert!(row.contains("* #random T(1)"), "{row:?}");
+        let y = rows.iter().position(|r| r.contains("random")).unwrap();
+        let x = u16::try_from(rows[y].chars().position(|c| c == 'r').unwrap()).unwrap();
+        let terminal = draw(&app);
+        let cell = &terminal.backend().buffer()[(x, u16::try_from(y).unwrap())];
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn sidebar_thread_badges_28x20() {
+        let mut app = app_80x24();
+        for (name, threads, mentioned) in
+            [("random", 2, 0), ("general", 120, 1), ("platform", 1, 0)]
+        {
+            let room = app.rooms.iter_mut().find(|r| r.name == name).expect(name);
+            room.threads.unread = (0..threads).map(|i| format!("t{i}")).collect();
+            room.threads.user = (0..mentioned).map(|i| format!("t{i}")).collect();
+        }
+        sidebar::on_rows_changed(&mut app);
+        press(&mut app, "<C-w>l");
+        let terminal = draw(&app);
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]

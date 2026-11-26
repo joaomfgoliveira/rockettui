@@ -168,6 +168,7 @@ mod tests {
                 unread: Unread::default(),
                 last_seen: None,
                 last_activity: i64::try_from(n - i).unwrap_or(0),
+                threads: Default::default(),
             })
             .collect();
         app.folders.clear();

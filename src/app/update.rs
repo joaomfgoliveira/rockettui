@@ -139,6 +139,10 @@ fn reduce(app: &mut App, action: Action) {
         Action::FollowFailed { follow, error } => follow::on_failed(app, follow, error),
         Action::MarkReadDue => read::on_due(app),
         Action::MarkReadDone { room } => read::on_done(app, &room),
+        Action::MarkThreadReadDue => read::on_thread_due(app),
+        Action::MarkThreadReadDone { room, parent_id } => {
+            read::on_thread_done(app, &room, &parent_id);
+        }
         Action::FoldersLoaded(folders) => {
             app.folders = folders;
             sidebar::on_rows_changed(app);

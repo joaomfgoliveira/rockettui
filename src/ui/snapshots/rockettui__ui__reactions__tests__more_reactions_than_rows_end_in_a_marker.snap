@@ -2,7 +2,7 @@
 source: src/ui/reactions.rs
 expression: out
 ---
-┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓
 │  Unread                  │┃? alice  deploy finished                          ┃
 │> * #general              │┃         :custom_0: 1  :custom_1: 1  :custom_2: 1 ┃
 │  * &dev-team             │┃         :custom_3: 1  :custom_4: 1  :custom_5: 1 ┃

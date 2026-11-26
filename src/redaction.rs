@@ -398,6 +398,7 @@ fn sentinel_sweep() {
             unread: Unread::default(),
             last_seen: None,
             last_activity: 0,
+            threads: Default::default(),
         }]),
         Action::FoldersLoaded(vec![Folder {
             id: FolderId("f".to_string()),
@@ -492,6 +493,7 @@ fn hostile_server_text() {
                 unread: Unread::flag(),
                 last_seen: None,
                 last_activity: 1,
+                threads: Default::default(),
             }]),
         );
         update(

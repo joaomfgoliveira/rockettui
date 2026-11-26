@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃09:00 carol  This is a deliberately long message  ┃"
 "┃             that keeps going so the message      ┃"
 "┃             pane has to wrap it across several   ┃"

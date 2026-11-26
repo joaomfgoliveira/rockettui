@@ -7,7 +7,7 @@ use crate::api::wire::{ApiDate, WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits, THREAD_ROW_TEXT_CHARS, ThreadRow};
 use crate::data::{
     CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
-    SendState, Unread,
+    SendState, ThreadUnread, Unread,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -88,6 +88,11 @@ pub fn rooms(subs: &[WireSub], records: &[WireRoom]) -> Vec<Room> {
             },
             last_seen: sub.ls.as_ref().and_then(|d| d.secs()),
             last_activity,
+            threads: ThreadUnread {
+                unread: sub.tunread.iter().cloned().collect(),
+                user: sub.tunread_user.iter().cloned().collect(),
+                group: sub.tunread_group.iter().cloned().collect(),
+            },
         });
     }
     out.sort_by(|a, b| {
@@ -491,6 +496,72 @@ mod tests {
         );
         assert_eq!(get("b"), Unread::flag());
         assert_eq!(get("c"), Unread::default());
+    }
+
+    #[test]
+    fn thread_unread_present_absent_and_empty() {
+        let mapped = rooms(
+            &[
+                sub(
+                    r#"{"rid":"r-a","t":"c","name":"a","tunread":["t1","t2"],"tunreadUser":["t2"],"tunreadGroup":["t1"]}"#,
+                ),
+                sub(r#"{"rid":"r-b","t":"c","name":"b"}"#),
+                sub(
+                    r#"{"rid":"r-c","t":"c","name":"c","tunread":[],"tunreadUser":[],"tunreadGroup":[]}"#,
+                ),
+            ],
+            &[
+                record(r#"{"_id":"r-a","lm":"2026-11-16T10:00:00.000Z"}"#),
+                record(r#"{"_id":"r-b","lm":"2026-11-16T10:00:00.000Z"}"#),
+                record(r#"{"_id":"r-c","lm":"2026-11-16T10:00:00.000Z"}"#),
+            ],
+        );
+        let get = |name: &str| {
+            mapped
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .threads
+                .clone()
+        };
+        let present = get("a");
+        assert_eq!(present.count(), 2);
+        assert!(present.is_unread("t1") && present.is_unread("t2") && !present.is_unread("t3"));
+        assert!(present.has_mention());
+        assert_eq!(present.user, HashSet::from(["t2".to_string()]));
+        assert_eq!(present.group, HashSet::from(["t1".to_string()]));
+        assert_eq!(get("b"), ThreadUnread::default());
+        assert_eq!(get("c"), ThreadUnread::default());
+        assert!(!get("b").has_mention());
+    }
+
+    #[test]
+    fn thread_unread_from_docker_fixtures() {
+        for (json, label) in [
+            (
+                include_str!("fixtures/docker/thread_unread_subscription.json"),
+                "8.9.1",
+            ),
+            (
+                include_str!("fixtures/docker/thread_unread_subscription_9.json"),
+                "9.0.0",
+            ),
+        ] {
+            let wire: WireSub = serde_json::from_str(json).expect("captured subscription");
+            let record = record(&format!(
+                r#"{{"_id":"{}","lm":"2026-11-16T10:00:00.000Z"}}"#,
+                wire.rid
+            ));
+            let tunread: HashSet<String> = wire.tunread.iter().cloned().collect();
+            let mapped = rooms(&[wire], &[record]);
+            let threads = &mapped[0].threads;
+            assert!(!threads.unread.is_empty(), "{label}: tunread is mapped");
+            assert_eq!(threads.unread, tunread, "{label}");
+            assert!(threads.has_mention(), "{label}: the fixture has mentions");
+            // The mention sets are subsets of the unread set.
+            assert!(threads.user.is_subset(&threads.unread), "{label}");
+            assert!(threads.group.is_subset(&threads.unread), "{label}");
+        }
     }
 
     #[test]

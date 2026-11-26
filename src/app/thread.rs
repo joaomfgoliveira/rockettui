@@ -201,6 +201,8 @@ fn open_at(
         });
     }
     app.focus = crate::app::Focus::Thread;
+    // An open thread is being read: the wait starts (it sends nothing for a thread that is not unread).
+    super::read::thread_restart(app);
 }
 
 /// True when the message under the cursor of the focused messages pane can be replied to: what the
@@ -312,6 +314,7 @@ pub fn close(app: &mut App) {
     let Some(pane) = app.thread.take() else {
         return;
     };
+    super::read::thread_cancel(app);
     keep_unsent(app, &pane);
     // A thread opened from the list gives the column back to it, as it was.
     let back_to_list = pane.from_list && app.thread_list.is_some();
@@ -375,6 +378,7 @@ pub fn on_reply_sent(app: &mut App, room: &RoomId, parent_id: &str, reply: &Mess
 
 /// Drop the pane without touching the main flow: the room it belonged to is no longer open.
 pub fn discard(app: &mut App) {
+    super::read::thread_cancel(app);
     retarget(app, InputTarget::Room);
     if let Some(pane) = app.thread.take() {
         keep_unsent(app, &pane);
@@ -480,6 +484,11 @@ pub fn on_loaded(
     pane.next_offset = offset.saturating_add(received);
     pane.loading_more = false;
     pane.load = ThreadLoad::Loaded;
+    if offset == 0 {
+        // Opening a thread lands on its newest message, and only now has the user been shown it.
+        pane.view.cursor = pane.messages.len().saturating_sub(1);
+        super::read::thread_restart(app);
+    }
 }
 
 /// A request failed. The first page leaves the pane showing the failure class; a later page only
@@ -1349,6 +1358,7 @@ mod tests {
     fn motions_in_the_pane_move_its_own_cursor() {
         let mut app = open_thread_app();
         app.focus = Focus::Thread;
+        app.thread.as_mut().unwrap().view.cursor = 0;
         let main_before = messages::view(&app, &rid("r-general"));
         press(&mut app, "j");
         assert_eq!(view(&app).cursor, 1);
@@ -1374,6 +1384,7 @@ mod tests {
         );
         app.effects.clear();
         app.focus = Focus::Thread;
+        app.thread.as_mut().unwrap().view.cursor = 0;
         press(&mut app, "j");
         assert!(app.effects.is_empty(), "not at the edge yet");
         press(&mut app, "j");
@@ -2090,5 +2101,199 @@ mod tests {
         let mut app = app_with(vec![]);
         update(&mut app, Action::OwnIdLoaded("u1".to_string()));
         assert_eq!(app.own_user_id.as_deref(), Some("u1"));
+    }
+
+    // ---- reading a thread (`thread-unread` spec)
+
+    /// A thread of parent `p` listed unread for `r-general` that is open and loaded.
+    fn open_unread_thread_app() -> App {
+        let mut app = app_with(vec![msg("a", 100), parent("p", 110, 2)]);
+        let room = app
+            .rooms
+            .iter_mut()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap();
+        room.threads.unread.insert("p".to_string());
+        update(&mut app, Action::OpenThread);
+        loaded(
+            &mut app,
+            "p",
+            0,
+            None,
+            page(&[("r1", 120), ("r2", 130)], "p", 2),
+        );
+        app
+    }
+
+    fn thread_marks(app: &App) -> Vec<(&RoomId, &str)> {
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::MarkThreadRead { room, parent_id } => Some((room, parent_id.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn thread_is_unread(app: &App) -> bool {
+        app.rooms
+            .iter()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap()
+            .threads
+            .is_unread("p")
+    }
+
+    #[test]
+    fn an_open_unread_thread_is_marked_read_after_the_delay() {
+        let mut app = open_unread_thread_app();
+        // Opening sends nothing: the mark waits for its timer.
+        assert!(thread_marks(&app).is_empty());
+        let pending = app.read.thread_pending.clone().expect("a wait");
+        assert_eq!(
+            (pending.room, pending.parent_id.as_str()),
+            (rid("r-general"), "p")
+        );
+        update(&mut app, Action::MarkThreadReadDue);
+        assert_eq!(thread_marks(&app), [(&rid("r-general"), "p")]);
+        assert!(app.read.thread_pending.is_none());
+        // The server confirms: `new` and the badge share go, no realtime update needed.
+        update(
+            &mut app,
+            Action::MarkThreadReadDone {
+                room: rid("r-general"),
+                parent_id: "p".to_string(),
+            },
+        );
+        assert!(!thread_is_unread(&app));
+    }
+
+    #[test]
+    fn closing_before_the_delay_leaves_the_thread_unread() {
+        let mut app = open_unread_thread_app();
+        update(&mut app, Action::CloseThread);
+        assert!(app.read.thread_pending.is_none());
+        update(&mut app, Action::MarkThreadReadDue);
+        assert!(thread_marks(&app).is_empty());
+        assert!(thread_is_unread(&app));
+    }
+
+    #[test]
+    fn a_stale_timer_for_a_replaced_thread_sends_nothing() {
+        let mut app = open_unread_thread_app();
+        let pending = app.read.thread_pending.clone().expect("a wait");
+        // The pane now shows another thread, as if the timer had been about to fire.
+        app.thread.as_mut().unwrap().parent_id = "other".to_string();
+        app.read.thread_pending = Some(pending);
+        update(&mut app, Action::MarkThreadReadDue);
+        assert!(thread_marks(&app).is_empty());
+    }
+
+    #[test]
+    fn a_thread_that_is_not_unread_sends_nothing() {
+        let mut app = open_thread_app();
+        update(&mut app, Action::MarkThreadReadDue);
+        assert!(thread_marks(&app).is_empty());
+    }
+
+    #[test]
+    fn a_loaded_thread_opens_on_its_newest_message() {
+        let mut app = app_with(vec![msg("a", 100), parent("p", 110, 2)]);
+        update(&mut app, Action::OpenThread);
+        loaded(
+            &mut app,
+            "p",
+            0,
+            None,
+            page(&[("r1", 120), ("r2", 130)], "p", 90),
+        );
+        assert_eq!(view(&app).cursor, 2, "parent, r1, r2: on r2");
+    }
+
+    #[test]
+    fn a_thread_not_focused_is_not_marked_when_the_wait_ends() {
+        let mut app = open_unread_thread_app();
+        app.focus = Focus::Messages;
+        update(&mut app, Action::MarkThreadReadDue);
+        assert!(thread_marks(&app).is_empty());
+    }
+
+    #[test]
+    fn a_zero_delay_marks_the_thread_at_once() {
+        let mut app = app_with(vec![msg("a", 100), parent("p", 110, 2)]);
+        app.settings.mark_read_delay_ms = 0;
+        let room = app
+            .rooms
+            .iter_mut()
+            .find(|r| r.id == rid("r-general"))
+            .unwrap();
+        room.threads.unread.insert("p".to_string());
+        update(&mut app, Action::OpenThread);
+        assert!(thread_marks(&app).is_empty(), "nothing is shown yet");
+        loaded(&mut app, "p", 0, None, page(&[("r1", 120)], "p", 90));
+        assert_eq!(thread_marks(&app), [(&rid("r-general"), "p")]);
+        assert!(app.read.thread_pending.is_none());
+    }
+
+    #[test]
+    fn a_failed_mark_leaves_the_thread_unread_and_shows_nothing() {
+        let mut app = open_unread_thread_app();
+        update(&mut app, Action::MarkThreadReadDue);
+        // A failure answers no Action at all (see `effect::run`): the state is unchanged.
+        assert!(thread_is_unread(&app));
+        assert!(app.status_msg.is_none());
+    }
+
+    /// The server says thread `p` has replies the user has not read.
+    fn thread_unread_update() -> Action {
+        Action::RtSubscription {
+            room: rid("r-general"),
+            update: crate::data::UnreadUpdate {
+                threads: crate::data::ThreadUnreadUpdate {
+                    unread: Some(std::collections::HashSet::from(["p".to_string()])),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_live_reply_to_the_focused_open_thread_restarts_the_wait() {
+        let mut app = open_unread_thread_app();
+        update(&mut app, Action::MarkThreadReadDue);
+        update(
+            &mut app,
+            Action::MarkThreadReadDone {
+                room: rid("r-general"),
+                parent_id: "p".to_string(),
+            },
+        );
+        app.effects.clear();
+        assert!(!thread_is_unread(&app));
+        assert!(app.read.thread_pending.is_none());
+        // Another user replies: the server lists the thread unread again.
+        live(&mut app, reply("r3", 140, "p", false));
+        update(&mut app, thread_unread_update());
+        assert!(thread_is_unread(&app));
+        assert!(app.read.thread_pending.is_some(), "the wait restarted");
+        update(&mut app, Action::MarkThreadReadDue);
+        assert_eq!(thread_marks(&app), [(&rid("r-general"), "p")]);
+    }
+
+    #[test]
+    fn a_live_reply_to_an_open_but_unfocused_thread_does_not_restart_the_wait() {
+        let mut app = open_unread_thread_app();
+        update(&mut app, Action::MarkThreadReadDue);
+        update(
+            &mut app,
+            Action::MarkThreadReadDone {
+                room: rid("r-general"),
+                parent_id: "p".to_string(),
+            },
+        );
+        app.focus = crate::app::Focus::Messages;
+        update(&mut app, thread_unread_update());
+        assert!(app.read.thread_pending.is_none());
     }
 }

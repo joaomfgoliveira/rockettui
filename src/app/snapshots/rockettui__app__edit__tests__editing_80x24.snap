@@ -2,7 +2,7 @@
 source: src/app/edit.rs
 expression: "render_to_string(&app, 80, 24)"
 ---
-┌ Rooms ───────────────────┐┌ general ─────────────────────────────────────────┐
+┌ Rooms ───────────────────┐┌ general ──────────────── Threads (gT) unread (0) ┐
 │  Unread                  ││── 1970-01-01 ────────────────────────────────────│
 │> * #general              ││00:01 alice  older                                │
 │  * &dev-team             ││00:01 dev    my text                              │

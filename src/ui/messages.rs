@@ -12,6 +12,24 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+/// How many threads of the open room the server lists as unread.
+fn unread_threads(app: &App) -> usize {
+    app.current_room
+        .as_ref()
+        .and_then(|id| app.rooms.iter().find(|r| &r.id == id))
+        .map_or(0, |r| r.threads.count())
+}
+
+/// The right end of the pane's top border: ` Threads (<key>) unread (<n>) `, the key being the one
+/// bound to `list_threads` (left out when none is). Nothing while no room is open.
+fn threads_title(app: &App) -> Option<String> {
+    app.current_room.as_ref()?;
+    let key = crate::app::context::keys_for(app, "list_threads")
+        .map(|keys| format!(" ({})", keys.split(' ').next().unwrap_or_default()))
+        .unwrap_or_default();
+    Some(format!(" Threads{key} unread ({}) ", unread_threads(app)))
+}
+
 /// Draw the messages pane: only the rows of the window `app::messages::view` selects.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Messages;
@@ -19,7 +37,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Some(name) => format!(" {} ", sanitize_line(name)),
         None => " Messages ".to_string(),
     };
-    let block = pane_block(&title, focused, &app.theme);
+    let mut block = pane_block(&title, focused, &app.theme);
+    if let Some(threads) = threads_title(app)
+        && title.width() + threads.width() + 4 <= usize::from(area.width)
+    {
+        let style = if unread_threads(app) > 0 {
+            app.theme.messages_thread_unread
+        } else {
+            app.theme.border_unfocused
+        };
+        block = block.title(Line::styled(threads, style).right_aligned());
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1326,6 +1354,89 @@ mod tests {
             "wrapped onto two rows: {text}"
         );
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    fn mark_thread_unread(app: &mut App, id: &str) {
+        app.rooms
+            .iter_mut()
+            .find(|r| r.id.0 == "quiet")
+            .expect("room")
+            .threads
+            .unread
+            .insert(id.to_string());
+    }
+
+    #[test]
+    fn an_unread_thread_ends_its_marker_row_with_new() {
+        let mut app = app_with_threads(wrap::MessageLayout::Compact);
+        // Not listed: nothing extra.
+        let text = all_text(&render_pane(&app));
+        assert!(!text.contains("new"), "{text}");
+        mark_thread_unread(&mut app, "1");
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("-> 3 replies, last 00:11, new"), "{text}");
+        assert_eq!(text.matches(", new").count(), 1, "only thread 1: {text}");
+        assert!(
+            text.contains("-> 1 reply, last 00:11\n") || text.contains("-> 1 reply, last 00:11 ")
+        );
+        // An unread thread's whole marker row is drawn in the unread style; a read one's in the thread style.
+        let height = terminal.backend().buffer().area.height;
+        let y = (0..height)
+            .find(|&y| row_text(&terminal, y).contains(", new"))
+            .unwrap();
+        let line = row_text(&terminal, y);
+        let x = u16::try_from(line[..line.find("new").unwrap()].chars().count()).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(x, y)].fg,
+            app.theme.messages_thread_unread.fg.unwrap()
+        );
+        assert_eq!(
+            buffer[(x - 3, y)].fg,
+            app.theme.messages_thread_unread.fg.unwrap()
+        );
+        let read_y = (0..height)
+            .find(|&y| row_text(&terminal, y).contains("-> 1 reply"))
+            .unwrap();
+        let read_x = u16::try_from(row_text(&terminal, read_y).find("->").unwrap()).unwrap();
+        assert_eq!(
+            buffer[(read_x, read_y)].fg,
+            app.theme.messages_thread.fg.unwrap()
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_top_border_names_the_thread_list_key_and_the_unread_count() {
+        let mut app = app_with_threads(wrap::MessageLayout::TwoLine);
+        let top = |app: &App| {
+            crate::test_util::render_to_string(app, 100, 25)
+                .lines()
+                .find(|l| l.contains("Threads (gT)"))
+                .map(str::to_string)
+        };
+        let before = top(&app).expect("title");
+        assert!(before.contains("unread (0)"), "{before}");
+        let room = app.current_room.clone().unwrap();
+        let held = app.rooms.iter_mut().find(|r| r.id == room).unwrap();
+        held.threads.unread.insert("t1".to_string());
+        held.threads.unread.insert("t2".to_string());
+        assert!(top(&app).unwrap().contains("unread (2)"));
+    }
+
+    #[test]
+    fn the_new_mark_wraps_with_the_marker_row_in_a_narrow_pane() {
+        let mut app = app_with_threads(wrap::MessageLayout::TwoLine);
+        app.settings.sidebar_width = 56;
+        mark_thread_unread(&mut app, "1");
+        let terminal = render_pane(&app);
+        let text = all_text(&terminal);
+        assert!(text.contains("new"), "{text}");
+        assert!(
+            !text.contains("-> 3 replies, last 00:11, new"),
+            "wrapped: {text}"
+        );
     }
 
     #[test]

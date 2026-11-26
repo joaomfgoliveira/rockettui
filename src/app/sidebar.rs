@@ -77,7 +77,7 @@ pub fn rows(app: &App) -> Vec<SidebarRow> {
         .rooms
         .iter()
         .map(|room| {
-            let home = if room.unread.is_unread() {
+            let home = if room.is_unread() {
                 Home::Unread
             } else {
                 match app
@@ -121,7 +121,7 @@ pub fn rows(app: &App) -> Vec<SidebarRow> {
             let unread = app
                 .rooms
                 .iter()
-                .filter(|room| room.unread.is_unread() && folder.room_ids.contains(&room.id))
+                .filter(|room| room.is_unread() && folder.room_ids.contains(&room.id))
                 .count();
             out.push(SidebarRow::Folder {
                 id: folder.id.clone(),
@@ -367,6 +367,42 @@ mod tests {
         assert_eq!(Section::Unread.label(), "Unread");
         assert_eq!(Section::Folders.label(), "Folders");
         assert_eq!(Section::Recent.label(), "Recent");
+    }
+
+    #[test]
+    fn a_room_with_only_unread_threads_is_listed_in_unread() {
+        let mut app = app_80x24();
+        let quiet = app.rooms.iter().position(|r| r.id.0 == "quiet").unwrap();
+        assert!(!app.rooms[quiet].unread.is_unread());
+        let before = rows(&app);
+        assert!(
+            !before[..4].contains(&room("quiet")),
+            "quiet starts outside Unread"
+        );
+        app.rooms[quiet].threads.unread.insert("t1".to_string());
+        let after = rows(&app);
+        let unread_end = after
+            .iter()
+            .position(|r| matches!(r, SidebarRow::Header(Section::Folders)))
+            .unwrap();
+        assert!(after[..unread_end].contains(&room("quiet")));
+        assert!(
+            !app.rooms[quiet].unread.is_unread(),
+            "the room's own state is untouched"
+        );
+        // The last unread thread is read: the room leaves Unread.
+        app.rooms[quiet].threads.unread.clear();
+        assert_eq!(rows(&app), before);
+    }
+
+    #[test]
+    fn unread_threads_count_a_room_in_its_folder_header() {
+        let mut app = app_80x24();
+        let platform = app.rooms.iter().position(|r| r.id.0 == "platform").unwrap();
+        assert!(!app.rooms[platform].is_unread());
+        assert!(rows(&app).contains(&folder("work", true, 1)));
+        app.rooms[platform].threads.unread.insert("t1".to_string());
+        assert!(rows(&app).contains(&folder("work", true, 2)));
     }
 
     #[test]

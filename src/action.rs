@@ -124,6 +124,13 @@ pub enum Action {
     MarkReadDone {
         room: RoomId,
     },
+    /// The wait before the open thread is marked read is over (the loop's second timer fired).
+    MarkThreadReadDue,
+    /// The server marked thread `parent_id` of `room` read.
+    MarkThreadReadDone {
+        room: RoomId,
+        parent_id: String,
+    },
     /// The room load failed; the error is a fixed kind with no payload text.
     LoadFailed(crate::api::ApiError),
     /// A page of history arrived, oldest first. `oldest_ts` is the raw server timestamp of its
@@ -418,6 +425,10 @@ impl std::fmt::Debug for Action {
             }
             Action::MarkReadDue => write!(f, "MarkReadDue"),
             Action::MarkReadDone { room } => write!(f, "MarkReadDone({room:?})"),
+            Action::MarkThreadReadDue => write!(f, "MarkThreadReadDue"),
+            Action::MarkThreadReadDone { room, .. } => {
+                write!(f, "MarkThreadReadDone({room:?})")
+            }
             Action::LoadFailed(err) => write!(f, "LoadFailed({err:?})"),
             Action::HistoryLoaded {
                 room,

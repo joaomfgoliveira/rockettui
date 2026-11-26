@@ -100,7 +100,7 @@ pub fn ranked(app: &App, query: &str) -> Vec<usize> {
         let (a, b) = (&app.rooms[a], &app.rooms[b]);
         let key = |room: &crate::data::Room| {
             (
-                !room.unread.is_unread(),
+                !room.is_unread(),
                 rank_of(&room.id),
                 Reverse(room.last_activity),
                 room.name.clone(),
@@ -284,6 +284,7 @@ mod tests {
             },
             last_seen: None,
             last_activity: activity,
+            threads: Default::default(),
         }
     }
 

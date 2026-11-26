@@ -237,7 +237,7 @@ fn message_under_cursor(app: &App) -> bool {
 
 /// The Normal-mode keys bound to `name`, sorted and joined by a space. `cmd:` rows never match
 /// because they have no action name.
-fn keys_for(app: &App, name: &str) -> Option<String> {
+pub fn keys_for(app: &App, name: &str) -> Option<String> {
     let mut keys: Vec<String> = app
         .keymap
         .bindings(Mode::Normal)

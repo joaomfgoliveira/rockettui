@@ -265,6 +265,13 @@ struct FollowBody<'a> {
     mid: &'a str,
 }
 
+/// The body of `chat.readThread`: the id of the thread's parent. Measured: a `rid` next to it is
+/// refused as invalid params on both servers.
+#[derive(serde::Serialize)]
+struct ReadThreadBody<'a> {
+    tmid: &'a str,
+}
+
 /// The joined rooms and the sidebar folders built from one load.
 pub struct RoomList {
     pub rooms: Vec<Room>,
@@ -922,6 +929,18 @@ impl Client {
             .http
             .post(self.endpoint("subscriptions.read"))
             .json(&body);
+        let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
+        Ok(())
+    }
+
+    /// Mark thread `tmid` (the id of its parent message) read for the user with
+    /// `POST chat.readThread`. It exists on 8.9.1 and 9.0.0 (it replaces the DDP method
+    /// `readThreads`, removed in 9.0.0). The answer body is not read beyond being valid JSON; any
+    /// failure is an `ApiError` without server text, and the caller ignores it (the thread just
+    /// stays unread).
+    pub async fn mark_thread_read(&self, tmid: &str) -> Result<(), ApiError> {
+        let body = ReadThreadBody { tmid };
+        let request = self.http.post(self.endpoint("chat.readThread")).json(&body);
         let _: serde::de::IgnoredAny = read_json(request, ApiError::Rejected).await?;
         Ok(())
     }
@@ -1626,6 +1645,53 @@ mod tests {
                 .mark_read(&room_general())
                 .await
                 .expect_err("an error status fails");
+            assert!(!format!("{err:?} {err}").contains("SENTINEL"), "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_thread_read_contract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.readThread"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"tmid": "parent-1"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("{\"success\":true}", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .mark_thread_read("parent-1")
+            .await
+            .expect("mark thread read works");
+    }
+
+    #[tokio::test]
+    async fn mark_thread_read_errors_carry_no_server_text() {
+        for (status, want) in [
+            (400u16, ApiError::Rejected),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (500, ApiError::Server(500)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_string("{\"success\":false,\"error\":\"SENTINEL-SERVER-TEXT\"}"),
+                )
+                .mount(&server)
+                .await;
+            let err = client_for(&server)
+                .mark_thread_read("parent-1")
+                .await
+                .expect_err("an error status fails");
+            assert_eq!(err, want, "{status}");
             assert!(!format!("{err:?} {err}").contains("SENTINEL"), "{status}");
         }
     }

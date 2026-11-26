@@ -193,6 +193,8 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::FollowFailed { .. }
         | Action::MarkReadDue
         | Action::MarkReadDone { .. }
+        | Action::MarkThreadReadDue
+        | Action::MarkThreadReadDone { .. }
         | Action::MessagesLoaded(..)
         | Action::LoadFailed(_)
         | Action::HistoryLoaded { .. }

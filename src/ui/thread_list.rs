@@ -73,15 +73,27 @@ fn row_lines(app: &App, row: &ThreadRow, width: usize) -> [String; 3] {
         .own_user_id
         .as_deref()
         .is_some_and(|id| row.followed_by(id));
+    let left = match (is_unread(app, row), followed) {
+        (true, true) => "new, following",
+        (true, false) => "new",
+        (false, true) => "following",
+        (false, false) => "",
+    };
     [
         spread(&author, &when(app, row), width),
         fit_author(&format!(" {text}"), width).into_owned(),
-        spread(
-            if followed { "following" } else { "" },
-            &replies_label(row.replies),
-            width,
-        ),
+        spread(left, &replies_label(row.replies), width),
     ]
+}
+
+/// Whether the server lists `row`'s thread as unread for the user.
+fn is_unread(app: &App, row: &ThreadRow) -> bool {
+    app.thread_list.as_ref().is_some_and(|list| {
+        app.rooms
+            .iter()
+            .find(|r| r.id == list.room)
+            .is_some_and(|r| r.threads.is_unread(&row.id))
+    })
 }
 
 /// The area inside the pane's border.
@@ -181,6 +193,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 // message of a pane.
                 let color = author_color(&sanitize_line(&row.author), &theme.author_palette);
                 let [head, text, meta] = row_lines(app, row, width);
+                let unread = is_unread(app, row);
                 lines.push(Line::from(Span::styled(
                     head,
                     theme.picker_item.fg(color).add_modifier(Modifier::BOLD),
@@ -188,7 +201,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 lines.push(Line::from(Span::styled(text, theme.picker_item)));
                 lines.push(Line::from(Span::styled(
                     meta,
-                    theme.picker_item.add_modifier(Modifier::DIM),
+                    if unread {
+                        theme.messages_thread_unread
+                    } else {
+                        theme.picker_item.add_modifier(Modifier::DIM)
+                    },
                 )));
             }
         }

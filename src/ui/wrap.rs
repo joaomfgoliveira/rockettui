@@ -114,6 +114,9 @@ pub struct RowCtx<'a> {
     /// The id of the message the `unread` divider is drawn above, when this list is the open
     /// room (`App::pane_row_ctx`); `None` for every other list.
     pub unread_before: Option<&'a str>,
+    /// The ids of the threads the server lists as unread for the room this list belongs to, which
+    /// give a thread marker row its `new` mark; `None` for a list with no room of its own.
+    pub unread_threads: Option<&'a std::collections::HashSet<String>>,
     /// True when the list is the thread pane: every message there is of the thread, so a reply
     /// shown in the channel carries no `[thread]` tag.
     pub in_thread: bool,
@@ -334,13 +337,29 @@ fn thread_marker_text(msg: &Message, ctx: &RowCtx) -> String {
     } else {
         ""
     };
+    let new = if thread_is_unread(msg, ctx) {
+        THREAD_UNREAD_WORD_SUFFIX
+    } else {
+        ""
+    };
     match msg.tlm {
         Some(tlm) => format!(
-            "-> {count} {noun}, last {}{following}",
+            "-> {count} {noun}, last {}{following}{new}",
             format_ts(ctx.time_format, tlm, ctx.zone)
         ),
-        None => format!("-> {count} {noun}{following}"),
+        None => format!("-> {count} {noun}{following}{new}"),
     }
+}
+
+/// What ends the marker row of a thread with replies the user has not read; its last word is drawn
+/// in `theme.messages_thread_unread`.
+const THREAD_UNREAD_WORD_SUFFIX: &str = ", new";
+
+/// True when the server lists the thread whose parent is `msg` as unread. The state is the
+/// server's: it is never worked out from the replies the app holds.
+fn thread_is_unread(msg: &Message, ctx: &RowCtx) -> bool {
+    ctx.unread_threads
+        .is_some_and(|threads| threads.contains(&msg.id))
 }
 
 /// What starts the body of a reply that is also shown in the channel, in
@@ -404,9 +423,16 @@ fn thread_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'stati
     if msg.tmid.is_some() || msg.tcount == 0 {
         return Vec::new();
     }
+    let unread = thread_is_unread(msg, ctx);
+    // An unread thread's whole marker row takes the unread style, so it stands out in the pane.
+    let style = if unread {
+        ctx.theme.messages_thread_unread
+    } else {
+        ctx.theme.messages_thread
+    };
     wrap_clean(&thread_marker_text(msg, ctx), width)
         .into_iter()
-        .map(|row| vec![Span::styled(row, ctx.theme.messages_thread)])
+        .map(|row| vec![Span::styled(row, style)])
         .collect()
 }
 
@@ -619,6 +645,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -645,6 +672,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -708,6 +736,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -742,6 +771,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1149,6 +1179,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1192,6 +1223,7 @@ mod tests {
                 emoji: crate::app::emoji::EmojiView::none(),
                 own_user: None,
                 unread_before: None,
+                unread_threads: None,
                 in_thread: false,
                 own_id: None,
             };
@@ -1231,6 +1263,7 @@ mod tests {
                     emoji: crate::app::emoji::EmojiView::none(),
                     own_user: None,
                     unread_before: None,
+                    unread_threads: None,
                     in_thread: false,
                     own_id: None,
                 };
@@ -1361,6 +1394,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1481,6 +1515,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1745,6 +1780,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1797,6 +1833,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: own,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -1827,6 +1864,7 @@ mod tests {
             },
             own_user: Some("me"),
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -2159,6 +2197,7 @@ mod tests {
             emoji: view,
             own_user: Some("me"),
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -2505,6 +2544,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };
@@ -2576,6 +2616,7 @@ mod tests {
             emoji: crate::app::emoji::EmojiView::none(),
             own_user: None,
             unread_before: None,
+            unread_threads: None,
             in_thread: false,
             own_id: None,
         };

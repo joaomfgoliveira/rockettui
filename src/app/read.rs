@@ -12,7 +12,7 @@
 
 use crate::app::history::HistoryState;
 use crate::app::{App, realtime};
-use crate::data::{MessageKind, RoomId, UnreadUpdate};
+use crate::data::{MessageKind, RoomId, ThreadUnreadUpdate, UnreadUpdate};
 use crate::effect::Effect;
 
 /// A mark-read waiting for its timer. `generation` changes on every (re)start, so the loop can
@@ -37,9 +37,19 @@ pub struct UnreadDivider {
     before: Option<String>,
 }
 
+/// A mark-read of the open thread waiting for its timer; the thread twin of `PendingRead`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingThreadRead {
+    pub room: RoomId,
+    pub parent_id: String,
+    pub generation: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReadState {
     pub pending: Option<PendingRead>,
+    /// The wait before the open thread is marked read (`thread-unread` spec).
+    pub thread_pending: Option<PendingThreadRead>,
     pub divider: Option<UnreadDivider>,
     generation: u64,
 }
@@ -172,6 +182,95 @@ pub fn on_due(app: &mut App) {
     }
 }
 
+/// Whether thread `parent_id` is listed unread in `room`.
+fn thread_is_unread(app: &App, room: &RoomId, parent_id: &str) -> bool {
+    app.rooms
+        .iter()
+        .any(|r| &r.id == room && r.threads.is_unread(parent_id))
+}
+
+/// Ask the server to mark the thread read, when it is listed unread.
+fn thread_send(app: &mut App, room: &RoomId, parent_id: &str) {
+    if thread_is_unread(app, room, parent_id) {
+        app.effects.push(Effect::MarkThreadRead {
+            room: room.clone(),
+            parent_id: parent_id.to_string(),
+        });
+    }
+}
+
+/// Start (or restart) the wait for the thread open in the pane. With a delay of 0 the request is
+/// sent at once. Nothing happens when no thread is open.
+pub fn thread_restart(app: &mut App) {
+    // A thread still loading has shown nothing yet: the wait starts when its replies arrive.
+    let Some((room, parent_id)) = app
+        .thread
+        .as_ref()
+        .filter(|pane| pane.load == crate::app::thread::ThreadLoad::Loaded)
+        .map(|pane| (pane.room.clone(), pane.parent_id.clone()))
+    else {
+        return;
+    };
+    if app.settings.mark_read_delay_ms == 0 {
+        app.read.thread_pending = None;
+        thread_send(app, &room, &parent_id);
+        return;
+    }
+    app.read.generation += 1;
+    app.read.thread_pending = Some(PendingThreadRead {
+        room,
+        parent_id,
+        generation: app.read.generation,
+    });
+}
+
+/// The pane closed or was replaced by nothing: the wait is dropped.
+pub fn thread_cancel(app: &mut App) {
+    app.read.thread_pending = None;
+}
+
+/// The timer fired: send the request if the thread it was for is still the open one and unread.
+pub fn on_thread_due(app: &mut App) {
+    let Some(pending) = app.read.thread_pending.take() else {
+        return;
+    };
+    let still_open = app
+        .thread
+        .as_ref()
+        .is_some_and(|pane| pane.room == pending.room && pane.parent_id == pending.parent_id);
+    // Only a thread the user is looking at is read: the pane must hold the focus.
+    if still_open && app.focus == crate::app::Focus::Thread {
+        thread_send(app, &pending.room, &pending.parent_id);
+    }
+}
+
+/// The server marked the thread read: it loses its mark and its share of the badge now, without
+/// waiting for the realtime update. The held sets are rebuilt without the thread and go through
+/// the same path as a live update, so the sidebar follows.
+pub fn on_thread_done(app: &mut App, room: &RoomId, parent_id: &str) {
+    let Some(held) = app.rooms.iter().find(|r| &r.id == room) else {
+        return;
+    };
+    let without = |set: &std::collections::HashSet<String>| {
+        let mut set = set.clone();
+        set.remove(parent_id);
+        Some(set)
+    };
+    let threads = ThreadUnreadUpdate {
+        unread: without(&held.threads.unread),
+        user: without(&held.threads.user),
+        group: without(&held.threads.group),
+    };
+    realtime::on_subscription(
+        app,
+        room,
+        UnreadUpdate {
+            threads,
+            ..UnreadUpdate::default()
+        },
+    );
+}
+
 /// The server marked `room` read: it leaves Unread now, without waiting for the realtime update.
 pub fn on_done(app: &mut App, room: &RoomId) {
     // The room was read up to its newest held message: a later open compares against that, so the
@@ -207,7 +306,16 @@ impl ReadTimer {
         now: tokio::time::Instant,
         delay: std::time::Duration,
     ) {
-        let wanted = pending.map(|p| p.generation);
+        self.sync_generation(pending.map(|p| p.generation), now, delay);
+    }
+
+    /// The same for a wait known only by its generation (the thread's).
+    pub fn sync_generation(
+        &mut self,
+        wanted: Option<u64>,
+        now: tokio::time::Instant,
+        delay: std::time::Duration,
+    ) {
         if wanted != self.armed {
             self.armed = wanted;
             self.deadline = wanted.map(|_| now + delay);

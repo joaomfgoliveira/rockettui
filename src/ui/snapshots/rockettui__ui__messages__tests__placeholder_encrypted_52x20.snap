@@ -2,7 +2,7 @@
 source: src/ui/messages.rs
 expression: terminal.backend()
 ---
-"┏ secrets ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+"┏ secrets ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓"
 "┃encrypted, not supported                          ┃"
 "┃                                                  ┃"
 "┃                                                  ┃"

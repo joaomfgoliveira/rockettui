@@ -1,0 +1,79 @@
+{
+  "updates": [
+    {
+      "action": "updated",
+      "subscription": {
+        "_id": "6b0752985e8081cbfe2ac684",
+        "open": true,
+        "alert": true,
+        "unread": 0,
+        "userMentions": 0,
+        "groupMentions": 0,
+        "ts": {
+          "$date": 1795642008117
+        },
+        "rid": "6b0752985e8081cbfe2ac683",
+        "name": "rt-public",
+        "fname": "rt-public",
+        "t": "c",
+        "u": {
+          "_id": "3YaAXjSWY6QZLKLSk",
+          "username": "dev",
+          "name": "Dev"
+        },
+        "ls": {
+          "$date": 1795692273236
+        },
+        "roles": [
+          "owner"
+        ],
+        "_updatedAt": {
+          "$date": 1795692276745
+        },
+        "lr": {
+          "$date": 1795692273900
+        },
+        "tunread": [
+          "T1",
+          "T2",
+          "T3",
+          "T4",
+          "T5",
+          "T6",
+          "T7",
+          "T8",
+          "T9",
+          "T10",
+          "T11",
+          "T12",
+          "T13",
+          "T14",
+          "T15",
+          "T16",
+          "T17",
+          "T18",
+          "T19",
+          "T20",
+          "T21",
+          "T22",
+          "T23",
+          "T24",
+          "T25",
+          "T26",
+          "T27",
+          "T28"
+        ],
+        "tunreadUser": [
+          "T6",
+          "T13",
+          "T21"
+        ],
+        "tunreadGroup": [
+          "T7",
+          "T14",
+          "T22"
+        ]
+      }
+    }
+  ]
+}

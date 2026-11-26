@@ -78,6 +78,14 @@ pub struct WireSub {
     pub user_mentions: u32,
     #[serde(default, rename = "groupMentions")]
     pub group_mentions: u32,
+    /// Ids of the threads with replies the user has not read, and the subsets with a mention of
+    /// the user (`tunreadUser`) or of a group (`tunreadGroup`). Absent when there are none.
+    #[serde(default)]
+    pub tunread: Vec<String>,
+    #[serde(default, rename = "tunreadUser")]
+    pub tunread_user: Vec<String>,
+    #[serde(default, rename = "tunreadGroup")]
+    pub tunread_group: Vec<String>,
     pub prid: Option<String>,
     pub category: Option<String>,
     pub status: Option<String>,
@@ -348,6 +356,12 @@ pub struct WireSubDoc {
     pub user_mentions: Option<u32>,
     #[serde(rename = "groupMentions")]
     pub group_mentions: Option<u32>,
+    /// The thread unread sets (see `WireSub`). `None` when the update lacks the field.
+    pub tunread: Option<Vec<String>>,
+    #[serde(rename = "tunreadUser")]
+    pub tunread_user: Option<Vec<String>>,
+    #[serde(rename = "tunreadGroup")]
+    pub tunread_group: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]

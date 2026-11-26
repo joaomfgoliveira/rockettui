@@ -35,4 +35,4 @@ See `proposal.md`. The server keeps per-thread unread state on the user's subscr
 
 ## Open Questions
 
-- Whether `readThreads` has a REST twin on both server versions. Answered by task 1.1 before the realtime work starts; it changes only which of two tasks (2.3 or 2.4) is done, not the specs.
+- Whether `readThreads` has a REST twin on both server versions. Answered by task 1.1: yes, `POST /api/v1/chat.readThread` with `{"tmid"}` works on 8.9.1 and 9.0.0 (the DDP method is removed in 9.0.0), so task 2.3 is done and 2.4 is skipped; `ddp.rs` stays unchanged.

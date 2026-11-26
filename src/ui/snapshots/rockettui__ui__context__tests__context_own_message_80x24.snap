@@ -2,7 +2,7 @@
 source: src/ui/context.rs
 expression: "render_to_string(&app, 80, 24)"
 ---
-┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓
 │  Unread                  │┃? me  sample                                      ┃
 │> * #general              │┃                                                  ┃
 │  * &dev-team             │┃                                                  ┃

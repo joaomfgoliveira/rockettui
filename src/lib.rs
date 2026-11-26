@@ -134,6 +134,8 @@ pub async fn run(
     let mut key_deadline: Option<tokio::time::Instant> = None;
     // The wait before the open room is marked read; the reducer only says one is wanted.
     let mut read_timer = app::read::ReadTimer::default();
+    // The same wait for the thread open in the pane.
+    let mut thread_read_timer = app::read::ReadTimer::default();
     // The typing delay of the thread list search.
     let mut thread_search_timer = app::thread_list::SearchTimer::default();
     loop {
@@ -165,6 +167,11 @@ pub async fn run(
             tokio::time::Instant::now(),
             app.mark_read_delay(),
         );
+        thread_read_timer.sync_generation(
+            app.read.thread_pending.as_ref().map(|p| p.generation),
+            tokio::time::Instant::now(),
+            app.mark_read_delay(),
+        );
         thread_search_timer.sync(app.thread_list.as_ref(), tokio::time::Instant::now());
         // An image that arrived is in the terminal before the frame that draws it.
         tui::upload_images(&mut app);
@@ -183,6 +190,9 @@ pub async fn run(
             },
             () = sleep_until_opt(key_deadline) => batch.push(Action::KeyTimeout),
             () = sleep_until_opt(read_timer.deadline()) => batch.push(Action::MarkReadDue),
+            () = sleep_until_opt(thread_read_timer.deadline()) => {
+                batch.push(Action::MarkThreadReadDue);
+            }
             () = sleep_until_opt(thread_search_timer.deadline()) => {
                 batch.push(Action::ThreadListSearchDue);
             }
