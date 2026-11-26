@@ -216,6 +216,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::ReactFailed { error } => react::on_react_failed(app, error),
         Action::CustomEmojisLoaded(list) => emoji::on_loaded(app, list),
         Action::CustomEmojisFailed => emoji::on_failed(app),
+        Action::RecentsLoaded(loaded) => app.emoji_recents.merge_loaded(loaded),
         Action::EmojiImageReady { emoji, image } => emoji::on_image_ready(app, emoji, image),
         Action::EmojiImageFailed(emoji) => emoji::on_image_failed(app, emoji),
         Action::RtConnected => realtime::on_connected(app),

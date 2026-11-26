@@ -1,21 +1,21 @@
-//! The reaction picker: a small bordered panel over the bottom of the messages and input column,
-//! above the status row, with a search line and the results under it.
+//! The emoji box (the reaction picker): a small bordered panel over the bottom of the messages and
+//! input column, above the status row. Top to bottom inside it: the search line, a row of category
+//! tabs, the grid of emoji in sections and a footer that names the selected one.
 //!
-//! The content comes from `app::react::view` (candidates, selection, query); this only lays it
-//! out. Each result row is `* glyph :name:  note`: a `*` for a reaction the user already gave, the
-//! glyph (empty when the name already is the raw `:name:`), the sanitized name, and a short note
-//! (`alias` or `custom`, the count, `you`). The window of rows scrolls so the selection stays
-//! visible, centred on it. What does not fit is cut, never overflowed: a row that is too wide ends
-//! in an ellipsis. The hardware cursor sits after the typed text.
+//! The content comes from `app::react::view` (sections, selection, query); this only lays it out.
+//! Each emoji is a cell of three columns (two for the glyph, one blank), a section starts on a row
+//! of its own under its heading, and the window of rows scrolls so the selection stays visible.
+//! When the panel is short the footer goes first and then the tabs; the search line and one grid
+//! row always stay. What does not fit is cut, never overflowed. The hardware cursor sits after the
+//! typed text.
 
 use crate::app::App;
-use crate::app::react::{self, Candidate, Source};
+use crate::app::react::{self, Candidate, Grid, Row, Source};
 use crate::ui::layout::Areas;
 use crate::ui::sanitize::sanitize_line;
 use crate::ui::wrap::fit_author;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -30,10 +30,12 @@ const PROMPT: &str = "/";
 /// What the search line says while browsing with no search to show.
 const PRESS_TO_SEARCH: &str = "press / to search";
 
-/// The text of the empty list: nothing to browse, nothing typed yet, nothing found.
-const NO_REACTIONS_YET: &str = "no reactions yet: press / to search for an emoji";
-const TYPE_TO_SEARCH: &str = "type to search for an emoji";
+/// What the grid and the footer say when a search matches nothing.
 const NO_MATCHES: &str = "no matches";
+
+/// Drawn in the two glyph columns of an emoji that has nothing to draw: a custom emoji whose image
+/// is not available as an image, or a reaction the client has no glyph for.
+const STAND_IN: &str = "··";
 
 /// The panel and its inner area. The height is the same whatever the list holds, so the search
 /// line stays where it is while results come and go as the user types; it is the most that fits.
@@ -52,17 +54,35 @@ fn panel(areas: &Areas) -> (Rect, Rect) {
     (area, inner)
 }
 
-/// First result shown: the selection is kept in the middle of the window when the list is longer
-/// than it, so moving either way scrolls smoothly. Always in range.
-fn window_start(selected: usize, visible: usize, total: usize) -> usize {
-    if visible == 0 || total <= visible {
-        return 0;
-    }
-    selected.saturating_sub(visible / 2).min(total - visible)
+/// How many columns one emoji cell takes: two for the glyph and one blank.
+const CELL_WIDTH: u16 = 3;
+
+/// The areas of the screen as `ui::view` lays them out, from the size the app knows.
+fn areas_of(app: &App) -> Areas {
+    let area = Rect::new(0, 0, app.size.width, app.size.height);
+    crate::ui::layout::areas_with_thread(
+        area,
+        app.settings.sidebar_width,
+        app.input_rows(),
+        app.thread_input_rows(),
+        app.column_open(),
+    )
+}
+
+/// Cells in one row of the grid on this screen: what up and down move by. At least one.
+pub fn columns(app: &App) -> usize {
+    let (_, inner) = panel(&areas_of(app));
+    cells_per_row(inner.width)
+}
+
+/// Cells in a row of `width` columns: each takes its three, and one more column at the end holds
+/// the closing marker of the selected cell.
+fn cells_per_row(width: u16) -> usize {
+    usize::from(width.saturating_sub(1) / CELL_WIDTH).max(1)
 }
 
 /// The hint on the bottom border: the keys of the current state, and what `Enter` will do with the
-/// selected result, which depends on it: `remove` when the user already gave that reaction, `add`
+/// selected emoji, which depends on it: `remove` when the user already gave that reaction, `add`
 /// otherwise. The longest form of each state still fits next to the title in the standard
 /// 52-column pane.
 fn hint_for(view: &react::View) -> String {
@@ -72,9 +92,9 @@ fn hint_for(view: &react::View) -> String {
         "add"
     };
     if view.typing {
-        format!(" C-n/C-p move  Enter {verb}  Esc done ")
+        format!(" arrows move  Enter {verb}  Esc done ")
     } else {
-        format!(" j/k move  Enter {verb}  / find  q close ")
+        format!(" hjkl  Enter {verb}  / find  C-t tone ")
     }
 }
 
@@ -112,6 +132,93 @@ pub fn cursor_position(app: &App, areas: &Areas) -> Option<Position> {
     Some(Position::new(x.min(inner.x + inner.width - 1), inner.y))
 }
 
+/// How the inner area of the panel is divided: the search line is always the first row, then the
+/// tabs and the footer when the height allows, and the grid takes the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Split {
+    tabs: bool,
+    footer: bool,
+    grid_rows: usize,
+}
+
+/// The footer goes below 5 inner rows and the tabs below 4; at least one grid row is left whenever
+/// there is a row after the search line.
+fn split(inner_height: u16) -> Split {
+    let footer = inner_height >= 5;
+    let tabs = inner_height >= 4;
+    let used = 1 + usize::from(tabs) + usize::from(footer);
+    Split {
+        tabs,
+        footer,
+        grid_rows: usize::from(inner_height).saturating_sub(used),
+    }
+}
+
+/// The flat indexes of the cells on the rows of the grid that are on screen, for the open picker.
+/// `request_images` asks for the images of these and no others.
+pub fn visible_cells(app: &App, view: &react::View) -> std::ops::Range<usize> {
+    let (_, inner) = panel(&areas_of(app));
+    let rows = Grid::new(&view.sections, cells_per_row(inner.width));
+    let (start, end) = rows.window(view.selected, split(inner.height).grid_rows);
+    let mut cells = rows.rows[start..end].iter().filter_map(|row| match row {
+        Row::Cells { first, len, .. } => Some(*first..first + len),
+        Row::Heading(_) => None,
+    });
+    match cells.next() {
+        None => 0..0,
+        Some(first) => first.start..cells.next_back().map_or(first.end, |last| last.end),
+    }
+}
+
+/// `text` as exactly two columns: padded when it is narrower, the stand-in when it is wider.
+fn two_columns(text: &str) -> String {
+    match text.width() {
+        2 => text.to_string(),
+        w if w < 2 => format!("{text}{}", " ".repeat(2 - w)),
+        _ => STAND_IN.to_string(),
+    }
+}
+
+/// The two glyph columns of a cell: a custom emoji's image or stand-in, an emoji or alias as it is,
+/// and the stand-in for a reaction the client could not turn into a glyph.
+fn glyph_cells(app: &App, c: &Candidate) -> String {
+    let emoji = app.emoji_view();
+    if let Some(cells) = crate::ui::emoji::image_glyph(&c.name, &app.settings.emoji_aliases, &emoji)
+    {
+        cells
+    } else if c.glyph == c.shown_name() || c.source == Source::Custom {
+        STAND_IN.to_string()
+    } else {
+        two_columns(&sanitize_line(&c.glyph))
+    }
+}
+
+/// The footer: the selected emoji as `:name:` with what the message knows about it, and the skin
+/// tone in use on the right. Cut to the width.
+fn footer_line(view: &react::View, tone: u8, width: usize, app: &App) -> Line<'static> {
+    let style = app.theme.picker_footer;
+    let right = if tone == 0 {
+        "tone: default".to_string()
+    } else {
+        format!("tone: {tone}")
+    };
+    let left = match view.candidates.get(view.selected) {
+        Some(candidate) => {
+            let note = note_of(candidate);
+            if note.is_empty() {
+                candidate.shown_name()
+            } else {
+                format!("{}  {note}", candidate.shown_name())
+            }
+        }
+        None => NO_MATCHES.to_string(),
+    };
+    let room = width.saturating_sub(right.width() + 1);
+    let left = fit_author(&left, room).into_owned();
+    let pad = " ".repeat(width.saturating_sub(left.width() + right.width()));
+    Line::from(Span::styled(format!("{left}{pad}{right}"), style))
+}
+
 /// Draw the picker when it is open and its message is still held.
 pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     let Some(view) = react::view(app) else {
@@ -135,9 +242,7 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     frame.render_widget(block, area);
 
     let width = usize::from(inner.width);
-    let visible = usize::from(inner.height).saturating_sub(1);
-    let start = window_start(view.selected, visible, view.candidates.len());
-    let shown = &view.candidates[start..(start + visible).min(view.candidates.len())];
+    let layout = split(inner.height);
 
     // The search line: the prompt and what was typed, cut to the width.
     let query = sanitize_line(&view.query).into_owned();
@@ -158,85 +263,103 @@ pub fn render(frame: &mut Frame, areas: &Areas, app: &App) {
     };
     let mut lines: Vec<Line<'static>> = vec![search_line];
 
-    if view.candidates.is_empty() {
-        let empty_query = view.query.trim().trim_matches(':').is_empty();
-        let text = match (empty_query, view.typing) {
-            (false, _) => NO_MATCHES,
-            (true, true) => TYPE_TO_SEARCH,
-            (true, false) => NO_REACTIONS_YET,
-        };
+    // The tabs: one emoji per section, the one the selection is in marked. While a search has
+    // results the only section is the results, which is not a tab to go back to: none is marked.
+    if layout.tabs {
+        let current = react::section_of(&view.sections, view.selected)
+            .filter(|at| view.sections[*at].kind != react::SectionKind::Results);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut used = 0;
+        for (at, section) in view.sections.iter().enumerate() {
+            if section.kind == react::SectionKind::Results || used + usize::from(CELL_WIDTH) > width
+            {
+                continue;
+            }
+            let style = if Some(at) == current {
+                theme.picker_tab_current
+            } else {
+                theme.picker_tab
+            };
+            spans.push(Span::styled(
+                format!("{} ", two_columns(section.kind.tab())),
+                style,
+            ));
+            used += usize::from(CELL_WIDTH);
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // The grid: the window of rows around the selection.
+    let columns = cells_per_row(inner.width);
+    let rows = Grid::new(&view.sections, columns);
+    let (start, end) = rows.window(view.selected, layout.grid_rows);
+    for row in &rows.rows[start..end] {
+        match *row {
+            Row::Heading(section) => {
+                let title = view.sections[section].kind.title();
+                lines.push(Line::from(Span::styled(
+                    fit_author(title, width).into_owned(),
+                    theme.picker_heading,
+                )));
+            }
+            Row::Cells { first, len, .. } => {
+                // Each cell is a marker column and two glyph columns. The selected cell is
+                // wrapped in `[` and `]`, because a terminal may leave the background of a colour
+                // emoji unpainted, so the highlight alone can be missed.
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                let mut closing = false;
+                for index in first..first + len {
+                    let candidate = &view.candidates[index];
+                    let base = if candidate.own {
+                        theme.picker_own
+                    } else {
+                        theme.picker_item
+                    };
+                    let selected = index == view.selected;
+                    let marked = base.patch(theme.picker_selected);
+                    let marker = if selected {
+                        Span::styled("[", marked)
+                    } else if closing {
+                        Span::styled("]", marked)
+                    } else {
+                        Span::styled(" ", theme.picker_item)
+                    };
+                    spans.push(marker);
+                    closing = selected;
+                    let style = if selected { marked } else { base };
+                    spans.push(Span::styled(glyph_cells(app, candidate), style));
+                }
+                spans.push(if closing {
+                    Span::styled("]", theme.picker_item.patch(theme.picker_selected))
+                } else {
+                    Span::styled(" ", theme.picker_item)
+                });
+                // The glyph of a custom emoji is the client's own cells until here.
+                let mut spans =
+                    crate::ui::emoji::expand(spans, theme.messages_custom_emoji, &mut false);
+                // Write the blank columns after the last cell too, so a glyph the terminal draws
+                // wider than measured, or one left from the frame before, cannot stay there.
+                let rest = width.saturating_sub(len * usize::from(CELL_WIDTH) + 1);
+                spans.push(Span::styled(" ".repeat(rest), theme.picker_item));
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+    if rows.rows.is_empty() && layout.grid_rows > 0 && !layout.footer {
         lines.push(Line::from(Span::styled(
-            fit_author(text, width).into_owned(),
+            fit_author(NO_MATCHES, width).into_owned(),
             theme.picker_hint,
         )));
-    } else {
-        // A reaction that resolved to nothing is drawn raw: its `:name:` already is the glyph, so
-        // the glyph cell stays empty and the glyph column is sized from real glyphs only.
-        let emoji = app.emoji_view();
-        let glyph_of = |c: &Candidate| -> String {
-            if let Some(cells) =
-                crate::ui::emoji::image_glyph(&c.name, &app.settings.emoji_aliases, &emoji)
-            {
-                cells
-            } else if c.glyph == c.shown_name() {
-                String::new()
-            } else {
-                c.glyph.clone()
-            }
-        };
-        let glyph_width = shown.iter().map(|c| glyph_of(c).width()).max().unwrap_or(0);
-        let lead = 2 + if glyph_width > 0 { glyph_width + 1 } else { 0 };
-        // The name column never takes more than half of what is left after the lead.
-        let name_cap = width.saturating_sub(lead + 2) / 2;
-        let name_of = |c: &Candidate| fit_author(&c.shown_name(), name_cap).into_owned();
-        let name_width = shown.iter().map(|c| name_of(c).width()).max().unwrap_or(0);
+    }
 
-        for (offset, candidate) in shown.iter().enumerate() {
-            let selected = start + offset == view.selected;
-            let base = if candidate.own {
-                theme.picker_own
-            } else {
-                theme.picker_item
-            };
-            let style = |s: Style| {
-                if selected {
-                    s.patch(theme.picker_selected)
-                } else {
-                    s
-                }
-            };
-            let mark = if candidate.own { "* " } else { "  " };
-            let glyph = glyph_of(candidate);
-            let glyph = format!(
-                "{glyph}{}",
-                " ".repeat(glyph_width.saturating_sub(glyph.width()))
-            );
-            let gap = " ".repeat(usize::from(glyph_width > 0));
-            let name = name_of(candidate);
-            let name = format!(
-                "{name}{}",
-                " ".repeat(name_width.saturating_sub(name.width()))
-            );
-            let prefix = lead + name_width + 2;
-            let note = note_of(candidate);
-            let note = if width > prefix {
-                fit_author(&note, width - prefix).into_owned()
-            } else {
-                String::new()
-            };
-            let mut text = format!("{mark}{glyph}{gap}{name}  {note}");
-            // Cut a row that is still too wide, then pad it so a highlighted row spans the panel.
-            if text.width() > width {
-                text = fit_author(&text, width).into_owned();
-            }
-            let pad = " ".repeat(width.saturating_sub(text.width()));
-            // The glyph of a custom emoji is the client's own cells until here.
-            lines.push(Line::from(crate::ui::emoji::expand(
-                vec![Span::styled(format!("{text}{pad}"), style(base))],
-                theme.messages_custom_emoji,
-                &mut false,
-            )));
+    // The footer sits on the last row of the panel, whatever the grid holds.
+    if layout.footer {
+        let used = lines.len();
+        let want = usize::from(inner.height) - 1;
+        for _ in used..want {
+            lines.push(Line::default());
         }
+        lines.push(footer_line(&view, app.emoji_recents.tone, width, app));
     }
     frame.render_widget(Paragraph::new(lines), inner);
     if let Some(position) = cursor_position(app, areas) {
@@ -370,8 +493,24 @@ mod tests {
         cells
     }
 
+    /// Where the panel's inner area is on the screen of `app`.
+    fn inner_of(app: &crate::app::App) -> Rect {
+        panel(&areas_of(app)).1
+    }
+
+    /// The first cell of the panel's inner area that draws `symbol`.
+    fn find_symbol(
+        buffer: &ratatui::buffer::Buffer,
+        inner: Rect,
+        symbol: &str,
+    ) -> Option<(u16, u16)> {
+        (inner.y..inner.y + inner.height)
+            .flat_map(|y| (inner.x..inner.x + inner.width).map(move |x| (x, y)))
+            .find(|(x, y)| buffer[(*x, *y)].symbol() == symbol)
+    }
+
     #[test]
-    fn a_custom_emoji_shows_its_image_in_the_picker_rows() {
+    fn a_custom_emoji_shows_its_image_in_its_grid_cell() {
         let mut app = on_reactions(app_80x24(), vec![reaction("rtshipit", &["me"])]);
         with_ready_image(&mut app);
         open_picker(&mut app);
@@ -384,13 +523,35 @@ mod tests {
         assert_eq!(cells.len(), 2, "one emoji, two cells: {cells:?}");
         for (_, _, fg, reversed) in &cells {
             assert_eq!(*fg, Color::Rgb(0, 0, 9));
-            assert!(!reversed, "the selected row must not reverse the id");
+            assert!(!reversed, "the selected cell must not reverse the id");
         }
+        // It is the selected cell, so the footer names it.
         let out = render_to_string(&app, 80, 24);
         assert!(
-            out.contains(":rtshipit:"),
-            "the name stays in its column: {out}"
+            panel_rows(&out).iter().any(|r| r.contains(":rtshipit:")),
+            "{out}"
         );
+    }
+
+    #[test]
+    fn a_custom_emoji_without_an_image_takes_two_stand_in_cells() {
+        let mut app = on_reactions(app_80x24(), Vec::new());
+        app.custom_emojis = CustomEmojis::Loaded(vec![CustomEmoji {
+            name: "rtshipit".to_string(),
+            ext: "png".to_string(),
+            ..Default::default()
+        }]);
+        open_picker(&mut app);
+        // Walk to the last section, "Custom".
+        for _ in 0..12 {
+            press(&mut app, "L");
+        }
+        let out = render_to_string(&app, 80, 24);
+        let all = panel_rows(&out).join("\n");
+        assert!(all.contains("Custom"), "the heading: {out}");
+        assert!(all.contains(STAND_IN), "the stand-in: {out}");
+        assert!(all.contains(":rtshipit:"), "the footer names it: {out}");
+        insta::assert_snapshot!(out);
     }
 
     #[test]
@@ -411,20 +572,62 @@ mod tests {
     }
 
     #[test]
+    fn only_the_custom_emojis_on_the_rows_on_screen_are_requested() {
+        let mut app = on_reactions(app_80x24(), Vec::new());
+        app.graphics = crate::app::emoji::Graphics::Supported;
+        app.custom_emojis = CustomEmojis::Loaded(
+            (0..400)
+                .map(|n| CustomEmoji {
+                    name: format!("c{n:03}"),
+                    ext: "png".to_string(),
+                    etag: format!("e{n}"),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        open_picker(&mut app);
+        crate::app::update::update(&mut app, crate::action::Action::KeyTimeout);
+        assert!(
+            app.images.requested_count() == 0,
+            "the Custom section is far below the first rows"
+        );
+        for _ in 0..12 {
+            press(&mut app, "L");
+        }
+        crate::app::update::update(&mut app, crate::action::Action::KeyTimeout);
+        let view = crate::app::react::view(&app).unwrap();
+        let on_screen = visible_cells(&app, &view);
+        let asked = app.images.requested_count();
+        assert!(asked > 0, "the section on screen is asked for");
+        assert!(asked <= on_screen.len(), "{asked} for {on_screen:?}");
+        assert!(asked < 400, "not the whole list");
+    }
+
+    #[test]
     fn picker_browsing_80x24() {
         let mut app = on_reactions(app_80x24(), typical());
         app.settings
             .emoji_aliases
             .insert("partyparrot".to_string(), "🦜".to_string());
+        app.emoji_recents.record("rocket");
         open_picker(&mut app);
         let out = render_to_string(&app, 80, 24);
         let rows = panel_rows(&out);
         assert!(rows[0].contains(" React "), "{out}");
         assert!(rows[1].contains("press / to search"), "{out}");
         let all = rows.join("\n");
-        assert!(all.contains(":+1:") && all.contains("3, you"), "{out}");
-        assert!(all.contains("* "), "an own reaction is marked: {out}");
-        assert!(all.contains("q close"), "{out}");
+        assert!(all.contains("On this message"), "{out}");
+        assert!(
+            all.contains("Enter remove"),
+            "the first reaction is the user's own: {out}"
+        );
+        // The footer names the selection with its count and `you`, and the tone on the right.
+        let footer = &rows[rows.len() - 2];
+        assert!(
+            footer.contains(":+1:") && footer.contains("3, you"),
+            "{out}"
+        );
+        assert!(footer.contains("tone: default"), "{out}");
         insta::assert_snapshot!(out);
     }
 
@@ -451,36 +654,29 @@ mod tests {
         let out = render_to_string(&app, 80, 24);
         let all = panel_rows(&out).join("\n");
         assert!(all.contains("/ship"), "{out}");
+        assert!(all.contains("Results"), "one results section: {out}");
+        assert!(!all.contains("On this message"), "{out}");
         assert!(all.contains("Esc done"), "the searching hint: {out}");
-        assert!(all.contains("custom, 1, you"), "{out}");
-        assert!(all.contains("alias"), "{out}");
-        assert!(all.contains(":ship:"), "{out}");
+        // The exact match comes first, and the footer names it.
+        assert!(
+            panel_rows(&out).iter().any(|r| r.contains(":ship:")),
+            "{out}"
+        );
         insta::assert_snapshot!(out);
     }
 
     #[test]
-    fn picker_long_list_scrolled_80x24() {
+    fn picker_scrolled_to_a_later_section_80x24() {
         let mut app = on_reactions(app_80x24(), Vec::new());
         open_picker(&mut app);
-        search(&mut app, "a");
-        for _ in 0..20 {
-            press(&mut app, "<C-n>");
+        for _ in 0..3 {
+            press(&mut app, "L");
         }
-        let view = crate::app::react::view(&app).expect("open");
-        assert_eq!(view.selected, 20);
         let out = render_to_string(&app, 80, 24);
-        let rows = panel_rows(&out);
-        let selected_name = view.candidates[view.selected].shown_name();
-        // The selected result is on screen, and so are some before it and some after it.
-        let at = rows
-            .iter()
-            .position(|r| r.contains(&format!("{selected_name} ")))
-            .unwrap_or_else(|| panic!("{selected_name} not visible: {out}"));
-        assert!(
-            at > 2 && at < rows.len() - 2,
-            "centred, not at an edge: {at} of {}",
-            rows.len()
-        );
+        let all = panel_rows(&out).join("\n");
+        // Three jumps from the first section land on "Travel & Places". Its heading is in view.
+        assert!(all.contains("Travel & Places"), "{out}");
+        assert!(!all.contains("Smileys & People"), "scrolled past: {out}");
         insta::assert_snapshot!(out);
     }
 
@@ -490,13 +686,13 @@ mod tests {
         open_picker(&mut app);
         search(&mut app, "tad");
         press(&mut app, "<Esc>");
-        press(&mut app, "j");
+        press(&mut app, "l");
         let out = render_to_string(&app, 80, 24);
         let rows = panel_rows(&out);
         // The last search stays on the dim search line, its results stay, and the hint is the
         // browsing one.
         assert!(rows[1].contains("/tad"), "{out}");
-        assert!(rows.last().unwrap().contains("j/k move"), "{out}");
+        assert!(rows.last().unwrap().contains("hjkl"), "{out}");
         assert!(!rows.last().unwrap().contains("Esc done"), "{out}");
         insta::assert_snapshot!(out);
     }
@@ -509,29 +705,102 @@ mod tests {
         let out = render_to_string(&app, 40, 8);
         assert!(out.contains(" React "), "{out}");
         assert!(out.contains("press"), "the search line is there: {out}");
+        let rows = panel_rows(&out);
+        assert!(rows.len() >= 4, "one grid row at least: {out}");
+        assert!(
+            rows.iter().any(|r| r.contains("On this")),
+            "the heading, cut: {out}"
+        );
         insta::assert_snapshot!(out);
     }
 
     #[test]
-    fn the_window_keeps_the_selection_in_view_at_every_position() {
-        for total in [1usize, 5, 9, 10, 11, 200] {
-            for visible in [1usize, 3, 8, 11] {
-                for selected in 0..total {
-                    let start = window_start(selected, visible, total);
-                    assert!(
-                        start + visible.min(total) <= total.max(visible),
-                        "{selected}/{total}/{visible}"
-                    );
-                    assert!(
-                        selected >= start && selected < start + visible.max(1),
-                        "selected {selected} outside {start}..+{visible} of {total}"
-                    );
-                }
+    fn the_footer_goes_first_then_the_tabs_and_the_search_line_and_a_grid_row_stay() {
+        let rows = |h: u16| split(h);
+        assert_eq!(
+            rows(12),
+            Split {
+                tabs: true,
+                footer: true,
+                grid_rows: 9
             }
+        );
+        assert_eq!(
+            rows(5),
+            Split {
+                tabs: true,
+                footer: true,
+                grid_rows: 2
+            }
+        );
+        assert_eq!(
+            rows(4),
+            Split {
+                tabs: true,
+                footer: false,
+                grid_rows: 2
+            }
+        );
+        assert_eq!(
+            rows(3),
+            Split {
+                tabs: false,
+                footer: false,
+                grid_rows: 2
+            }
+        );
+        assert_eq!(
+            rows(2),
+            Split {
+                tabs: false,
+                footer: false,
+                grid_rows: 1
+            }
+        );
+
+        // And on a real screen: shorter and shorter terminals.
+        let screen = |height: u16| {
+            let mut app = on_reactions(app_80x24(), typical());
+            app.size = ratatui::layout::Size::new(80, height);
+            open_picker(&mut app);
+            render_to_string(&app, 80, height)
+        };
+        let tall = screen(24);
+        assert!(
+            tall.contains("tone: default") && tall.contains('💬'),
+            "{tall}"
+        );
+        // The smallest supported screen has four rows inside the box: the footer is the one that goes.
+        let small = screen(8);
+        assert!(!small.contains("tone: default"), "the footer went: {small}");
+        assert!(small.contains('💬'), "the tabs stayed: {small}");
+        assert!(
+            small.contains("On this message"),
+            "a grid row stayed: {small}"
+        );
+        assert!(small.contains("press / to search"), "{small}");
+    }
+
+    #[test]
+    fn a_row_holds_as_many_cells_as_fit_and_none_is_wider_than_the_box() {
+        let mut app = on_reactions(app_80x24(), Vec::new());
+        open_picker(&mut app);
+        // 52 columns: 50 inside the borders, 16 cells of 3.
+        assert_eq!(columns(&app), 16);
+        let out = render_to_string(&app, 80, 24);
+        let rows = panel_rows(&out);
+        for row in &rows[1..rows.len() - 1] {
+            assert!(row.ends_with('\u{2502}'), "the border is intact: {row:?}");
         }
-        assert_eq!(window_start(0, 8, 200), 0);
-        assert_eq!(window_start(199, 8, 200), 192);
-        assert_eq!(window_start(100, 8, 200), 96);
+        let view = crate::app::react::view(&app).unwrap();
+        let grid = Grid::new(&view.sections, columns(&app));
+        assert!(grid.rows.iter().all(|row| match row {
+            Row::Cells { len, .. } => *len <= 16,
+            Row::Heading(_) => true,
+        }));
+        // The same at another width.
+        app.settings.sidebar_width = 20;
+        assert_eq!(columns(&app), (80 - 20 - 2) / 3);
     }
 
     #[test]
@@ -552,7 +821,7 @@ mod tests {
         assert!(bottom.contains("Enter add "), "{bottom}");
         assert!(!bottom.contains("remove"), "{bottom}");
         // The user's own reaction: Enter takes it back.
-        press(&mut app, "j");
+        press(&mut app, "l");
         let bottom = hint(&app);
         assert!(bottom.contains("Enter remove "), "{bottom}");
         // Searching for a name the user already gave says remove for it, and add for another.
@@ -576,19 +845,21 @@ mod tests {
         };
         let browsing = hint(&app);
         assert!(
-            browsing.contains("j/k move") && browsing.contains("q close"),
+            browsing.contains("hjkl")
+                && browsing.contains("/ find")
+                && browsing.contains("C-t tone"),
             "{browsing}"
         );
-        assert!(!browsing.contains("C-n/C-p"), "{browsing}");
+        assert!(!browsing.contains("arrows"), "{browsing}");
         press(&mut app, "/");
         let searching = hint(&app);
         assert!(
-            searching.contains("C-n/C-p move") && searching.contains("Esc done"),
+            searching.contains("arrows move") && searching.contains("Esc done"),
             "{searching}"
         );
-        assert!(!searching.contains("j/k"), "{searching}");
+        assert!(!searching.contains("hjkl"), "{searching}");
         press(&mut app, "<Esc>");
-        assert!(hint(&app).contains("j/k move"), "{}", hint(&app));
+        assert!(hint(&app).contains("hjkl"), "{}", hint(&app));
     }
 
     #[test]
@@ -598,8 +869,8 @@ mod tests {
         let title = " React ".width();
         for verb in ["add", "remove"] {
             for hint in [
-                format!(" C-n/C-p move  Enter {verb}  Esc done "),
-                format!(" j/k move  Enter {verb}  / find  q close "),
+                format!(" arrows move  Enter {verb}  Esc done "),
+                format!(" hjkl  Enter {verb}  / find  C-t tone "),
             ] {
                 assert!(title + hint.width() + 4 <= 52, "{hint:?}: {}", hint.width());
             }
@@ -611,31 +882,25 @@ mod tests {
         let app = on_reactions(app_80x24(), typical());
         let out = render_to_string(&app, 80, 24);
         assert!(!out.contains(" React "), "{out}");
-        assert!(!out.contains("q close"), "{out}");
+        assert!(!out.contains("tone: default"), "{out}");
     }
 
     #[test]
-    fn text_for_an_empty_list_follows_the_state() {
+    fn a_search_with_no_match_says_so_in_the_footer_and_without_one_in_the_grid() {
         let mut app = on_reactions(app_80x24(), Vec::new());
         open_picker(&mut app);
-        let panel = |app: &crate::app::App| panel_rows(&render_to_string(app, 80, 24)).join("\n");
-        // Browsing a message with no reactions: nothing to browse, so say how to search.
-        assert!(
-            panel(&app).contains("no reactions yet: press / to search"),
-            "{}",
-            panel(&app)
-        );
-        // Searching with nothing typed yet.
-        press(&mut app, "/");
-        assert!(
-            panel(&app).contains("type to search for an emoji"),
-            "{}",
-            panel(&app)
-        );
-        assert!(!panel(&app).contains("no reactions yet"), "{}", panel(&app));
-        // Nothing found.
-        type_text(&mut app, "zzzzqqqq");
-        assert!(panel(&app).contains("no matches"), "{}", panel(&app));
+        search(&mut app, "zzzzqqqq");
+        let out = render_to_string(&app, 80, 24);
+        let rows = panel_rows(&out);
+        assert!(rows[rows.len() - 2].contains("no matches"), "{out}");
+        assert!(!rows.join("\n").contains("Results"), "{out}");
+        // Without a footer the grid says it instead.
+        let mut app = on_reactions(app_80x24(), Vec::new());
+        app.size = ratatui::layout::Size::new(80, 8);
+        open_picker(&mut app);
+        search(&mut app, "zzzzqqqq");
+        let out = render_to_string(&app, 80, 8);
+        assert!(out.contains("no matches"), "{out}");
     }
 
     #[test]
@@ -675,89 +940,141 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_row_and_own_rows_stand_out_without_colour() {
-        let mut app = on_reactions(app_80x24(), typical());
+    fn the_selected_cell_the_own_cells_and_the_current_tab_stand_out_without_colour() {
+        let mut app = on_reactions(
+            app_80x24(),
+            vec![reaction("tada", &["ana"]), reaction("+1", &["me"])],
+        );
         open_picker(&mut app);
+        let inner = inner_of(&app);
         let buffer = render_buffer(&app, 80, 24);
-        let out = render_to_string(&app, 80, 24);
-        let rows = panel_rows(&out);
-        let first = out
-            .lines()
-            .position(|l| l == rows[2])
-            .expect("first result row");
-        let cell = |tag: &str, within: &str| -> (u16, u16) {
-            let (y, line) = out
-                .lines()
-                .enumerate()
-                .find(|(_, l)| l.contains(tag) && l.contains(within))
-                .unwrap_or_else(|| panic!("no row with {tag}: {out}"));
-            (
-                line.find(tag).map(|b| line[..b].chars().count()).unwrap() as u16,
-                y as u16,
-            )
-        };
-        // The first result is selected (`+1`, which is also the user's own): reversed.
-        let (x, y) = cell(":+1:", ":+1:");
-        assert_eq!(y as usize, first);
+        // Rows: search, tabs, heading, then the cells of "On this message".
+        let (x, y) = (inner.x + 1, inner.y + 3);
+        assert_eq!(
+            buffer[(x - 1, y)].symbol(),
+            "[",
+            "the selected cell is bracketed"
+        );
+        assert_eq!(buffer[(x + 2, y)].symbol(), "]");
+        assert_eq!(buffer[(x, y)].symbol(), "🎉");
         assert!(
             buffer[(x, y)].modifier.contains(Modifier::REVERSED),
-            "selected row"
+            "selected"
         );
-        // A row that is neither selected nor own is plain; an own row that is not selected is bold.
-        let (x, y) = cell(":tada:", ":tada:");
-        let plain = buffer[(x, y)].modifier;
-        assert!(
-            !plain.contains(Modifier::REVERSED) && !plain.contains(Modifier::BOLD),
-            "{plain:?}"
-        );
-        press(&mut app, "<C-n>");
-        press(&mut app, "<C-n>");
-        press(&mut app, "<C-n>");
-        let buffer = render_buffer(&app, 80, 24);
-        let (x, y) = cell(":+1:", ":+1:");
-        let own = buffer[(x, y)].modifier;
+        // The user's own reaction is bold when it is not the selected one.
+        let own = buffer[(x + 3, y)].modifier;
+        assert_eq!(buffer[(x + 3, y)].symbol(), "👍");
         assert!(
             own.contains(Modifier::BOLD) && !own.contains(Modifier::REVERSED),
             "{own:?}"
         );
+        // A plain cell is neither.
+        let (px, py) = find_symbol(&buffer, inner, "😀").expect("a plain emoji");
+        let plain = buffer[(px, py)].modifier;
+        assert!(
+            !plain.contains(Modifier::REVERSED) && !plain.contains(Modifier::BOLD),
+            "{plain:?}"
+        );
+        // The first tab is the current one: underlined. The second is not.
+        let tab = |col: u16| buffer[(inner.x + col, inner.y + 1)].modifier;
+        assert!(tab(0).contains(Modifier::UNDERLINED), "{:?}", tab(0));
+        assert!(!tab(3).contains(Modifier::UNDERLINED), "{:?}", tab(3));
+    }
+
+    #[test]
+    fn the_current_tab_follows_the_selection_and_none_is_current_in_results() {
+        let mut app = on_reactions(app_80x24(), Vec::new());
+        open_picker(&mut app);
+        let underlined = |app: &crate::app::App| -> Vec<u16> {
+            let inner = inner_of(app);
+            let buffer = render_buffer(app, 80, 24);
+            (0..inner.width / 3)
+                .filter(|n| {
+                    buffer[(inner.x + n * 3, inner.y + 1)]
+                        .modifier
+                        .contains(Modifier::UNDERLINED)
+                })
+                .collect()
+        };
+        assert_eq!(underlined(&app), [0], "Smileys & People");
+        press(&mut app, "L");
+        assert_eq!(underlined(&app), [1], "Animals & Nature");
+        search(&mut app, "tad");
+        assert!(underlined(&app).is_empty(), "no current tab in results");
+    }
+
+    #[test]
+    fn a_skin_tone_shows_in_the_grid_and_the_footer() {
+        let mut app = on_reactions(app_80x24(), vec![reaction("tada", &["ana"])]);
+        open_picker(&mut app);
+        press(&mut app, "<C-t>");
+        press(&mut app, "<C-t>");
+        search(&mut app, "thumbsup");
+        let inner = inner_of(&app);
+        let buffer = render_buffer(&app, 80, 24);
+        assert!(
+            find_symbol(&buffer, inner, "👍🏼").is_some(),
+            "toned thumbs up"
+        );
+        assert!(find_symbol(&buffer, inner, "👍").is_none());
+        let out = render_to_string(&app, 80, 24);
+        assert!(out.contains("tone: 2"), "{out}");
     }
 
     #[test]
     fn themed_elements_are_used() {
-        let theme = "[picker.item]\nfg = 3\n[picker.selected]\nbg = 5\n[picker.input]\nfg = 6\n[picker.hint]\nfg = 2\n";
+        let theme = "[picker.item]\nfg = 3\n[picker.selected]\nbg = 5\n[picker.input]\nfg = 6\n\
+                     [picker.hint]\nfg = 2\n[picker.tab]\nfg = 1\n[picker.tab_current]\nfg = 4\n\
+                     [picker.heading]\nfg = 7\n[picker.footer]\nfg = 8\n";
         let mut app = on_reactions(app_with_config(config_from_theme(theme), 80, 24), typical());
         open_picker(&mut app);
+        let inner = inner_of(&app);
         let buffer = render_buffer(&app, 80, 24);
-        let out = render_to_string(&app, 80, 24);
-        let find = |out: &str, tag: &str| -> (u16, u16) {
-            let (y, line) = out
-                .lines()
-                .enumerate()
-                .find(|(_, l)| l.contains(tag))
-                .unwrap_or_else(|| panic!("no row with {tag}: {out}"));
-            (
-                line[..line.find(tag).unwrap()].chars().count() as u16,
-                y as u16,
-            )
-        };
-        let (x, y) = find(&out, ":tada:");
-        assert_eq!(buffer[(x, y)].fg, Color::Indexed(3), "themed item");
-        let (x, y) = find(&out, ":+1:");
-        assert_eq!(buffer[(x, y)].bg, Color::Indexed(5), "themed selected row");
+        // The cells of "On this message": the first is selected, the second a plain one.
+        assert_eq!(
+            buffer[(inner.x, inner.y + 3)].bg,
+            Color::Indexed(5),
+            "themed selected"
+        );
+        assert_eq!(
+            buffer[(inner.x + 3, inner.y + 3)].fg,
+            Color::Indexed(3),
+            "themed item"
+        );
+        assert_eq!(
+            buffer[(inner.x, inner.y + 1)].fg,
+            Color::Indexed(4),
+            "themed current tab"
+        );
+        assert_eq!(
+            buffer[(inner.x + 3, inner.y + 1)].fg,
+            Color::Indexed(1),
+            "themed tab"
+        );
+        assert_eq!(
+            buffer[(inner.x, inner.y + 2)].fg,
+            Color::Indexed(7),
+            "themed heading"
+        );
+        assert_eq!(
+            buffer[(inner.x, inner.y + inner.height - 1)].fg,
+            Color::Indexed(8),
+            "themed footer"
+        );
         // Browsing: the search line says how to start, in the hint style.
-        let (x, y) = find(&out, "press / to search");
-        assert_eq!(buffer[(x, y)].fg, Color::Indexed(2), "themed hint");
+        assert_eq!(
+            buffer[(inner.x, inner.y)].fg,
+            Color::Indexed(2),
+            "themed hint"
+        );
         // Searching: the typed text is the input style.
         search(&mut app, "tad");
         let buffer = render_buffer(&app, 80, 24);
-        let out2 = render_to_string(&app, 80, 24);
-        let (y, line) = out2
-            .lines()
-            .enumerate()
-            .find(|(_, l)| l.contains("/tad"))
-            .expect("search line");
-        let x = line.find("tad").map(|b| line[..b].chars().count()).unwrap() as u16;
-        assert_eq!(buffer[(x, y as u16)].fg, Color::Indexed(6), "themed input");
+        assert_eq!(
+            buffer[(inner.x + 1, inner.y)].fg,
+            Color::Indexed(6),
+            "themed input"
+        );
     }
 
     #[test]
@@ -770,16 +1087,39 @@ mod tests {
                 reaction(&long, &["bob"]),
             ],
         );
+        app.custom_emojis = CustomEmojis::Loaded(vec![CustomEmoji {
+            name: "evil\u{1b}[2Jname".to_string(),
+            ..Default::default()
+        }]);
         open_picker(&mut app);
         let out = render_to_string(&app, 80, 24);
         assert!(!out.contains('\u{1b}') && !out.contains('\u{7}'), "{out:?}");
+        // The footer names the first reaction, sanitized.
+        assert!(panel_rows(&out).iter().any(|r| r.contains(":bad")), "{out}");
+        // And the long one, selected, is cut with an ellipsis in the footer.
+        press(&mut app, "l");
+        let out = render_to_string(&app, 80, 24);
         let rows = panel_rows(&out);
+        let footer = &rows[rows.len() - 2];
+        assert!(
+            footer.contains('\u{2026}'),
+            "an ellipsis marks the cut: {out}"
+        );
+        assert!(footer.contains("tone: default"), "the tone stays: {out}");
         for row in &rows[1..rows.len() - 1] {
             assert!(row.ends_with('\u{2502}'), "the border is intact: {row:?}");
         }
+        // The hostile custom emoji is not offered, in the grid or in a search.
+        for _ in 0..12 {
+            press(&mut app, "L");
+        }
         assert!(
-            rows.join("\n").contains('\u{2026}'),
-            "an ellipsis marks the cut: {out}"
+            !crate::app::react::view(&app)
+                .unwrap()
+                .candidates
+                .iter()
+                .any(|c| c.source == crate::app::react::Source::Custom),
+            "not offered"
         );
         // A paste with control characters lands on one line (while searching).
         press(&mut app, "/");

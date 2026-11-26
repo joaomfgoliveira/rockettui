@@ -1,0 +1,27 @@
+---
+source: src/ui/picker.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ general ━━━━━━━━━━━━━━━━ Threads (gT) unread (0) ┓
+│  Unread                  │┃? alice  deploy finished                          ┃
+│> * #general              │┃                                                  ┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┌ React ───────────────────────────────────────────┐
+│  ▾ People (1)            ││press / to search                                 │
+│  Recent                  ││😀  🐻  🍔  🌍  ⚽  💡  🔣  🏁  ✨                         │
+│    #random               ││ 🇲🇳  🇲🇴  🇲🇵  🇲🇶  🇲🇷  🇲🇸  🇲🇹  🇲🇺  🇲🇻  🇲🇼  🇲🇽  🇲🇾  🇲🇿  🇳🇦  🇳🇨  🇳🇪   │
+│    &secrets [e2e]        ││ 🇳🇫  🇳🇬  🇳🇮  🇳🇱  🇳🇴  🇳🇵  🇳🇷  🇳🇺  🇳🇿  🇴🇲  🇵🇦  🇵🇪  🇵🇫  🇵🇬  🇵🇭  🇵🇰   │
+│    #quiet                ││ 🇵🇱  🇵🇲  🇵🇳  🇵🇷  🇵🇸  🇵🇹  🇵🇼  🇵🇾  🇶🇦  🇷🇪  🇷🇴  🇷🇸  🇷🇺  🇷🇼  🇸🇦  🇸🇧   │
+│                          ││ 🇸🇨  🇸🇩  🇸🇪  🇸🇬  🇸🇭  🇸🇮  🇸🇯  🇸🇰  🇸🇱  🇸🇲  🇸🇳  🇸🇴  🇸🇷  🇸🇸  🇸🇹  🇸🇻   │
+│                          ││ 🇸🇽  🇸🇾  🇸🇿  🇹🇦  🇹🇨  🇹🇩  🇹🇫  🇹🇬  🇹🇭  🇹🇯  🇹🇰  🇹🇱  🇹🇲  🇹🇳  🇹🇴  🇹🇷   │
+│                          ││ 🇹🇹  🇹🇻  🇹🇼  🇹🇿  🇺🇦  🇺🇬  🇺🇲  🇺🇳  🇺🇸  🇺🇾  🇺🇿  🇻🇦  🇻🇨  🇻🇪  🇻🇬  🇻🇮   │
+│                          ││ 🇻🇳  🇻🇺  🇼🇫  🇼🇸  🇽🇰  🇾🇪  🇾🇹  🇿🇦  🇿🇲  🇿🇼  🏴  🏴  🏴            │
+│                          ││Custom                                            │
+│                          ││[··]                                              │
+│                          ││:rtshipit:  custom                   tone: default│
+└──────────────────────────┘└─────────────── hjkl  Enter add  / find  C-t tone ┘
+ NORMAL  general

@@ -128,6 +128,8 @@ pub async fn run(
     app.effects.push(Effect::LoadRooms);
     // The own username, once per connection (D-17); `:reconnect` asks again, a send never does.
     app.effects.push(Effect::LoadMe);
+    // The emoji box's picks and skin tone, once per run.
+    app.effects.push(Effect::LoadRecents);
     let mut batch: Vec<Action> = Vec::new();
     let started = tokio::time::Instant::now();
     // Armed only after a key leaves a count or sequence pending; the reducer never sees a clock.

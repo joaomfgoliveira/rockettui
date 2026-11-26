@@ -81,6 +81,10 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "picker.selected",
     "picker.own",
     "picker.hint",
+    "picker.tab",
+    "picker.tab_current",
+    "picker.heading",
+    "picker.footer",
 ];
 
 /// Widest a marker may be, in columns (A7). The encrypted tag has its own, larger cap.
@@ -310,6 +314,12 @@ pub struct Theme {
     pub picker_selected: Style,
     pub picker_own: Style,
     pub picker_hint: Style,
+    /// A category tab, the tab of the section the selection is in, a section heading and the
+    /// footer line that names the selected emoji.
+    pub picker_tab: Style,
+    pub picker_tab_current: Style,
+    pub picker_heading: Style,
+    pub picker_footer: Style,
     /// Border and title style of the focused and the other panes.
     pub border_focused: Style,
     pub border_unfocused: Style,
@@ -385,6 +395,12 @@ impl Default for Theme {
             picker_selected: plain.add_modifier(Modifier::REVERSED),
             picker_own: plain.add_modifier(Modifier::BOLD),
             picker_hint: plain.add_modifier(Modifier::DIM),
+            picker_tab: plain,
+            picker_tab_current: plain
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
+            picker_heading: plain.add_modifier(Modifier::BOLD),
+            picker_footer: plain,
             border_focused: plain,
             border_unfocused: plain,
             border_type_focused: BorderType::Thick,
@@ -459,6 +475,10 @@ impl Theme {
             ("picker", "selected") => Some(&mut self.picker_selected),
             ("picker", "own") => Some(&mut self.picker_own),
             ("picker", "hint") => Some(&mut self.picker_hint),
+            ("picker", "tab") => Some(&mut self.picker_tab),
+            ("picker", "tab_current") => Some(&mut self.picker_tab_current),
+            ("picker", "heading") => Some(&mut self.picker_heading),
+            ("picker", "footer") => Some(&mut self.picker_footer),
             ("border", "focused") => Some(&mut self.border_focused),
             ("border", "unfocused") => Some(&mut self.border_unfocused),
             _ => None,
@@ -990,8 +1010,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            62,
-            "17 chrome and border paths, the seventeen messages and thread elements, the two thread badge elements and the thread unread mark, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the seven picker elements"
+            66,
+            "17 chrome and border paths, the seventeen messages and thread elements, the two thread badge elements and the thread unread mark, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the eleven picker elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -1168,6 +1188,9 @@ mod tests {
         assert_ne!(t.picker_selected, t.picker_own);
         assert_eq!(t.picker_selected.add_modifier, Modifier::REVERSED);
         assert_eq!(t.picker_hint.add_modifier, Modifier::DIM);
+        // The current tab stands out from the others without colour, and a heading from a cell.
+        assert_ne!(t.picker_tab_current, t.picker_tab);
+        assert_ne!(t.picker_heading, t.picker_item);
 
         let (theme, out) = parse_str(
             "[picker.selected]\nbg = \"#334455\"\n[picker.item]\nfg = \"cyan\"\n\
@@ -1182,6 +1205,35 @@ mod tests {
         // Untouched elements keep their built-in style.
         assert_eq!(theme.picker_own, t.picker_own);
         assert_eq!(theme.picker_border, t.picker_border);
+    }
+
+    #[test]
+    fn the_new_picker_elements_are_themeable_and_old_themes_still_load() {
+        let t = Theme::default();
+        let (theme, out) = parse_str(
+            "[picker.tab_current]\nfg = \"#ffaa00\"\n[picker.heading]\nmodifiers = []\n\
+             [picker.footer]\nbg = \"blue\"\n[picker.tab]\nfg = \"red\"\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(
+            theme.picker_tab_current.fg,
+            Some(Color::Rgb(0xff, 0xaa, 0x00))
+        );
+        // A partial override keeps the default modifiers; an empty list clears them.
+        assert_eq!(
+            theme.picker_tab_current.add_modifier,
+            t.picker_tab_current.add_modifier
+        );
+        assert_eq!(theme.picker_heading.add_modifier, Modifier::empty());
+        assert_eq!(theme.picker_footer.bg, Some(Color::Blue));
+        assert_eq!(theme.picker_tab.fg, Some(Color::Red));
+        // A theme written before these elements existed loads without a word.
+        let (old, out) = parse_str("[picker.selected]\nbg = \"#334455\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(old.picker_tab, t.picker_tab);
+        assert_eq!(old.picker_tab_current, t.picker_tab_current);
+        assert_eq!(old.picker_heading, t.picker_heading);
+        assert_eq!(old.picker_footer, t.picker_footer);
     }
 
     #[test]

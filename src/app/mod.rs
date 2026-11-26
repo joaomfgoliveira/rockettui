@@ -7,6 +7,7 @@ pub mod command;
 pub mod context;
 pub mod edit;
 pub mod emoji;
+pub mod emoji_recents;
 pub mod follow;
 pub mod help;
 pub mod history;
@@ -238,6 +239,9 @@ pub struct App {
     pub images: emoji::Images,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub react_picker: Option<react::ReactPicker>,
+    /// What the emoji box remembers: "Frequently used" and the skin tone. Loaded once at start from
+    /// the state file and saved after a pick or a tone change (`app::emoji_recents`).
+    pub emoji_recents: emoji_recents::Recents,
     /// The room switcher (`app::switcher`), when open. Like `help` it is a state, not a mode. No
     /// `Debug` of its own beyond a redacting one: it holds the typed query.
     pub switcher: Option<switcher::Switcher>,
@@ -339,6 +343,7 @@ impl App {
             images: emoji::Images::default(),
             anim_ms: 0,
             react_picker: None,
+            emoji_recents: emoji_recents::Recents::default(),
             switcher: None,
             thread_list: None,
             thread_list_seq: 0,

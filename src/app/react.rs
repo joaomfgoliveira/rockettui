@@ -11,10 +11,12 @@ use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, EmojiName};
 use crate::input::key::Chord;
 use crate::ui::emoji::resolve;
-use crate::ui::emoji_names::send_name;
+use crate::ui::emoji_names::{send_name, strip_tone, tone_name};
 use crate::ui::sanitize::sanitize_line;
 use crossterm::event::{KeyCode, KeyModifiers};
-use std::collections::HashSet;
+use emojis::{Emoji, Group, SkinTone};
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// Most candidates a search returns. A one-letter query matches most of the table; the list a
 /// person can usefully scroll is far shorter.
@@ -140,10 +142,13 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
             })
     };
     let aliases = &app.settings.emoji_aliases;
+    let tone = app.emoji_recents.tone;
     let mut claimed: HashSet<String> = HashSet::new();
     let mut found: Vec<(u8, Candidate)> = Vec::new();
-    let mut offer = |rank: u8, name: String, glyph: String, source: Source| {
-        if claimed.insert(name.clone()) {
+    // `claim` is the name that is held against a later source; `name` is what is sent, which for a
+    // unicode emoji in a skin tone is the toned name.
+    let mut offer = |rank: u8, claim: &str, name: String, glyph: String, source: Source| {
+        if claimed.insert(claim.to_string()) {
             let (count, own) = mark(&name);
             found.push((
                 rank,
@@ -160,7 +165,7 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
 
     for (name, text) in aliases {
         if let Some(rank) = rank_of(name, &query) {
-            offer(rank, name.clone(), text.clone(), Source::Alias);
+            offer(rank, name, name.clone(), text.clone(), Source::Alias);
         }
     }
     for emoji in app.custom_emojis.list() {
@@ -173,7 +178,7 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
             std::iter::once(emoji.name.as_str()).chain(emoji.aliases.iter().map(String::as_str));
         if let Some(rank) = best_rank(names, &query) {
             let glyph = resolve(&emoji.name, aliases);
-            offer(rank, emoji.name.clone(), glyph, Source::Custom);
+            offer(rank, &emoji.name, emoji.name.clone(), glyph, Source::Custom);
         }
     }
     for emoji in emojis::iter() {
@@ -185,12 +190,8 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
         };
         let names = emoji.shortcodes().chain(std::iter::once(sent));
         if let Some(rank) = best_rank(names, &query) {
-            offer(
-                rank,
-                sent.to_string(),
-                emoji.as_str().to_string(),
-                Source::Unicode,
-            );
+            let (name, glyph) = unicode_cell(emoji, first, sent, tone);
+            offer(rank, sent, name, glyph, Source::Unicode);
         }
     }
 
@@ -204,6 +205,375 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
         .take(MAX_CANDIDATES)
         .map(|(_, candidate)| candidate)
         .collect()
+}
+
+/// The skin tone (1 to 5) as the crate names it.
+fn skin_tone(tone: u8) -> Option<SkinTone> {
+    match tone {
+        1 => Some(SkinTone::Light),
+        2 => Some(SkinTone::MediumLight),
+        3 => Some(SkinTone::Medium),
+        4 => Some(SkinTone::MediumDark),
+        5 => Some(SkinTone::Dark),
+        _ => None,
+    }
+}
+
+/// What to send and what to draw for a unicode emoji in skin tone `tone` (0 for none): the toned
+/// name and glyph when the emoji has tones and the server accepts their names, else the plain ones.
+fn unicode_cell(
+    emoji: &'static Emoji,
+    first: &'static str,
+    sent: &str,
+    tone: u8,
+) -> (String, String) {
+    if let Some(toned) = skin_tone(tone).and_then(|t| emoji.with_skin_tone(t))
+        && let Some(name) = tone_name(first, tone)
+    {
+        return (name, toned.as_str().to_string());
+    }
+    (sent.to_string(), emoji.as_str().to_string())
+}
+
+/// Every unicode emoji the server accepts, by the name it is sent under.
+static BY_SENT: LazyLock<HashMap<&'static str, &'static Emoji>> = LazyLock::new(|| {
+    emojis::iter()
+        .filter_map(|emoji| {
+            let first = emoji.shortcodes().next()?;
+            Some((send_name(first)?, emoji))
+        })
+        .collect()
+});
+
+/// How the message stands with reaction `name`: how many gave it and whether the user did.
+fn mark(app: &App, message: &Message, name: &str) -> (usize, bool) {
+    let me = app.own_username.as_deref();
+    message
+        .reactions
+        .iter()
+        .find(|r| r.name == name)
+        .map_or((0, false), |r| {
+            (
+                r.users.len(),
+                me.is_some_and(|me| r.users.iter().any(|u| u == me)),
+            )
+        })
+}
+
+/// A section of the grid. The order of the variants is the order the sections are shown in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionKind {
+    OnMessage,
+    Frequent,
+    Smileys,
+    Animals,
+    Food,
+    Travel,
+    Activities,
+    Objects,
+    Symbols,
+    Flags,
+    Custom,
+    /// What a search found, in the order of its ranking.
+    Results,
+}
+
+impl SectionKind {
+    /// The heading drawn over the section.
+    pub fn title(self) -> &'static str {
+        match self {
+            SectionKind::OnMessage => "On this message",
+            SectionKind::Frequent => "Frequently used",
+            SectionKind::Smileys => "Smileys & People",
+            SectionKind::Animals => "Animals & Nature",
+            SectionKind::Food => "Food & Drink",
+            SectionKind::Travel => "Travel & Places",
+            SectionKind::Activities => "Activities",
+            SectionKind::Objects => "Objects",
+            SectionKind::Symbols => "Symbols",
+            SectionKind::Flags => "Flags",
+            SectionKind::Custom => "Custom",
+            SectionKind::Results => "Results",
+        }
+    }
+
+    /// The one emoji that stands for the section in the row of tabs.
+    pub fn tab(self) -> &'static str {
+        match self {
+            SectionKind::OnMessage => "💬",
+            SectionKind::Frequent => "🕑",
+            SectionKind::Smileys => "😀",
+            SectionKind::Animals => "🐻",
+            SectionKind::Food => "🍔",
+            SectionKind::Travel => "🌍",
+            SectionKind::Activities => "⚽",
+            SectionKind::Objects => "💡",
+            SectionKind::Symbols => "🔣",
+            SectionKind::Flags => "🏁",
+            SectionKind::Custom => "✨",
+            SectionKind::Results => "🔍",
+        }
+    }
+}
+
+/// The unicode groups of each section: Smileys & Emotion and People & Body are one section, as in
+/// the web client.
+const GROUPED: [(SectionKind, &[Group]); 8] = [
+    (
+        SectionKind::Smileys,
+        &[Group::SmileysAndEmotion, Group::PeopleAndBody],
+    ),
+    (SectionKind::Animals, &[Group::AnimalsAndNature]),
+    (SectionKind::Food, &[Group::FoodAndDrink]),
+    (SectionKind::Travel, &[Group::TravelAndPlaces]),
+    (SectionKind::Activities, &[Group::Activities]),
+    (SectionKind::Objects, &[Group::Objects]),
+    (SectionKind::Symbols, &[Group::Symbols]),
+    (SectionKind::Flags, &[Group::Flags]),
+];
+
+/// A titled run of cells, drawn on rows of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    pub kind: SectionKind,
+    pub cells: Vec<Candidate>,
+}
+
+/// The cell for a name the user picked before, when it is still offered: an alias, a custom emoji
+/// or a unicode emoji (in the skin tone in use). `None` for anything else, so a name the server
+/// dropped drops out of "Frequently used" without being forgotten.
+fn offered_cell(app: &App, message: &Message, name: &str) -> Option<Candidate> {
+    let aliases = &app.settings.emoji_aliases;
+    let (sent, glyph, source) = if let Some(text) = aliases.get(name) {
+        (name.to_string(), text.clone(), Source::Alias)
+    } else if let Some(custom) = app.custom_emojis.find(name)
+        && sanitize_line(&custom.name) == custom.name.as_str()
+    {
+        (
+            custom.name.clone(),
+            resolve(&custom.name, aliases),
+            Source::Custom,
+        )
+    } else {
+        let emoji = BY_SENT.get(name)?;
+        let first = emoji.shortcodes().next()?;
+        let (sent, glyph) = unicode_cell(emoji, first, name, app.emoji_recents.tone);
+        (sent, glyph, Source::Unicode)
+    };
+    let (count, own) = mark(app, message, &sent);
+    Some(Candidate {
+        name: sent,
+        glyph,
+        source,
+        count,
+        own,
+    })
+}
+
+/// The unicode emoji of `groups` the server accepts, in the crate's order, in the skin tone in use.
+fn group_cells(app: &App, message: &Message, groups: &[Group]) -> Vec<Candidate> {
+    let tone = app.emoji_recents.tone;
+    let mut cells = Vec::new();
+    for emoji in groups.iter().flat_map(|group| group.emojis()) {
+        let Some(first) = emoji.shortcodes().next() else {
+            continue;
+        };
+        let Some(sent) = send_name(first) else {
+            continue;
+        };
+        let (name, glyph) = unicode_cell(emoji, first, sent, tone);
+        let (count, own) = mark(app, message, &name);
+        cells.push(Candidate {
+            name,
+            glyph,
+            source: Source::Unicode,
+            count,
+            own,
+        });
+    }
+    cells
+}
+
+/// What the box shows for `query` on `message`, as sections.
+///
+/// With nothing typed: "On this message", "Frequently used", the unicode groups and "Custom", each
+/// left out when empty. With a search: one "Results" section from `candidates`, or none when the
+/// search matches nothing. The skin tone in use is applied to every emoji that has tones.
+pub fn sections(app: &App, message: &Message, query: &str) -> Vec<Section> {
+    let mut out: Vec<Section> = Vec::new();
+    let mut push = |kind: SectionKind, cells: Vec<Candidate>| {
+        if !cells.is_empty() {
+            out.push(Section { kind, cells });
+        }
+    };
+    if !needle(query).is_empty() {
+        push(SectionKind::Results, candidates(app, message, query));
+        return out;
+    }
+    push(SectionKind::OnMessage, existing(app, message));
+    let frequent = app
+        .emoji_recents
+        .top(crate::app::emoji_recents::MAX_FREQUENT, |name| {
+            offered_cell(app, message, name).is_some()
+        })
+        .into_iter()
+        .filter_map(|name| offered_cell(app, message, name))
+        .collect();
+    push(SectionKind::Frequent, frequent);
+    for (kind, groups) in GROUPED {
+        push(kind, group_cells(app, message, groups));
+    }
+    let aliases = &app.settings.emoji_aliases;
+    let custom = app
+        .custom_emojis
+        .list()
+        .iter()
+        // A name the terminal could not draw safely is not offered, as in a search.
+        .filter(|emoji| sanitize_line(&emoji.name) == emoji.name.as_str())
+        // An emoji whose image the server would not give (a 404, a format that does not decode)
+        // is left out of the grid; a search still finds it, and it is sent by name as ever.
+        .filter(|emoji| {
+            !matches!(
+                app.images.state(&emoji.name),
+                Some(crate::app::emoji::ImageState::Failed { .. })
+            )
+        })
+        .map(|emoji| {
+            let (count, own) = mark(app, message, &emoji.name);
+            Candidate {
+                name: emoji.name.clone(),
+                glyph: resolve(&emoji.name, aliases),
+                source: Source::Custom,
+                count,
+                own,
+            }
+        })
+        .collect();
+    push(SectionKind::Custom, custom);
+    out
+}
+
+/// The cells of all sections in one list: what the selection indexes.
+pub fn flatten(sections: &[Section]) -> Vec<Candidate> {
+    sections
+        .iter()
+        .flat_map(|section| section.cells.iter().cloned())
+        .collect()
+}
+
+/// One row of the grid as laid out for a column count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    /// The heading of section `0`.
+    Heading(usize),
+    /// `len` cells of section `section`, starting at flat index `first`.
+    Cells {
+        section: usize,
+        first: usize,
+        len: usize,
+    },
+}
+
+/// The sections laid out in rows for a number of columns: a heading row, then the cells of the
+/// section `columns` to a row. Movement and drawing both read it, so they cannot disagree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Grid {
+    pub rows: Vec<Row>,
+}
+
+impl Grid {
+    pub fn new(sections: &[Section], columns: usize) -> Grid {
+        let columns = columns.max(1);
+        let mut rows = Vec::new();
+        let mut first = 0;
+        for (section, held) in sections.iter().enumerate() {
+            rows.push(Row::Heading(section));
+            let mut left = held.cells.len();
+            while left > 0 {
+                let len = left.min(columns);
+                rows.push(Row::Cells {
+                    section,
+                    first,
+                    len,
+                });
+                first += len;
+                left -= len;
+            }
+        }
+        Grid { rows }
+    }
+
+    /// The index in `rows` of the row that holds flat index `selected`.
+    pub fn row_of(&self, selected: usize) -> Option<usize> {
+        self.rows.iter().position(|row| {
+            matches!(row, Row::Cells { first, len, .. } if (*first..first + len).contains(&selected))
+        })
+    }
+
+    /// The flat index one row down (`down`) or up in the same column, skipping headings and landing
+    /// on the last cell of a shorter row. `selected` itself at the first or last row.
+    pub fn vertical(&self, selected: usize, down: bool) -> usize {
+        let Some(at) = self.row_of(selected) else {
+            return selected;
+        };
+        let Row::Cells { first, .. } = self.rows[at] else {
+            return selected;
+        };
+        let column = selected - first;
+        let mut others: Box<dyn Iterator<Item = &Row>> = if down {
+            Box::new(self.rows[at + 1..].iter())
+        } else {
+            Box::new(self.rows[..at].iter().rev())
+        };
+        match others.find(|row| matches!(row, Row::Cells { .. })) {
+            Some(Row::Cells { first, len, .. }) => first + column.min(len - 1),
+            _ => selected,
+        }
+    }
+
+    /// The rows `start..end` to draw in `visible` rows: the selection is kept in the middle, which
+    /// also keeps the heading over the first row of its section in view.
+    pub fn window(&self, selected: usize, visible: usize) -> (usize, usize) {
+        let total = self.rows.len();
+        if visible == 0 || total <= visible {
+            return (0, total);
+        }
+        let at = self.row_of(selected).unwrap_or(0);
+        let start = at.saturating_sub(visible / 2).min(total - visible);
+        (start, start + visible)
+    }
+}
+
+/// The flat index of the first cell of the section after (`forward`) or before the one holding
+/// `selected`, or `selected` itself at the last or first section.
+pub fn jump_section(sections: &[Section], selected: usize, forward: bool) -> usize {
+    let mut first = 0;
+    let mut starts = Vec::with_capacity(sections.len());
+    for section in sections {
+        starts.push(first);
+        first += section.cells.len();
+    }
+    let Some(current) = starts.iter().rposition(|start| *start <= selected) else {
+        return selected;
+    };
+    let target = if forward {
+        current + 1
+    } else {
+        current.wrapping_sub(1)
+    };
+    starts.get(target).copied().unwrap_or(selected)
+}
+
+/// The index of the section holding flat index `selected`.
+pub fn section_of(sections: &[Section], selected: usize) -> Option<usize> {
+    let mut first = 0;
+    for (at, section) in sections.iter().enumerate() {
+        if selected < first + section.cells.len() {
+            return Some(at);
+        }
+        first += section.cells.len();
+    }
+    None
 }
 
 /// True when the messages pane is focused on a message the picker could react to: what the context
@@ -266,6 +636,8 @@ impl std::fmt::Debug for ReactPicker {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub query: String,
+    /// The sections as shown; `candidates` is their cells in one list.
+    pub sections: Vec<Section>,
     pub candidates: Vec<Candidate>,
     /// Index into `candidates`, always in range when there are any.
     pub selected: usize,
@@ -282,10 +654,12 @@ fn held<'a>(app: &'a App, picker: &ReactPicker) -> Option<&'a Message> {
 pub fn view(app: &App) -> Option<View> {
     let picker = app.react_picker.as_ref()?;
     let message = held(app, picker)?;
-    let candidates = candidates(app, message, &picker.query);
+    let sections = sections(app, message, &picker.query);
+    let candidates = flatten(&sections);
     let selected = picker.selected.min(candidates.len().saturating_sub(1));
     Some(View {
         query: picker.query.clone(),
+        sections,
         candidates,
         selected,
         typing: picker.typing,
@@ -349,30 +723,63 @@ pub fn key(app: &mut App, chord: Chord) {
     }
 }
 
-/// True for the keys that move the selection, whatever the state: `<C-n>`, `<C-p>` and the arrows.
-/// `Some(true)` is forward (down).
-fn move_key(chord: Chord) -> Option<bool> {
+/// What a key does to the selection, the same in both states: `<C-n>` and `<C-p>`, the arrows and
+/// `<Tab>` and `<S-Tab>`. Letters are left to the state, since while searching they are text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Left,
+    Right,
+    Down,
+    Up,
+    NextSection,
+    PrevSection,
+}
+
+fn step_key(chord: Chord) -> Option<Step> {
     let ctrl = |c: char| chord.code == KeyCode::Char(c) && chord.mods == KeyModifiers::CONTROL;
-    if ctrl('n') || chord.code == KeyCode::Down {
-        Some(true)
-    } else if ctrl('p') || chord.code == KeyCode::Up {
-        Some(false)
-    } else {
-        None
+    let bare = chord.mods.is_empty();
+    match chord.code {
+        _ if ctrl('n') => Some(Step::Down),
+        _ if ctrl('p') => Some(Step::Up),
+        KeyCode::Down if bare => Some(Step::Down),
+        KeyCode::Up if bare => Some(Step::Up),
+        KeyCode::Left if bare => Some(Step::Left),
+        KeyCode::Right if bare => Some(Step::Right),
+        KeyCode::Tab if bare => Some(Step::NextSection),
+        // `normalize` turns BackTab into Tab with SHIFT.
+        KeyCode::Tab if chord.mods == KeyModifiers::SHIFT => Some(Step::PrevSection),
+        KeyCode::BackTab => Some(Step::PrevSection),
+        _ => None,
     }
 }
 
-/// A key while browsing: `j`, `k`, `<C-n>`, `<C-p>` and the arrows move, `Enter` sends, `q` and
-/// `Esc` close, `/` starts a new search, `i` and `a` continue the last one. Nothing else does
-/// anything.
+/// `<C-t>`: the next skin tone.
+fn tone_key(chord: Chord) -> bool {
+    chord.code == KeyCode::Char('t') && chord.mods == KeyModifiers::CONTROL
+}
+
+/// A key while browsing: `h`, `j`, `k`, `l`, the arrows, `<C-n>` and `<C-p>` move through the grid,
+/// `<Tab>`, `<S-Tab>`, `H` and `L` jump between sections, `<C-t>` changes the skin tone, `Enter`
+/// sends, `q` and `Esc` close, `/` starts a new search and `i` and `a` continue the last one.
+/// Nothing else does anything.
 fn browse_key(app: &mut App, chord: Chord) {
     let plain = |c: char| chord.code == KeyCode::Char(c) && chord.mods.is_empty();
-    if let Some(forward) = move_key(chord) {
-        move_selection(app, forward);
+    if let Some(step) = step_key(chord) {
+        move_selection(app, step);
+    } else if tone_key(chord) {
+        cycle_tone(app);
+    } else if plain('h') {
+        move_selection(app, Step::Left);
+    } else if plain('l') {
+        move_selection(app, Step::Right);
     } else if plain('j') {
-        move_selection(app, true);
+        move_selection(app, Step::Down);
     } else if plain('k') {
-        move_selection(app, false);
+        move_selection(app, Step::Up);
+    } else if plain('H') {
+        move_selection(app, Step::PrevSection);
+    } else if plain('L') {
+        move_selection(app, Step::NextSection);
     } else if chord.code == KeyCode::Enter {
         send_selected(app);
     } else if plain('q') || (chord.code == KeyCode::Esc && chord.mods.is_empty()) {
@@ -390,12 +797,15 @@ fn browse_key(app: &mut App, chord: Chord) {
     }
 }
 
-/// A key while searching: characters are text (so `j` and `k` are typed), `<C-n>`, `<C-p>` and the
-/// arrows move, `Enter` sends, `Esc` goes back to browsing with the results kept, and `Backspace`
-/// deletes a character or, on an empty search, goes back to browsing.
+/// A key while searching: characters are text (so `h`, `j`, `k` and `l` are typed), `<C-n>`,
+/// `<C-p>`, the arrows and `<Tab>`/`<S-Tab>` move, `<C-t>` changes the skin tone, `Enter` sends,
+/// `Esc` goes back to browsing with the results kept, and `Backspace` deletes a character or, on an
+/// empty search, goes back to browsing.
 fn search_key(app: &mut App, chord: Chord) {
-    if let Some(forward) = move_key(chord) {
-        move_selection(app, forward);
+    if let Some(step) = step_key(chord) {
+        move_selection(app, step);
+    } else if tone_key(chord) {
+        cycle_tone(app);
     } else if chord.code == KeyCode::Enter {
         send_selected(app);
     } else if chord.code == KeyCode::Esc {
@@ -434,18 +844,42 @@ pub fn paste(app: &mut App, text: &str) {
     }
 }
 
-/// One result down (`forward`) or up, stopping at either end.
-fn move_selection(app: &mut App, forward: bool) {
+/// Move the selection one step through the grid, staying where it is at either end. Up and down
+/// need the number of cells a row holds, which the drawer decides from the width of the pane.
+fn move_selection(app: &mut App, step: Step) {
     let Some(view) = view(app) else {
         return;
     };
     let last = view.candidates.len().saturating_sub(1);
+    let selected = match step {
+        Step::Left => view.selected.saturating_sub(1),
+        Step::Right => (view.selected + 1).min(last),
+        Step::Down | Step::Up => Grid::new(&view.sections, crate::ui::picker::columns(app))
+            .vertical(view.selected, step == Step::Down),
+        Step::NextSection => jump_section(&view.sections, view.selected, true),
+        Step::PrevSection => jump_section(&view.sections, view.selected, false),
+    };
     if let Some(picker) = app.react_picker.as_mut() {
-        picker.selected = if forward {
-            (view.selected + 1).min(last)
-        } else {
-            view.selected.saturating_sub(1)
-        };
+        picker.selected = selected;
+    }
+}
+
+/// `<C-t>`: the next skin tone, remembered. The cells keep their places, so the selection stays.
+fn cycle_tone(app: &mut App) {
+    app.emoji_recents.cycle_tone();
+    app.effects
+        .push(Effect::SaveRecents(app.emoji_recents.clone()));
+}
+
+/// The name a pick is counted under: the name sent, without a skin tone, so the same emoji counts
+/// once whichever tone was in use and "Frequently used" shows it in the tone in use. A custom emoji
+/// is counted as it is named.
+fn pick_name(app: &App, name: &str) -> String {
+    let base = strip_tone(name);
+    if base != name && BY_SENT.contains_key(base) && app.custom_emojis.find(name).is_none() {
+        base.to_string()
+    } else {
+        name.to_string()
     }
 }
 
@@ -478,9 +912,17 @@ fn send_selected(app: &mut App) {
         return;
     };
     let add = !is_given_by(message, &own, &candidate.name);
+    let name = candidate.name.clone();
+    // Only adding counts as a pick: taking a reaction back is not a choice of that emoji.
+    if add {
+        let counted = pick_name(app, &name);
+        app.emoji_recents.record(&counted);
+        app.effects
+            .push(Effect::SaveRecents(app.emoji_recents.clone()));
+    }
     app.effects.push(Effect::React {
         id: picker.id,
-        emoji: EmojiName::new(candidate.name.clone()),
+        emoji: EmojiName::new(name),
         add,
     });
     app.react_picker = None;
@@ -645,6 +1087,20 @@ mod tests {
             aliases: aliases.iter().map(|a| a.to_string()).collect(),
             ..Default::default()
         }
+    }
+
+    /// The names in "On this message", the first section when the message has reactions.
+    fn on_message(app: &App) -> Vec<String> {
+        let view = view(app).expect("open");
+        view.sections
+            .iter()
+            .find(|s| s.kind == SectionKind::OnMessage)
+            .map(|s| s.cells.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    fn columns_of(app: &App) -> usize {
+        crate::ui::picker::columns(app)
     }
 
     fn names(found: &[Candidate]) -> Vec<&str> {
@@ -1155,7 +1611,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_n_ctrl_p_and_the_arrows_move_the_selection_and_stop_at_the_ends() {
+    fn the_arrows_move_the_selection_and_stop_at_the_ends_while_searching() {
         let (mut app, _) = picker_app("alice", Vec::new());
         press(&mut app, "+");
         search_for(&mut app, "tad");
@@ -1163,19 +1619,26 @@ mod tests {
         assert!(total >= 2, "{total}");
         let selected = |app: &App| view(app).unwrap().selected;
         assert_eq!(selected(&app), 0);
-        press(&mut app, "<C-n>");
+        press(&mut app, "<Right>");
         assert_eq!(selected(&app), 1);
-        press(&mut app, "<Down>");
+        press(&mut app, "<Right>");
         assert_eq!(selected(&app), 2.min(total - 1));
-        press(&mut app, "<C-p>");
-        press(&mut app, "<Up>");
+        press(&mut app, "<Left>");
+        press(&mut app, "<Left>");
         assert_eq!(selected(&app), 0);
-        press(&mut app, "<Up>");
+        press(&mut app, "<Left>");
         assert_eq!(selected(&app), 0, "stops at the first");
+        for _ in 0..total + 5 {
+            press(&mut app, "<Right>");
+        }
+        assert_eq!(selected(&app), total - 1, "stops at the last");
+        // `<C-n>` and `<C-p>` are down and up one row, so they stay inside a one-row list.
+        press(&mut app, "<C-p>");
+        assert!(selected(&app) < total - 1 || total <= columns_of(&app));
         for _ in 0..total + 5 {
             press(&mut app, "<C-n>");
         }
-        assert_eq!(selected(&app), total - 1, "stops at the last");
+        assert!(selected(&app) < total);
     }
 
     #[test]
@@ -1183,12 +1646,12 @@ mod tests {
         let (mut app, _) = picker_app("alice", Vec::new());
         press(&mut app, "+");
         search_for(&mut app, "ta");
-        press(&mut app, "<C-n>");
-        press(&mut app, "<C-n>");
+        press(&mut app, "<Right>");
+        press(&mut app, "<Right>");
         assert_eq!(app.react_picker.as_ref().unwrap().selected, 2);
         type_text(&mut app, "d");
         assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
-        press(&mut app, "<C-n>");
+        press(&mut app, "<Right>");
         press(&mut app, "<BS>");
         assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
     }
@@ -1330,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn j_and_k_move_through_the_reactions_while_browsing() {
+    fn h_and_l_and_the_arrows_move_through_the_reactions_while_browsing() {
         let (mut app, room) = picker_app(
             "alice",
             vec![
@@ -1342,32 +1805,33 @@ mod tests {
         press(&mut app, "+");
         let selected = |app: &App| view(app).unwrap().selected;
         assert_eq!(selected(&app), 0);
-        press(&mut app, "j");
+        press(&mut app, "l");
         assert_eq!(selected(&app), 1);
-        press(&mut app, "j");
-        press(&mut app, "j");
-        assert_eq!(selected(&app), 2, "stops at the last");
-        press(&mut app, "k");
-        assert_eq!(selected(&app), 1);
-        press(&mut app, "<C-p>");
-        press(&mut app, "<Up>");
-        assert_eq!(selected(&app), 0, "stops at the first");
-        press(&mut app, "<Down>");
-        press(&mut app, "<C-n>");
+        press(&mut app, "<Right>");
         assert_eq!(selected(&app), 2);
+        press(&mut app, "h");
+        assert_eq!(selected(&app), 1);
+        press(&mut app, "<Left>");
+        press(&mut app, "h");
+        assert_eq!(selected(&app), 0, "stops at the first");
+        // Up on the first row has nowhere to go.
+        press(&mut app, "k");
+        press(&mut app, "<Up>");
+        press(&mut app, "<C-p>");
+        assert_eq!(selected(&app), 0);
         // The message cursor never moved: the keys were the picker's.
         assert_eq!(messages::view(&app, &room).cursor, 1);
     }
 
     #[test]
-    fn enter_sends_the_reaction_that_j_selected() {
+    fn enter_sends_the_reaction_that_l_selected() {
         let (mut app, _) = picker_app(
             "alice",
             vec![reaction("+1", &["ana"]), reaction("tada", &["me"])],
         );
         press(&mut app, "+");
         app.effects.clear();
-        press(&mut app, "j");
+        press(&mut app, "l");
         press(&mut app, "<CR>");
         // The second reaction is the user's own: it is taken back.
         assert_eq!(
@@ -1378,14 +1842,14 @@ mod tests {
     }
 
     #[test]
-    fn j_and_k_walk_the_results_of_a_search_after_esc() {
+    fn l_and_h_walk_the_results_of_a_search_after_esc() {
         let (mut app, _) = picker_app("alice", Vec::new());
         press(&mut app, "+");
         search_for(&mut app, "tad");
         press(&mut app, "<Esc>");
         let results = view(&app).unwrap().candidates;
         assert!(results.len() >= 2);
-        press(&mut app, "j");
+        press(&mut app, "l");
         assert_eq!(view(&app).unwrap().selected, 1);
         app.effects.clear();
         press(&mut app, "<CR>");
@@ -1398,7 +1862,7 @@ mod tests {
         press(&mut app, "+");
         let before = app.react_picker.clone();
         for key in [
-            "h", "l", "x", "z", ":", "?", "d", "e", "r", "n", "g", "G", "+", "1", " ",
+            "x", "z", ":", "?", "d", "e", "r", "n", "g", "G", "+", "1", " ",
         ] {
             press(&mut app, key);
         }
@@ -1475,7 +1939,7 @@ mod tests {
         );
         press(&mut app, "+");
         app.effects.clear();
-        press(&mut app, "<C-n>");
+        press(&mut app, "l");
         press(&mut app, "<CR>");
         assert_eq!(
             reacts(&app),
@@ -1509,8 +1973,6 @@ mod tests {
         let (mut app, _) = picker_app("alice", Vec::new());
         press(&mut app, "+");
         app.effects.clear();
-        press(&mut app, "<CR>"); // browsing a message without reactions
-        assert!(app.react_picker.is_some());
         search_for(&mut app, "zzzzqqqq");
         press(&mut app, "<CR>"); // no match
         assert!(app.react_picker.is_some());
@@ -1540,7 +2002,7 @@ mod tests {
     fn a_reaction_arriving_while_open_shows_in_the_empty_list_without_a_key() {
         let (mut app, room) = picker_app("alice", vec![reaction("+1", &["ana"])]);
         press(&mut app, "+");
-        assert_eq!(names(&view(&app).unwrap().candidates), ["+1"]);
+        assert_eq!(on_message(&app), ["+1"]);
         let mut live = Message {
             room_id: room.clone(),
             author: "alice".to_string(),
@@ -1550,17 +2012,17 @@ mod tests {
         live.ts = app.messages[&room][1].ts;
         update(&mut app, Action::RtMessage(live));
         assert!(app.react_picker.is_some(), "still open");
-        assert_eq!(names(&view(&app).unwrap().candidates), ["+1", "rocket"]);
+        assert_eq!(on_message(&app), ["+1", "rocket"]);
     }
 
     #[test]
-    fn a_shrinking_list_keeps_the_selection_in_range() {
+    fn a_reaction_leaving_keeps_the_selection_in_range() {
         let (mut app, room) = picker_app(
             "alice",
             vec![reaction("+1", &["ana"]), reaction("tada", &["ana"])],
         );
         press(&mut app, "+");
-        press(&mut app, "<C-n>");
+        press(&mut app, "l");
         assert_eq!(view(&app).unwrap().selected, 1);
         let mut live = Message {
             room_id: room.clone(),
@@ -1570,8 +2032,12 @@ mod tests {
         };
         live.ts = app.messages[&room][1].ts;
         update(&mut app, Action::RtMessage(live));
-        assert_eq!(view(&app).unwrap().selected, 0);
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
+        // The selection is an index into the whole grid: it stays in range and now points at what
+        // took the place of the reaction that went.
+        let view = view(&app).unwrap();
+        assert_eq!(view.selected, 1);
+        assert!(view.selected < view.candidates.len());
+        assert_eq!(app.react_picker.as_ref().unwrap().selected, 1);
     }
 
     #[test]
@@ -1604,6 +2070,405 @@ mod tests {
         update(&mut app, Action::RtMessage(newer));
         assert_eq!(app.messages[&room].len(), 4);
         assert!(app.react_picker.is_some());
+    }
+
+    // ---- sections, the grid, tones and picks
+
+    fn kinds(app: &App) -> Vec<SectionKind> {
+        view(app)
+            .expect("open")
+            .sections
+            .iter()
+            .map(|s| s.kind)
+            .collect()
+    }
+
+    fn selected_name(app: &App) -> String {
+        let view = view(app).expect("open");
+        view.candidates[view.selected].name.clone()
+    }
+
+    fn sent_effects(app: &App) -> usize {
+        app.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::SaveRecents(_)))
+            .count()
+    }
+
+    #[test]
+    fn the_sections_come_in_order_and_empty_ones_are_left_out() {
+        let (mut app, _) = picker_app("alice", vec![reaction("+1", &["ana"])]);
+        app.custom_emojis = CustomEmojis::Loaded(vec![custom("ship_it", &[])]);
+        app.emoji_recents.record("tada");
+        press(&mut app, "+");
+        use SectionKind::*;
+        assert_eq!(
+            kinds(&app),
+            [
+                OnMessage, Frequent, Smileys, Animals, Food, Travel, Activities, Objects, Symbols,
+                Flags, Custom
+            ]
+        );
+        // Nothing picked, no custom emojis, no reactions: only the unicode groups.
+        let (mut app, _) = picker_app("alice", Vec::new());
+        app.custom_emojis = CustomEmojis::Loaded(Vec::new());
+        press(&mut app, "+");
+        assert_eq!(
+            kinds(&app),
+            [
+                Smileys, Animals, Food, Travel, Activities, Objects, Symbols, Flags
+            ]
+        );
+        let view = view(&app).unwrap();
+        assert_eq!(view.sections[0].cells[0].glyph, "😀");
+        assert_eq!(view.selected, 0);
+    }
+
+    #[test]
+    fn the_box_opens_on_the_first_reaction_or_the_first_emoji() {
+        let (mut app, _) = picker_app(
+            "alice",
+            vec![reaction("+1", &["ana"]), reaction("tada", &["ana"])],
+        );
+        press(&mut app, "+");
+        assert_eq!(selected_name(&app), "+1");
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "+");
+        assert_eq!(selected_name(&app), "grinning");
+    }
+
+    #[test]
+    fn every_unicode_emoji_the_server_accepts_appears_once() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "+");
+        let view = view(&app).unwrap();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for cell in view.sections.iter().flat_map(|s| &s.cells) {
+            assert!(seen.insert(cell.name.as_str()), "{} twice", cell.name);
+        }
+        let expected = emojis::iter()
+            .filter_map(|e| send_name(e.shortcodes().next()?))
+            .count();
+        assert_eq!(seen.len(), expected);
+    }
+
+    #[test]
+    fn frequently_used_follows_the_picks_and_skips_names_not_offered() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        for name in ["tada", "tada", "+1", "gone_custom"] {
+            app.emoji_recents.record(name);
+        }
+        press(&mut app, "+");
+        let view = view(&app).unwrap();
+        assert_eq!(view.sections[0].kind, SectionKind::Frequent);
+        let frequent: Vec<&str> = view.sections[0]
+            .cells
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(frequent, ["tada", "+1"]);
+        // The custom emoji comes back when the server lists it again.
+        app.custom_emojis = CustomEmojis::Loaded(vec![custom("gone_custom", &[])]);
+        let view = super::view(&app).unwrap();
+        assert_eq!(view.sections[0].cells.len(), 3);
+    }
+
+    #[test]
+    fn a_search_is_one_results_section_and_an_empty_one_brings_the_sections_back() {
+        let (mut app, _) = picker_app("alice", vec![reaction("+1", &["ana"])]);
+        press(&mut app, "+");
+        search_for(&mut app, "tad");
+        assert_eq!(kinds(&app), [SectionKind::Results]);
+        assert_eq!(view(&app).unwrap().sections[0].cells[0].name, "tada");
+        // The ranking is the one `candidates` gives.
+        let message = held(&app, app.react_picker.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            view(&app).unwrap().candidates,
+            candidates(&app, message, "tad")
+        );
+        press(&mut app, "<BS>");
+        press(&mut app, "<BS>");
+        press(&mut app, "<BS>");
+        assert_eq!(kinds(&app)[0], SectionKind::OnMessage);
+        // No match: no section at all.
+        search_for(&mut app, "zzzzqqqq");
+        assert!(kinds(&app).is_empty());
+    }
+
+    fn synthetic(sizes: &[usize]) -> Vec<Section> {
+        let mut at = 0;
+        sizes
+            .iter()
+            .map(|n| {
+                let cells = (0..*n)
+                    .map(|_| {
+                        at += 1;
+                        Candidate {
+                            name: format!("e{at}"),
+                            glyph: "x".to_string(),
+                            source: Source::Unicode,
+                            count: 0,
+                            own: false,
+                        }
+                    })
+                    .collect();
+                Section {
+                    kind: SectionKind::Smileys,
+                    cells,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_grid_has_a_heading_row_and_columns_per_row_for_each_section() {
+        let grid = Grid::new(&synthetic(&[5, 2]), 3);
+        assert_eq!(
+            grid.rows,
+            [
+                Row::Heading(0),
+                Row::Cells {
+                    section: 0,
+                    first: 0,
+                    len: 3
+                },
+                Row::Cells {
+                    section: 0,
+                    first: 3,
+                    len: 2
+                },
+                Row::Heading(1),
+                Row::Cells {
+                    section: 1,
+                    first: 5,
+                    len: 2
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn down_and_up_keep_the_column_and_land_on_the_last_cell_of_a_short_row() {
+        let sections = synthetic(&[8, 5, 3]);
+        let grid = Grid::new(&sections, 4);
+        // Rows: [0..4) [4..8) | [8..12) [12..13) | [13..16)
+        assert_eq!(grid.vertical(2, true), 6, "same column, next row");
+        assert_eq!(
+            grid.vertical(6, true),
+            10,
+            "skips the heading of the next section"
+        );
+        assert_eq!(grid.vertical(11, true), 12, "short row: its last cell");
+        assert_eq!(grid.vertical(12, true), 13);
+        assert_eq!(grid.vertical(10, false), 6);
+        assert_eq!(grid.vertical(12, false), 8);
+        assert_eq!(grid.vertical(15, true), 15, "last row stays");
+        assert_eq!(grid.vertical(1, false), 1, "first row stays");
+    }
+
+    #[test]
+    fn left_and_right_cross_row_ends_and_sections_and_stop_at_the_edges() {
+        let (mut app, _) = picker_app("alice", vec![reaction("+1", &["ana"])]);
+        press(&mut app, "+");
+        let first_of_next = view(&app).unwrap().sections[0].cells.len();
+        assert_eq!(first_of_next, 1);
+        press(&mut app, "l");
+        assert_eq!(
+            view(&app).unwrap().selected,
+            1,
+            "from the last reaction into the next section"
+        );
+        press(&mut app, "h");
+        press(&mut app, "h");
+        assert_eq!(view(&app).unwrap().selected, 0, "edge");
+    }
+
+    #[test]
+    fn tab_and_shift_tab_jump_between_sections() {
+        let sections = synthetic(&[3, 4, 2]);
+        assert_eq!(jump_section(&sections, 1, true), 3);
+        assert_eq!(jump_section(&sections, 5, true), 7);
+        assert_eq!(jump_section(&sections, 8, true), 8, "last section stays");
+        assert_eq!(jump_section(&sections, 5, false), 0);
+        assert_eq!(jump_section(&sections, 8, false), 3);
+        assert_eq!(jump_section(&sections, 1, false), 1, "first section stays");
+
+        let (mut app, _) = picker_app("alice", vec![reaction("+1", &["ana"])]);
+        press(&mut app, "+");
+        press(&mut app, "<Tab>");
+        assert_eq!(view(&app).unwrap().selected, 1);
+        assert_eq!(section_of(&view(&app).unwrap().sections, 1), Some(1));
+        press(&mut app, "L");
+        let second = view(&app).unwrap().sections[1].cells.len();
+        assert_eq!(
+            view(&app).unwrap().selected,
+            1 + second,
+            "`L` is the next section"
+        );
+        press(&mut app, "H");
+        assert_eq!(view(&app).unwrap().selected, 1, "`H` is the previous one");
+        press(&mut app, "<S-Tab>");
+        assert_eq!(view(&app).unwrap().selected, 0);
+    }
+
+    #[test]
+    fn a_window_keeps_the_selection_and_the_heading_over_its_first_row_in_view() {
+        let sections = synthetic(&[30, 30]);
+        let grid = Grid::new(&sections, 5);
+        // First cell of section two sits on the row after its heading.
+        let (start, end) = grid.window(30, 6);
+        let at = grid.row_of(30).unwrap();
+        assert!(start < at && at < end, "{start}..{end} for row {at}");
+        assert_eq!(end - start, 6);
+        assert_eq!(grid.window(0, 6), (0, 6));
+        assert_eq!(grid.window(59, 6).1, grid.rows.len());
+        // A grid that fits is shown whole.
+        let small = Grid::new(&synthetic(&[3]), 5);
+        assert_eq!(small.window(0, 6), (0, 2));
+    }
+
+    #[test]
+    fn a_tone_applies_to_emoji_with_tones_in_the_sections_and_in_the_name_sent() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "+");
+        let find = |app: &App, name: &str| {
+            view(app)
+                .unwrap()
+                .candidates
+                .into_iter()
+                .find(|c| c.name == name)
+        };
+        assert_eq!(find(&app, "+1").unwrap().glyph, "👍");
+        press(&mut app, "<C-t>");
+        press(&mut app, "<C-t>");
+        assert_eq!(app.emoji_recents.tone, 2);
+        assert!(find(&app, "+1").is_none(), "the plain name is gone");
+        let thumbs = find(&app, "+1_tone2").expect("toned");
+        assert_eq!(thumbs.glyph, "👍🏼");
+        // An emoji without tones does not change.
+        assert_eq!(find(&app, "tada").unwrap().glyph, "🎉");
+        // Searching shows the tone too, and what is sent carries it.
+        search_for(&mut app, "thumbsup");
+        let results = view(&app).unwrap().candidates;
+        assert_eq!(results[0].name, "+1_tone2");
+        app.effects.clear();
+        press(&mut app, "<CR>");
+        assert_eq!(reacts(&app)[0].1, "+1_tone2");
+    }
+
+    #[test]
+    fn ctrl_t_cycles_the_tone_in_both_states_and_leaves_the_typed_text() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "+");
+        press(&mut app, "<C-t>");
+        assert_eq!(app.emoji_recents.tone, 1);
+        search_for(&mut app, "ab");
+        press(&mut app, "<C-t>");
+        assert_eq!(app.emoji_recents.tone, 2);
+        assert_eq!(app.react_picker.as_ref().unwrap().query, "ab");
+        assert!(typing(&app));
+        for _ in 0..4 {
+            press(&mut app, "<C-t>");
+        }
+        assert_eq!(app.emoji_recents.tone, 0, "back to none after five");
+        assert_eq!(sent_effects(&app), 6, "every change is saved");
+    }
+
+    #[test]
+    fn letters_and_tab_while_searching() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "+");
+        press(&mut app, "/");
+        // `h`, `l`, `H` and `L` are text, not movement.
+        type_text(&mut app, "hlHL");
+        assert_eq!(app.react_picker.as_ref().unwrap().query, "hlHL");
+        press(&mut app, "<BS>");
+        press(&mut app, "<BS>");
+        press(&mut app, "<BS>");
+        press(&mut app, "<BS>");
+        type_text(&mut app, "heart");
+        press(&mut app, "<Right>");
+        assert_eq!(view(&app).unwrap().selected, 1);
+        press(&mut app, "<Tab>");
+        assert!(typing(&app), "Tab does not leave the search");
+    }
+
+    #[test]
+    fn a_pick_is_counted_when_added_not_when_taken_back_and_saved() {
+        let (mut app, _) = picker_app("alice", vec![reaction("tada", &["me"])]);
+        press(&mut app, "+");
+        app.effects.clear();
+        // Taking `tada` back: nothing is counted or saved.
+        press(&mut app, "<CR>");
+        assert!(app.emoji_recents.is_empty());
+        assert_eq!(sent_effects(&app), 0);
+        assert_eq!(
+            reacts(&app),
+            [("m1".to_string(), "tada".to_string(), false)]
+        );
+
+        let (mut app, _) = picker_app("alice", vec![reaction("tada", &["ana"])]);
+        press(&mut app, "+");
+        app.effects.clear();
+        press(&mut app, "<CR>");
+        assert_eq!(app.emoji_recents.count_of("tada"), 1);
+        assert_eq!(sent_effects(&app), 1);
+        assert_eq!(reacts(&app), [("m1".to_string(), "tada".to_string(), true)]);
+    }
+
+    #[test]
+    fn a_toned_pick_is_counted_under_its_plain_name() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        app.emoji_recents.tone = 3;
+        press(&mut app, "+");
+        search_for(&mut app, "thumbsup");
+        press(&mut app, "<CR>");
+        assert_eq!(app.emoji_recents.count_of("+1"), 1);
+        assert_eq!(app.emoji_recents.count_of("+1_tone3"), 0);
+    }
+
+    #[test]
+    fn the_loaded_state_arrives_as_an_action() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        let mut loaded = crate::app::emoji_recents::Recents::default();
+        loaded.record("tada");
+        loaded.tone = 4;
+        update(&mut app, Action::RecentsLoaded(loaded));
+        assert_eq!(app.emoji_recents.tone, 4);
+        press(&mut app, "+");
+        assert_eq!(kinds(&app)[0], SectionKind::Frequent);
+    }
+
+    #[test]
+    fn a_custom_emoji_whose_image_failed_is_left_out_of_the_grid_but_still_found() {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        app.custom_emojis = CustomEmojis::Loaded(vec![custom("good", &[]), custom("gone", &[])]);
+        app.images.set_state(
+            "gone",
+            crate::app::emoji::ImageState::Failed {
+                etag: String::new(),
+            },
+        );
+        press(&mut app, "+");
+        let view = view(&app).unwrap();
+        let custom_cells: Vec<&str> = view
+            .sections
+            .iter()
+            .filter(|s| s.kind == SectionKind::Custom)
+            .flat_map(|s| s.cells.iter().map(|c| c.name.as_str()))
+            .collect();
+        assert_eq!(custom_cells, ["good"]);
+        search_for(&mut app, "gone");
+        assert_eq!(view_names(&app), ["gone"]);
+    }
+
+    fn view_names(app: &App) -> Vec<String> {
+        view(app)
+            .unwrap()
+            .candidates
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
     }
 
     #[test]
