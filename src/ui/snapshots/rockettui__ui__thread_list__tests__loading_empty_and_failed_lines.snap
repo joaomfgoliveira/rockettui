@@ -1,0 +1,27 @@
+---
+source: src/ui/thread_list.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ Threads: all ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃ / search                              h l filter ┃
+│> * #general              │┃Could not load threads: server rejected the reque…┃
+│  * &dev-team             │┃                                                  ┃
+│  * @alice                │┃                                                  ┃
+│  Folders                 │┃                                                  ┃
+│  ▾ Work (1)              │┃                                                  ┃
+│      ~design-review      │┃                                                  ┃
+│      +platform           │┃                                                  ┃
+│  ▾ People (1)            │┃                                                  ┃
+│  Recent                  │┃                                                  ┃
+│    #random               │┃                                                  ┃
+│    &secrets [e2e]        │┃                                                  ┃
+│    #quiet                │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│                          │┌ Input ───────────────────────────────────────────┐
+│                          ││press i to write                                  │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  -

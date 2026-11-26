@@ -24,6 +24,8 @@ pub enum Kind {
     SearchContext,
     /// The thread pane.
     Thread,
+    /// The thread list pane.
+    ThreadList,
     Nothing,
 }
 
@@ -41,6 +43,7 @@ impl Kind {
             Kind::SearchResults => "Search results",
             Kind::SearchContext => "Search result in context",
             Kind::Thread => "Thread",
+            Kind::ThreadList => "Thread list",
             Kind::Nothing => "Nothing selected",
         }
     }
@@ -109,10 +112,23 @@ impl Kind {
                 ("close_thread", "close the thread"),
                 ("reply_in_thread", "reply in this thread"),
                 ("toggle_follow_thread", "follow or unfollow the thread"),
+                LIST_THREADS_ACTION,
                 ("move_down", "next message"),
                 ("move_up", "previous message"),
                 ("goto_top", "first message"),
                 ("goto_bottom", "last message"),
+                ("half_page_down", "half a page down"),
+                ("half_page_up", "half a page up"),
+            ],
+            Kind::ThreadList => &[
+                ("select", "open the thread"),
+                ("search_start", "search the threads"),
+                ("move_right", "next filter"),
+                ("move_left", "previous filter"),
+                ("move_down", "next thread"),
+                ("move_up", "previous thread"),
+                ("goto_top", "first thread"),
+                ("goto_bottom", "last thread"),
                 ("half_page_down", "half a page down"),
                 ("half_page_up", "half a page up"),
             ],
@@ -126,6 +142,7 @@ impl Kind {
         match self {
             Kind::SearchResults => &[("q Esc", "close the list")],
             Kind::SearchContext => &[("q Esc", "back to the results")],
+            Kind::ThreadList => &[("q Esc", "close the list")],
             _ => &[],
         }
     }
@@ -154,6 +171,11 @@ const REACT_ACTION: (&str, &str) = ("react_message", "add or remove your reactio
 /// the jumps (`lines` places it). Not part of `Kind::actions` because it depends on the message,
 /// not on its kind. A test checks the name is a real action.
 const REACTIONS_ACTION: (&str, &str) = ("show_reactions", "show who reacted");
+
+/// The thread list action: listed with the thread actions, on a message that has a thread and in
+/// the thread pane. It is about the room, not the message, but the popup has no room for it on
+/// every message. A test checks the name is a real action.
+const LIST_THREADS_ACTION: (&str, &str) = ("list_threads", "list this room's threads");
 
 /// One row of the popup: the keys bound to an action and what it does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,6 +212,7 @@ pub fn classify(app: &App) -> Kind {
         },
         Focus::Input => Kind::Input,
         Focus::Thread => Kind::Thread,
+        Focus::ThreadList => Kind::ThreadList,
         Focus::Messages => {
             if send::unsent_under_cursor(app).is_some() {
                 Kind::UnsentMessage
@@ -244,6 +267,7 @@ pub fn lines(app: &App) -> Context {
     if is_message && thread::under_cursor(app).is_some() {
         message_actions.push(THREAD_ACTION);
         message_actions.push(FOLLOW_ACTION);
+        message_actions.push(LIST_THREADS_ACTION);
     }
     if is_message && thread::replyable_under_cursor(app) {
         message_actions.push(REPLY_ACTION);
@@ -659,6 +683,32 @@ mod tests {
     }
 
     #[test]
+    fn the_thread_list_pane_lists_its_own_keys() {
+        let mut app = thread_app(3);
+        crate::app::thread_list::open(&mut app);
+        assert_eq!(app.focus, Focus::ThreadList);
+        let ctx = lines(&app);
+        assert_eq!(ctx.kind, Kind::ThreadList);
+        for desc in ["open the thread", "search the threads", "next thread"] {
+            assert!(descs(&ctx).contains(&desc), "{desc}");
+        }
+        for desc in ["next filter", "previous filter"] {
+            assert!(descs(&ctx).contains(&desc), "{desc}");
+        }
+        let next = ctx
+            .rows
+            .iter()
+            .find(|r| r.desc == "next filter")
+            .expect("row");
+        assert!(next.keys.split(' ').any(|k| k == "l"), "{next:?}");
+        assert!(
+            ctx.rows
+                .iter()
+                .any(|r| r.keys == "q Esc" && r.desc == "close the list")
+        );
+    }
+
+    #[test]
     fn the_pane_lists_closing_the_thread_with_esc() {
         let mut app = thread_app(3);
         app.focus = Focus::Thread;
@@ -680,11 +730,56 @@ mod tests {
     }
 
     #[test]
+    fn list_threads_is_listed_in_the_pane_and_on_a_message_with_a_thread() {
+        let mut app = thread_app(3);
+        app.focus = Focus::Thread;
+        let rows = lines(&app).rows;
+        let row = rows.iter().find(|r| r.desc == LIST_THREADS_ACTION.1);
+        assert_eq!(row.map(|r| r.keys.as_str()), Some("gT"), "{rows:?}");
+        // Rebinding changes the keys; unbinding drops the row.
+        app.keymap = app_with_config(
+            config_from_keymap("[normal]\n\"<C-t>\" = \"list_threads\"\n\"gT\" = \"none\"\n"),
+            80,
+            24,
+        )
+        .keymap;
+        let rows = lines(&app).rows;
+        let row = rows.iter().find(|r| r.desc == LIST_THREADS_ACTION.1);
+        assert_eq!(row.map(|r| r.keys.as_str()), Some("<C-t>"));
+        app.keymap =
+            app_with_config(config_from_keymap("[normal]\n\"gT\" = \"none\"\n"), 80, 24).keymap;
+        assert!(
+            !lines(&app)
+                .rows
+                .iter()
+                .any(|r| r.desc == LIST_THREADS_ACTION.1)
+        );
+
+        // On a message with a thread, after the follow row; on one without, not at all.
+        let mut app = messages_app("someone-else", SendState::Sent);
+        let room = app.current_room.clone().unwrap();
+        assert!(!descs(&lines(&app)).contains(&LIST_THREADS_ACTION.1));
+        app.messages.get_mut(&room).unwrap()[0].tcount = 2;
+        let ctx = lines(&app);
+        let at = |d: &str| descs(&ctx).iter().position(|x| *x == d);
+        assert_eq!(
+            at(LIST_THREADS_ACTION.1),
+            at(FOLLOW_ACTION.1).map(|i| i + 1)
+        );
+    }
+
+    #[test]
     fn the_thread_actions_are_real_described_actions() {
         let (name, desc) = THREAD_ACTION;
         assert!(ACTION_NAMES.contains(&name));
         assert!(!desc.is_empty());
-        for name in [name, REPLY_ACTION.0, FOLLOW_ACTION.0, "close_thread"] {
+        for name in [
+            name,
+            REPLY_ACTION.0,
+            FOLLOW_ACTION.0,
+            LIST_THREADS_ACTION.0,
+            "close_thread",
+        ] {
             assert!(
                 crate::app::help::DESCRIPTIONS
                     .iter()
@@ -839,6 +934,7 @@ mod tests {
             Kind::OtherMessage,
             Kind::Input,
             Kind::Thread,
+            Kind::ThreadList,
             Kind::Nothing,
         ] {
             for (name, desc) in kind.actions() {

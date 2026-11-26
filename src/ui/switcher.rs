@@ -35,7 +35,7 @@ const NO_MATCHES: &str = "no matching rooms";
 /// The panel and its inner area: centred across the sidebar and the messages column, starting one
 /// row below the top. The height is the same whatever the list holds, so the search line stays
 /// where it is while rooms come and go as the user types; it is the most that fits.
-fn panel(areas: &Areas) -> (Rect, Rect) {
+pub(crate) fn panel(areas: &Areas) -> (Rect, Rect) {
     let total = areas.sidebar.width + areas.messages.width;
     let width = total.min(MAX_WIDTH);
     let available = areas.messages.height.saturating_sub(1);
@@ -52,7 +52,7 @@ fn panel(areas: &Areas) -> (Rect, Rect) {
 
 /// First row shown: the selection is kept in the middle of the window when the list is longer than
 /// it, so moving either way scrolls smoothly. Always in range.
-fn window_start(selected: usize, visible: usize, total: usize) -> usize {
+pub(crate) fn window_start(selected: usize, visible: usize, total: usize) -> usize {
     if visible == 0 || total <= visible {
         return 0;
     }

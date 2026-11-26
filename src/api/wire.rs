@@ -153,6 +153,16 @@ pub struct ThreadResp {
     pub total: u32,
 }
 
+/// The success body of `chat.getThreadsList`: the thread parents newest activity first, and how
+/// many threads match in all (the paging bound).
+#[derive(Deserialize)]
+pub struct ThreadsListResp {
+    #[serde(default)]
+    pub threads: Vec<WireMsg>,
+    #[serde(default)]
+    pub total: u32,
+}
+
 /// The success body of `chat.sendMessage` and of `chat.getMessage`: the one message, as stored.
 #[derive(Deserialize)]
 pub struct MessageResp {

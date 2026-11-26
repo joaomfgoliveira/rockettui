@@ -189,12 +189,13 @@ mod tests {
         })
     }
 
-    /// True when `row` holds `alice`, two spaces, then `HH:MM`: the TwoLine header.
+    /// True when `row` holds `alice`, spaces, then `HH:MM` at the right: the TwoLine header.
     fn has_two_line_header(row: &str) -> bool {
         let Some(at) = row.find("alice  ") else {
             return false;
         };
-        let rest: Vec<char> = row[at + "alice  ".len()..].chars().take(5).collect();
+        let after = row[at + "alice".len()..].trim_start_matches(' ');
+        let rest: Vec<char> = after.chars().take(5).collect();
         rest.len() == 5
             && rest[0].is_ascii_digit()
             && rest[1].is_ascii_digit()

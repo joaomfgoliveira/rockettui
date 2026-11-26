@@ -1,0 +1,27 @@
+---
+source: src/ui/thread_list.rs
+expression: out
+---
+┌ Rooms ───────────────────┐┏ Threads: all ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  Unread                  │┃ / search                              h l filter ┃
+│> * #general              │┃ ana                             2026-11-14 14:02 ┃
+│  * &dev-team             │┃ deploy plan for the week                         ┃
+│  * @alice                │┃ following                              3 replies ┃
+│  Folders                 │┃──────────────────────────────────────────────────┃
+│  ▾ Work (1)              │┃ bob                             2026-11-14 14:02 ┃
+│      ~design-review      │┃ lunch?                                           ┃
+│      +platform           │┃                                          1 reply ┃
+│  ▾ People (1)            │┃──────────────────────────────────────────────────┃
+│  Recent                  │┃ carla                           2026-11-14 14:02 ┃
+│    #random               │┃ a very long first line that cannot possibly fit …┃
+│    &secrets [e2e]        │┃                                       12 replies ┃
+│    #quiet                │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┃                                                  ┃
+│                          │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+│                          │┌ Input ───────────────────────────────────────────┐
+│                          ││press i to write                                  │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+ NORMAL  -

@@ -1,0 +1,176 @@
+{
+  "threads": [
+    {
+      "_id": "gvCaufds2wX9xbucp",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture gamma",
+      "ts": "2026-11-25T21:36:40.368Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:36:40.779Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:36:40.739Z"
+    },
+    {
+      "_id": "ixHEL97BT3yNgairW",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T21:36:39.244Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:36:40.030Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk",
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T21:36:39.994Z"
+    },
+    {
+      "_id": "7k56xg8eQ2yCtubGK",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture gamma",
+      "ts": "2026-11-25T21:36:37.197Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:36:37.600Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:36:37.559Z"
+    },
+    {
+      "_id": "jABFvBtdAGMR6Yps8",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T21:36:36.077Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:36:36.859Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk",
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T21:36:36.821Z"
+    },
+    {
+      "_id": "6GycKvHtCFxQkLpwh",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture gamma",
+      "ts": "2026-11-25T21:31:19.957Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:31:20.371Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:31:20.328Z"
+    },
+    {
+      "_id": "hQ9sSYonLpCHqMJKd",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T21:31:18.844Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:31:19.624Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk",
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T21:31:19.587Z"
+    },
+    {
+      "_id": "cYwWuS8DMf8SLNhgc",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture gamma",
+      "ts": "2026-11-25T21:31:16.911Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:31:17.318Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:31:17.280Z"
+    },
+    {
+      "_id": "gPew4tQbT9DQQhchp",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T21:31:15.781Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:31:16.574Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk",
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T21:31:16.529Z"
+    }
+  ],
+  "count": 8,
+  "offset": 0,
+  "total": 8,
+  "success": true
+}

@@ -4,13 +4,13 @@ expression: out
 ---
 ┌ Rooms ───────────────────┐┏ Thread ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 │  Unread                  │┃── 1970-01-01 ────────────────────────────────────┃
-│> * #general              │┃00:01 alice  deploy plan: who takes the rollback? ┃
-│  * &dev-team             │┃             -> 2 replies, last 00:11             ┃
-│  * @alice                │┃00:02 bob    I can take it                        ┃
-│  Folders                 │┃00:11 alice  thanks, done                         ┃
-│  ▾ Work (1)              │┃                                                  ┃
-│      ~design-review      │┃                                                  ┃
-│      +platform           │┃                                                  ┃
+│> * #general              │┃alice                                        00:01┃
+│  * &dev-team             │┃  deploy plan: who takes the rollback?            ┃
+│  * @alice                │┃  -> 2 replies, last 00:11                        ┃
+│  Folders                 │┃bob                                          00:02┃
+│  ▾ Work (1)              │┃  I can take it                                   ┃
+│      ~design-review      │┃alice                                        00:11┃
+│      +platform           │┃  thanks, done                                    ┃
 │  ▾ People (1)            │┃                                                  ┃
 │  Recent                  │┃                                                  ┃
 │    #random               │┃                                                  ┃

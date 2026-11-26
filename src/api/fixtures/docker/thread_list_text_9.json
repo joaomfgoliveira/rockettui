@@ -1,0 +1,92 @@
+{
+  "threads": [
+    {
+      "_id": "ojSfPD44esn4tR3cZ",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T21:36:38.503Z",
+      "u": {
+        "_id": "96cW5KbuYz26qdTbq",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T21:36:38.909Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:36:38.862Z"
+    },
+    {
+      "_id": "ZzpH2uxHTBkTbK5FY",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T21:36:35.335Z",
+      "u": {
+        "_id": "96cW5KbuYz26qdTbq",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T21:36:35.742Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:36:35.698Z"
+    },
+    {
+      "_id": "qRz5gdFn4avKQxncD",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T21:31:18.114Z",
+      "u": {
+        "_id": "96cW5KbuYz26qdTbq",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T21:31:18.506Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:31:18.471Z"
+    },
+    {
+      "_id": "uvFMs7nmhEugsNEiG",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T21:31:15.029Z",
+      "u": {
+        "_id": "96cW5KbuYz26qdTbq",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T21:31:15.439Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T21:31:15.393Z"
+    }
+  ],
+  "count": 4,
+  "offset": 0,
+  "total": 4,
+  "success": true
+}

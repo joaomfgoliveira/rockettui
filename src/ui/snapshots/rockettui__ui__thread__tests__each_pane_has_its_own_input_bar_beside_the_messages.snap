@@ -4,13 +4,13 @@ expression: out
 ---
 ┌ Rooms ───────────────────┐┌ quiet ──────────────────────────────────────────────────────────────────────┐┌ Thread ───────────────────────────────────────────┐
 │  Unread                  ││── 1970-01-01 ───────────────────────────────────────────────────────────────││── 1970-01-01 ─────────────────────────────────────│
-│> * #general              ││00:00 bob    before the thread                                               ││00:01 alice  deploy plan: who takes the rollback?  │
-│  * &dev-team             ││00:01 alice  deploy plan: who takes the rollback?                            ││             -> 2 replies, last 00:11              │
-│  * @alice                ││             -> 2 replies, last 00:11                                        ││00:02 bob    I can take it                         │
-│  Folders                 ││                                                                             ││00:11 alice  thanks, done                          │
-│  ▾ Work (1)              ││                                                                             ││                                                   │
-│      ~design-review      ││                                                                             ││                                                   │
-│      +platform           ││                                                                             ││                                                   │
+│> * #general              ││00:00 bob    before the thread                                               ││alice                                         00:01│
+│  * &dev-team             ││00:01 alice  deploy plan: who takes the rollback?                            ││  deploy plan: who takes the rollback?             │
+│  * @alice                ││             -> 2 replies, last 00:11                                        ││  -> 2 replies, last 00:11                         │
+│  Folders                 ││                                                                             ││bob                                           00:02│
+│  ▾ Work (1)              ││                                                                             ││  I can take it                                    │
+│      ~design-review      ││                                                                             ││alice                                         00:11│
+│      +platform           ││                                                                             ││  thanks, done                                     │
 │  ▾ People (1)            ││                                                                             ││                                                   │
 │  Recent                  ││                                                                             ││                                                   │
 │    #random               ││                                                                             ││                                                   │

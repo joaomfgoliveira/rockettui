@@ -3,22 +3,22 @@ source: src/ui/messages.rs
 expression: terminal.backend()
 ---
 "┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
-"┃alice  09:44                                      ┃"
+"┃alice                                        09:44┃"
 "┃  let's sync on this tomorrow                     ┃"
-"┃bob  09:46                                        ┃"
+"┃bob                                          09:46┃"
 "┃  morning, anyone seen the build status?          ┃"
-"┃carol  09:48                                      ┃"
+"┃carol                                        09:48┃"
 "┃  build is green on main                          ┃"
 "┃── unread ────────────────────────────────────────┃"
-"┃dave  09:50                                       ┃"
+"┃dave                                         09:50┃"
 "┃  can someone review my PR when they get a chance?┃"
-"┃alice  09:52                                      ┃"
+"┃alice                                        09:52┃"
 "┃  standup moved to 10:30 today                    ┃"
-"┃bob  09:54                                        ┃"
+"┃bob                                          09:54┃"
 "┃  lunch? 🍕                                       ┃" Hidden by multi-width symbols: [(11, " ")]
-"┃carol  09:56                                      ┃"
+"┃carol                                        09:56┃"
 "┃  これはラップの確認に使う日本語のテストメッセージ┃" Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " "), (10, " "), (12, " "), (14, " "), (16, " "), (18, " "), (20, " "), (22, " "), (24, " "), (26, " "), (28, " "), (30, " "), (32, " "), (34, " "), (36, " "), (38, " "), (40, " "), (42, " "), (44, " "), (46, " "), (48, " "), (50, " ")]
 "┃  です。                                          ┃" Hidden by multi-width symbols: [(4, " "), (6, " "), (8, " ")]
-"┃dave  09:58                                       ┃"
+"┃dave                                         09:58┃"
 "┃  I'll take a look after the meeting              ┃"
 "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"

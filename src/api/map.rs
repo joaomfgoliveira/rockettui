@@ -4,7 +4,7 @@
 //! the subscription lacks (`encrypted`, `lm`, `teamMain`). The two are joined on the room id.
 
 use crate::api::wire::{ApiDate, WireMsg, WirePrefs, WireRoom, WireSub};
-use crate::api::{HistoryPage, SearchHits};
+use crate::api::{HistoryPage, SearchHits, THREAD_ROW_TEXT_CHARS, ThreadRow};
 use crate::data::{
     CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
     SendState, Unread,
@@ -368,6 +368,39 @@ pub fn search_page(room: &RoomId, msgs: Vec<WireMsg>) -> SearchHits {
         messages: msgs.into_iter().map(|msg| message(room, msg)).collect(),
         raw_ts,
     }
+}
+
+/// The rows of a `chat.getThreadsList` answer, in the server's order. A row keeps the author, the
+/// first line of the text cut to `THREAD_ROW_TEXT_CHARS` characters, `tcount`, `tlm` in whole
+/// seconds and the follower ids from `replies` (the user follows a thread when their id is there).
+pub fn thread_rows(threads: Vec<WireMsg>) -> Vec<ThreadRow> {
+    threads
+        .into_iter()
+        .map(|msg| {
+            let followers = match msg.replies {
+                Some(serde_json::Value::Array(ids)) => ids
+                    .into_iter()
+                    .filter_map(|id| id.as_str().map(str::to_string))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            ThreadRow {
+                id: msg.id,
+                author: msg.u.username.unwrap_or_else(|| "unknown".to_string()),
+                first_line: msg
+                    .msg
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(THREAD_ROW_TEXT_CHARS)
+                    .collect(),
+                replies: msg.tcount.unwrap_or(0),
+                last_reply: msg.tlm.as_ref().and_then(ApiDate::secs),
+                followers,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1243,5 +1276,58 @@ mod tests {
         let json = r#"{"_id":"m1","rid":"r","msg":"x","ts":"2026-11-17T10:00:00.123Z","u":{"username":"a"},"tmid":"","tcount":null}"#;
         let m = message(&RoomId("r".into()), serde_json::from_str(json).unwrap());
         assert!(m.tmid.is_none() && m.in_main_flow() && m.tcount == 0);
+    }
+
+    #[test]
+    fn thread_rows_from_both_servers() {
+        use crate::api::wire::ThreadsListResp;
+        for (text, label) in [
+            (
+                include_str!("fixtures/docker/thread_list_all.json"),
+                "8.9.1",
+            ),
+            (
+                include_str!("fixtures/docker/thread_list_all_9.json"),
+                "9.0.0",
+            ),
+        ] {
+            let resp: ThreadsListResp = serde_json::from_str(text).expect(label);
+            let rows = thread_rows(resp.threads);
+            assert_eq!(rows.len() as u32, resp.total, "{label}");
+            // Newest activity first, as the server returns them.
+            assert!(
+                rows.windows(2).all(|w| w[0].last_reply >= w[1].last_reply),
+                "{label}"
+            );
+            assert!(
+                rows.iter()
+                    .all(|r| r.replies >= 1 && r.last_reply.is_some()),
+                "{label}"
+            );
+            // A thread the dev user started has them among its followers.
+            let mine = rows.iter().find(|r| r.author == "dev").expect(label);
+            assert!(
+                mine.followers.iter().any(|id| mine.followed_by(id)),
+                "{label}"
+            );
+            assert!(!mine.followed_by("nobody"), "{label}");
+        }
+    }
+
+    #[test]
+    fn thread_row_text_is_one_bounded_line() {
+        let long = "x".repeat(THREAD_ROW_TEXT_CHARS * 2);
+        let body = format!(
+            "{{\"threads\":[{{\"_id\":\"t1\",\"msg\":\"first\\nsecond\",\"ts\":\"2026-01-01T00:00:00.000Z\",\"u\":{{\"_id\":\"u\",\"username\":\"ana\"}},\"tcount\":3,\"tlm\":\"2026-01-01T14:02:00.000Z\",\"replies\":[\"u1\"]}},\
+             {{\"_id\":\"t2\",\"msg\":\"{long}\",\"ts\":\"2026-01-01T00:00:00.000Z\",\"u\":{{\"_id\":\"u\"}}}}],\"total\":2}}"
+        );
+        let resp: crate::api::wire::ThreadsListResp = serde_json::from_str(&body).expect("body");
+        let rows = thread_rows(resp.threads);
+        assert_eq!(rows[0].first_line, "first");
+        assert_eq!((rows[0].replies, rows[0].author.as_str()), (3, "ana"));
+        assert!(rows[0].followed_by("u1"));
+        assert_eq!(rows[1].first_line.chars().count(), THREAD_ROW_TEXT_CHARS);
+        assert_eq!((rows[1].author.as_str(), rows[1].replies), ("unknown", 0));
+        assert!(rows[1].last_reply.is_none() && rows[1].followers.is_empty());
     }
 }

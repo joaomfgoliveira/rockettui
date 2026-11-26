@@ -329,6 +329,94 @@ impl fmt::Debug for ThreadPage {
     }
 }
 
+/// Which threads `chat.getThreadsList` lists. `All` sends no `type` (measured on 8.9.1 and 9.0.0:
+/// `type=all` is a 400).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ThreadFilter {
+    #[default]
+    All,
+    Following,
+    Unread,
+}
+
+impl ThreadFilter {
+    /// The `type` query value, `None` for all threads.
+    fn query_value(self) -> Option<&'static str> {
+        match self {
+            ThreadFilter::All => None,
+            ThreadFilter::Following => Some("following"),
+            ThreadFilter::Unread => Some("unread"),
+        }
+    }
+
+    /// The next filter, wrapping: all, following, unread.
+    pub fn next(self) -> ThreadFilter {
+        match self {
+            ThreadFilter::All => ThreadFilter::Following,
+            ThreadFilter::Following => ThreadFilter::Unread,
+            ThreadFilter::Unread => ThreadFilter::All,
+        }
+    }
+
+    /// The previous filter, wrapping.
+    pub fn prev(self) -> ThreadFilter {
+        match self {
+            ThreadFilter::All => ThreadFilter::Unread,
+            ThreadFilter::Following => ThreadFilter::All,
+            ThreadFilter::Unread => ThreadFilter::Following,
+        }
+    }
+}
+
+/// Longest first line a thread row keeps, in characters. The list holds little text.
+pub const THREAD_ROW_TEXT_CHARS: usize = 200;
+
+/// One thread of the thread list: the parent's author, the bounded first line of its text, the
+/// reply count, the time of the last reply (whole seconds) and the ids that follow it. The text is
+/// unsanitized server text: the drawing code sanitizes it. Not a `Message`.
+#[derive(Clone, PartialEq)]
+pub struct ThreadRow {
+    pub id: String,
+    pub author: String,
+    pub first_line: String,
+    pub replies: u32,
+    pub last_reply: Option<i64>,
+    pub followers: Vec<String>,
+}
+
+impl ThreadRow {
+    /// Whether user `own_id` follows the thread.
+    pub fn followed_by(&self, own_id: &str) -> bool {
+        self.followers.iter().any(|id| id == own_id)
+    }
+}
+
+/// Redacting `Debug`: the id and the counts, never the text.
+impl fmt::Debug for ThreadRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ThreadRow({}, {} replies)", self.id, self.replies)
+    }
+}
+
+/// One page of the thread list, in the server's order, and the number of threads that match in all.
+#[derive(Clone, PartialEq)]
+pub struct ThreadListPage {
+    pub rows: Vec<ThreadRow>,
+    pub total: u32,
+}
+
+/// Redacting `Debug`: the counts only.
+impl fmt::Debug for ThreadListPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ThreadListPage(<{} of {} threads>)",
+            self.rows.len(),
+            self.total
+        )
+    }
+}
+
 /// The room's history around one message, oldest first. `selected` is the index of that message;
 /// `newest_raw` is the raw timestamp of the newest message held, the `oldest` value of the page
 /// after the window; `reaches_newest` is true when nothing newer than the window exists;
@@ -587,6 +675,40 @@ impl Client {
                 .into_iter()
                 .map(|msg| map::message(room, msg))
                 .collect(),
+            total: resp.total,
+        })
+    }
+
+    /// One page of the threads of `room`: `GET chat.getThreadsList` with `rid`, `offset`, `count`,
+    /// `type` (`following` or `unread`, absent for all) and `text` when `text` is not empty. The
+    /// server matches the text literally (measured on 8.9.1 and 9.0.0), so it is sent as typed. A
+    /// refused request is `ApiError::Rejected`; the search text never reaches an error.
+    pub async fn list_threads(
+        &self,
+        room: &RoomId,
+        filter: ThreadFilter,
+        text: &str,
+        offset: u32,
+        count: u16,
+    ) -> Result<ThreadListPage, ApiError> {
+        let mut params = vec![
+            ("rid", room.0.clone()),
+            ("count", count.to_string()),
+            ("offset", offset.to_string()),
+        ];
+        if let Some(kind) = filter.query_value() {
+            params.push(("type", kind.to_string()));
+        }
+        if !text.is_empty() {
+            params.push(("text", text.to_string()));
+        }
+        let request = self
+            .http
+            .get(self.endpoint("chat.getThreadsList"))
+            .query(&params);
+        let resp: wire::ThreadsListResp = read_json(request, ApiError::Rejected).await?;
+        Ok(ThreadListPage {
+            rows: map::thread_rows(resp.threads),
             total: resp.total,
         })
     }
@@ -2839,5 +2961,190 @@ mod tests {
             total: 4,
         };
         assert!(!format!("{page:?}").contains("body"));
+    }
+
+    #[tokio::test]
+    async fn list_threads_by_filter_text_and_offset_on_both_servers() {
+        for (all, following, unread, text, page2, empty, label) in [
+            (
+                include_str!("fixtures/docker/thread_list_all.json"),
+                include_str!("fixtures/docker/thread_list_following.json"),
+                include_str!("fixtures/docker/thread_list_unread.json"),
+                include_str!("fixtures/docker/thread_list_text.json"),
+                include_str!("fixtures/docker/thread_list_page2.json"),
+                include_str!("fixtures/docker/thread_list_empty.json"),
+                "8.9.1",
+            ),
+            (
+                include_str!("fixtures/docker/thread_list_all_9.json"),
+                include_str!("fixtures/docker/thread_list_following_9.json"),
+                include_str!("fixtures/docker/thread_list_unread_9.json"),
+                include_str!("fixtures/docker/thread_list_text_9.json"),
+                include_str!("fixtures/docker/thread_list_page2_9.json"),
+                include_str!("fixtures/docker/thread_list_empty_9.json"),
+                "9.0.0",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let mount = |extra: Vec<(&'static str, &'static str)>, body: &'static str| {
+                let mut builder = Mock::given(method("GET"))
+                    .and(path("/api/v1/chat.getThreadsList"))
+                    .and(header("X-User-Id", USER))
+                    .and(header("X-Auth-Token", TOKEN))
+                    .and(query_param("rid", "r1"));
+                for (k, v) in extra {
+                    builder = builder.and(query_param(k, v));
+                }
+                builder
+                    .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+            };
+            mount(vec![("count", "50"), ("offset", "0")], all)
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            mount(vec![("type", "following")], following)
+                .mount(&server)
+                .await;
+            mount(vec![("type", "unread")], unread).mount(&server).await;
+            mount(vec![("text", "deploy")], text).mount(&server).await;
+            mount(vec![("count", "1"), ("offset", "1")], page2)
+                .mount(&server)
+                .await;
+            let client = client_for(&server);
+            let room = RoomId("r1".to_string());
+
+            let page = client
+                .list_threads(&room, ThreadFilter::All, "", 0, 50)
+                .await
+                .expect(label);
+            assert_eq!(page.rows.len() as u32, page.total, "{label}");
+            assert!(
+                page.rows
+                    .iter()
+                    .all(|r| !r.id.is_empty() && !r.author.is_empty())
+            );
+            let first = client
+                .list_threads(&room, ThreadFilter::Following, "", 0, 50)
+                .await
+                .expect(label);
+            assert!(first.total >= 1, "{label}");
+            client
+                .list_threads(&room, ThreadFilter::Unread, "", 0, 50)
+                .await
+                .expect(label);
+            let hits = client
+                .list_threads(&room, ThreadFilter::All, "deploy", 0, 50)
+                .await
+                .expect(label);
+            assert!(
+                hits.rows.iter().all(|r| r.first_line.contains("deploy")),
+                "{label}"
+            );
+            let rest = client
+                .list_threads(&room, ThreadFilter::All, "", 1, 1)
+                .await
+                .expect(label);
+            assert_eq!(rest.rows.len(), 1, "{label}");
+            assert!(rest.total > 1, "{label}");
+
+            let requests = server.received_requests().await.expect("recorded");
+            // `All` sends no `type`, and an empty text sends no `text`.
+            let all_query = query_of(&requests[0]);
+            assert!(
+                all_query.iter().all(|(k, _)| k != "type" && k != "text"),
+                "{label}"
+            );
+
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/chat.getThreadsList"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(empty, "application/json"))
+                .mount(&server)
+                .await;
+            let none = client_for(&server)
+                .list_threads(&room, ThreadFilter::All, "", 0, 50)
+                .await
+                .expect(label);
+            assert_eq!((none.rows.len(), none.total), (0, 0), "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_threads_sends_special_text_unchanged() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/chat.getThreadsList"))
+            .and(query_param("text", "(a[b].c"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "{\"threads\":[],\"total\":0,\"success\":true}",
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client_for(&server)
+            .list_threads(
+                &RoomId("r1".to_string()),
+                ThreadFilter::All,
+                "(a[b].c",
+                0,
+                50,
+            )
+            .await
+            .expect("answered");
+    }
+
+    #[tokio::test]
+    async fn list_threads_errors_carry_no_search_text() {
+        for (status, want) in [
+            (400, ApiError::Rejected),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (404, ApiError::NotFound),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/chat.getThreadsList"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw(
+                    "{\"success\":false,\"error\":\"SENTINEL-LIST-TEXT\"}",
+                    "application/json",
+                ))
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .list_threads(
+                    &RoomId("r1".to_string()),
+                    ThreadFilter::All,
+                    "SENTINEL-QUERY",
+                    0,
+                    50,
+                )
+                .await
+                .expect_err("refused");
+            assert_eq!(error, want, "status {status}");
+            let shown = format!("{error:?} {error}");
+            assert!(!shown.contains("SENTINEL"), "{shown}");
+        }
+        let page = ThreadListPage {
+            rows: vec![],
+            total: 2,
+        };
+        assert!(!format!("{page:?}").contains("body"));
+    }
+
+    #[test]
+    fn thread_filter_cycles_both_ways() {
+        let mut f = ThreadFilter::All;
+        for want in [
+            ThreadFilter::Following,
+            ThreadFilter::Unread,
+            ThreadFilter::All,
+        ] {
+            f = f.next();
+            assert_eq!(f, want);
+        }
+        assert_eq!(ThreadFilter::All.prev(), ThreadFilter::Unread);
+        assert_eq!(ThreadFilter::Unread.prev(), ThreadFilter::Following);
     }
 }

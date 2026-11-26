@@ -7,7 +7,7 @@ use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, follow, help,
     history, jump, react, reactions, read, realtime, results, search, send, sidebar, switcher,
-    thread,
+    thread, thread_list,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -43,6 +43,15 @@ fn reduce(app: &mut App, action: Action) {
             // `app::switcher`).
             if app.switcher.is_some() {
                 switcher::key(app, chord);
+                return;
+            }
+            // The focused thread list takes its search line's keys and its fixed keys first; the
+            // rest of its keys go through the keymap (see `app::thread_list`).
+            if app.focus == Focus::ThreadList
+                && app.mode == Mode::Normal
+                && app.thread_list_shown()
+                && thread_list::key(app, chord)
+            {
                 return;
             }
             // An open help overlay takes the keys next (see `app::help`).
@@ -81,6 +90,7 @@ fn reduce(app: &mut App, action: Action) {
                 || app.reactions_popup.is_some()
                 || app.react_picker.is_some()
                 || app.switcher.is_some()
+                || app.thread_list.as_ref().is_some_and(|l| l.searching)
             {
                 return;
             }
@@ -230,14 +240,16 @@ fn reduce(app: &mut App, action: Action) {
         // The thread pane sits right of the messages: `l` from the messages goes into it (when it
         // is open) and `h` from it comes back.
         Action::FocusLeft => {
-            app.focus = if app.focus == Focus::Thread {
+            app.focus = if matches!(app.focus, Focus::Thread | Focus::ThreadList) {
                 Focus::Messages
             } else {
                 Focus::Sidebar
             }
         }
         Action::FocusRight => {
-            app.focus = if app.focus == Focus::Messages && app.thread.is_some() {
+            app.focus = if app.focus == Focus::Messages && app.thread_list_shown() {
+                Focus::ThreadList
+            } else if app.focus == Focus::Messages && app.thread.is_some() {
                 Focus::Thread
             } else {
                 Focus::Messages
@@ -261,6 +273,7 @@ fn reduce(app: &mut App, action: Action) {
                 app.mode = Mode::Normal;
             }
             Mode::Normal if app.focus == Focus::Thread => thread::close(app),
+            Mode::Normal if app.focus == Focus::ThreadList => thread_list::close(app),
             Mode::Normal => {
                 app.status_msg = None;
                 search::clear(app);
@@ -330,11 +343,25 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowContext => app.context = true,
         Action::ShowReactions => reactions::open(app),
         Action::OpenThread => thread::open(app),
+        Action::ListThreads => thread_list::open(app),
+        Action::ThreadListSearchDue => thread_list::on_search_due(app),
+        Action::ThreadListPage {
+            room,
+            generation,
+            offset,
+            result,
+        } => thread_list::on_page(app, &room, generation, offset, result),
+        Action::ThreadListParent {
+            room,
+            parent_id,
+            result,
+        } => thread_list::on_parent(app, &room, &parent_id, result),
         Action::ReplyInThread => thread::start_reply(app),
         Action::ToggleReplyToChannel => thread::toggle_also_in_channel(app),
         Action::CloseThread => thread::close(app),
         Action::ReactMessage => react::open(app),
         Action::SwitchRoom => switcher::open(app),
+        Action::SearchStart if app.focus == Focus::ThreadList => thread_list::start_search(app),
         Action::SearchStart => search::start(app),
         Action::SearchNext => search::next(app),
         Action::SearchPrev => search::prev(app),
@@ -349,6 +376,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::Paste(text) if app.search_prompt.is_some() => search::prompt_paste(app, &text),
         Action::Paste(text) if app.react_picker.is_some() => react::paste(app, &text),
         Action::Paste(text) if app.switcher.is_some() => switcher::paste(app, &text),
+        Action::Paste(text) if app.thread_list.is_some() => thread_list::paste(app, &text),
         Action::Paste(text) => match app.mode {
             Mode::Insert => edit_input(app, |input| {
                 input.insert_str(&text);
@@ -471,12 +499,14 @@ fn dispatch(app: &mut App, outcome: Outcome) {
     }
 }
 
-/// The panes `<Tab>` cycles through, in order: the sidebar, the messages and, while a thread is
-/// open, the thread pane. The input bar is not one of them: it is reached on purpose (`Ctrl-w j`,
+/// The panes `<Tab>` cycles through, in order: the sidebar, the messages and, while the thread
+/// column is open, the thread pane or the thread list. The input bar is not one of them: it is reached on purpose (`Ctrl-w j`,
 /// `i`).
 fn cycle_panes(app: &App) -> Vec<Focus> {
     let mut panes = vec![Focus::Sidebar, Focus::Messages];
-    if app.thread.is_some() {
+    if app.thread_list_shown() {
+        panes.push(Focus::ThreadList);
+    } else if app.thread.is_some() {
         panes.push(Focus::Thread);
     }
     panes
@@ -511,6 +541,7 @@ fn apply_motion(app: &mut App, motion: &Action, count: Option<u32>) {
         Focus::Thread => {
             crate::app::thread::apply_motion(app, motion, count);
         }
+        Focus::ThreadList => thread_list::apply_motion(app, motion, count),
         Focus::Input => input_motion(app, motion, count),
     }
 }

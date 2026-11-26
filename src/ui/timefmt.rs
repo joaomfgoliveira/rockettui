@@ -46,6 +46,16 @@ pub fn format_ts(format: &TimeFormat, ts: i64, zone: Zone) -> String {
     sanitize_line(&text).into_owned()
 }
 
+/// `ts` as `YYYY-MM-DD HH:MM` in `zone`: the date and the hour, whatever the message time format of
+/// the settings is. What the thread list and the thread pane show next to an author.
+pub fn format_date_hour(ts: i64, zone: Zone) -> String {
+    static FORMAT: std::sync::OnceLock<Option<TimeFormat>> = std::sync::OnceLock::new();
+    match FORMAT.get_or_init(|| TimeFormat::parse("%Y-%m-%d %H:%M").ok()) {
+        Some(format) => format_ts(format, ts, zone),
+        None => OUT_OF_RANGE.to_string(),
+    }
+}
+
 /// The calendar day of `ts` in `zone`, or `None` when `ts` is out of range.
 pub fn day_of(ts: i64, zone: Zone) -> Option<chrono::NaiveDate> {
     let utc = Utc.timestamp_opt(ts, 0).single()?;

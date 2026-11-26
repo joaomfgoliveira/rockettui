@@ -19,7 +19,7 @@ expression: "render_to_string(&app, 80, 24)"
 ┃                          ┃│<C-u>              half a page up                 │
 ┃                          ┃│G                  jump to the bottom             │
 ┃                          ┃│gg                 jump to the top                │
-┃                          ┃│j                  move down                      │
+┃                          ┃│gT                 list this room's threads       │
 ┃                          ┃└──────────────────────────────────────────────────┘
 ┃                          ┃┌ Input ───────────────────────────────────────────┐
 ┃                          ┃│press i to write                                  │

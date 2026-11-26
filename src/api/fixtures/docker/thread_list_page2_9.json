@@ -1,0 +1,30 @@
+{
+  "threads": [
+    {
+      "_id": "ixHEL97BT3yNgairW",
+      "rid": "6b0752985e8081cbfe2ac683",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T21:36:39.244Z",
+      "u": {
+        "_id": "3YaAXjSWY6QZLKLSk",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T21:36:40.030Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "3YaAXjSWY6QZLKLSk",
+        "96cW5KbuYz26qdTbq",
+        "jtNBftMsTiakCEF86"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T21:36:39.994Z"
+    }
+  ],
+  "count": 1,
+  "offset": 1,
+  "total": 12,
+  "success": true
+}

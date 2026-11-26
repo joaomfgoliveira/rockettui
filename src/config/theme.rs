@@ -333,7 +333,7 @@ impl Default for Theme {
             input_hint: plain.add_modifier(Modifier::DIM),
             messages_cursor: plain.add_modifier(Modifier::REVERSED),
             messages_cursor_unfocused: plain.bg(Color::DarkGray),
-            messages_time: plain.add_modifier(Modifier::DIM),
+            messages_time: plain.fg(Color::Gray),
             messages_author: plain.add_modifier(Modifier::BOLD),
             messages_body: plain,
             messages_notice: plain.add_modifier(Modifier::DIM),
@@ -1142,10 +1142,7 @@ mod tests {
             t.messages_cursor_unfocused,
             Style::default().bg(Color::DarkGray)
         );
-        assert_eq!(
-            t.messages_time,
-            Style::default().add_modifier(Modifier::DIM)
-        );
+        assert_eq!(t.messages_time, Style::default().fg(Color::Gray));
         assert_eq!(
             t.messages_author,
             Style::default().add_modifier(Modifier::BOLD)

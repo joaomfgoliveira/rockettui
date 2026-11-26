@@ -17,6 +17,7 @@ pub mod sidebar;
 pub mod status;
 pub mod switcher;
 pub mod thread;
+pub mod thread_list;
 pub mod timefmt;
 pub mod wrap;
 
@@ -44,18 +45,22 @@ pub fn view(frame: &mut Frame, app: &App) {
         app.settings.sidebar_width,
         app.input_rows(),
         app.thread_input_rows(),
-        app.thread.is_some(),
+        app.column_open(),
     );
     sidebar::render(frame, areas.sidebar, app);
     // An open thread sits beside the message pane, or, on a narrow terminal, takes its place.
     if !areas.thread_takes_over() {
         messages::render(frame, areas.messages, app);
     }
-    if let Some(pane) = areas.thread {
+    if app.thread_list_shown() {
+        if let Some(column) = areas.column() {
+            thread_list::render(frame, column, app);
+        }
+    } else if let Some(pane) = areas.thread {
         thread::render(frame, pane, app);
     }
     input::render(frame, areas.input, app);
-    if let Some(bar) = areas.thread_input {
+    if let Some(bar) = areas.thread_input.filter(|_| !app.thread_list_shown()) {
         input::render_thread(frame, bar, app);
     }
     results::render(frame, areas.messages, app);

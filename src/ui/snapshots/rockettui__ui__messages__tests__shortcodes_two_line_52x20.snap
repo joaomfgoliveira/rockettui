@@ -4,13 +4,13 @@ expression: terminal.backend()
 ---
 "┏ quiet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
 "┃── 1970-01-01 ────────────────────────────────────┃"
-"┃alice  09:34                                      ┃"
+"┃alice                                        09:34┃"
 "┃  deploy done 🎉 thanks 👍                        ┃" Hidden by multi-width symbols: [(16, " "), (26, " ")]
-"┃bob  09:35                                        ┃"
+"┃bob                                          09:35┃"
 "┃  meeting at 10:100:20 or use `:smile:` here      ┃"
-"┃alice  09:36                                      ┃"
+"┃alice                                        09:36┃"
 "┃  🦜 🇦🇫 :rt_custom_name: 👍🏼                       ┃" Hidden by multi-width symbols: [(4, " "), (7, " "), (27, " ")]
-"┃bob  09:37                                        ┃"
+"┃bob                                          09:37┃"
 "┃  a long line with several emoji 🚀 🔥 💯 🎉 that ┃" Hidden by multi-width symbols: [(35, " "), (38, " "), (41, " "), (44, " ")]
 "┃  has to wrap to the next row                     ┃"
 "┃                                                  ┃"

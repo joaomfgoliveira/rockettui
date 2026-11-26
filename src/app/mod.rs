@@ -23,6 +23,7 @@ pub mod send;
 pub mod sidebar;
 pub mod switcher;
 pub mod thread;
+pub mod thread_list;
 pub mod update;
 
 use crate::data::{Folder, Message, Room, RoomId, SendState};
@@ -105,6 +106,8 @@ pub enum Focus {
     Input,
     /// The thread pane, open only while `App.thread` is set.
     Thread,
+    /// The thread list, shown only while `App::thread_list_shown` is true.
+    ThreadList,
 }
 
 /// Where the room load stands, shown in the status bar (D-05, D-06).
@@ -238,6 +241,11 @@ pub struct App {
     /// The room switcher (`app::switcher`), when open. Like `help` it is a state, not a mode. No
     /// `Debug` of its own beyond a redacting one: it holds the typed query.
     pub switcher: Option<switcher::Switcher>,
+    /// The thread list of the open room (`app::thread_list`), when open. A state, not a mode. Its
+    /// `Debug` is redacting: it holds the typed text and the rows.
+    pub thread_list: Option<thread_list::ThreadList>,
+    /// Counts the queries of the thread list; each one takes the next value as its generation.
+    pub thread_list_seq: u64,
     /// The open thread of the open room (`app::thread`), if any. No `Debug`: it holds messages.
     pub thread: Option<thread::ThreadPane>,
     /// The rooms opened this session, most recently opened first (`open_room`). In memory only:
@@ -332,6 +340,8 @@ impl App {
             anim_ms: 0,
             react_picker: None,
             switcher: None,
+            thread_list: None,
+            thread_list_seq: 0,
             thread: None,
             recent_rooms: Vec::new(),
             search: None,
@@ -375,8 +385,19 @@ impl App {
             self.settings.sidebar_width,
             self.input_rows(),
             self.thread_input_rows(),
-            self.thread.is_some(),
+            self.column_open(),
         )
+    }
+
+    /// The thread list is the one shown in the thread column: it is open and no thread has taken
+    /// the column from it (the list state is kept while a thread opened from it is shown).
+    pub fn thread_list_shown(&self) -> bool {
+        self.thread_list.is_some() && self.thread.is_none()
+    }
+
+    /// The thread column is open: it holds a thread or the thread list.
+    pub fn column_open(&self) -> bool {
+        self.thread.is_some() || self.thread_list_shown()
     }
 
     /// True when the thread sits beside the messages and so has an input bar of its own.
@@ -511,7 +532,7 @@ impl App {
             self.settings.sidebar_width,
             1,
             1,
-            self.thread.is_some(),
+            self.column_open(),
         )
     }
 
@@ -545,6 +566,7 @@ impl App {
             search::clear(self);
             results::close_all(self);
             thread::discard(self);
+            thread_list::discard(self);
             if let Some(old) = self.current_room.clone() {
                 jump::reset(self, &old);
             }

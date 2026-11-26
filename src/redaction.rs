@@ -194,6 +194,20 @@ fn sentinel_sweep() {
         oldest_ts: Some("2026-11-16T09:59:00.000Z".to_string()),
     };
     no_sentinel("HistoryPage", &format!("{page:?}"));
+    let thread_row = crate::api::ThreadRow {
+        id: "t1".to_string(),
+        author: "ana".to_string(),
+        first_line: BODY.to_string(),
+        replies: 1,
+        last_reply: None,
+        followers: Vec::new(),
+    };
+    no_sentinel("ThreadRow", &format!("{thread_row:?}"));
+    let list_page = crate::api::ThreadListPage {
+        rows: vec![thread_row],
+        total: 1,
+    };
+    no_sentinel("ThreadListPage", &format!("{list_page:?}"));
     no_sentinel("Message", &format!("{:?}", message_with_body()));
     for (kind, edited) in [
         (MessageKind::Normal, true),

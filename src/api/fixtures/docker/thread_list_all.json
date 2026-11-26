@@ -1,0 +1,71 @@
+{
+  "threads": [
+    {
+      "_id": "H36ohSuSQDmyCmr33",
+      "rid": "6b075a7d8fd9f72c1faa1ed1",
+      "msg": "threadlist capture gamma",
+      "ts": "2026-11-25T22:00:52.393Z",
+      "u": {
+        "_id": "tpExNHJdn8MFuBjKW",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T22:00:52.788Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "tpExNHJdn8MFuBjKW"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T22:00:52.754Z"
+    },
+    {
+      "_id": "xrh9wSBd7zSy3bPEH",
+      "rid": "6b075a7d8fd9f72c1faa1ed1",
+      "msg": "threadlist capture beta (with parens) and [brackets]",
+      "ts": "2026-11-25T22:00:51.280Z",
+      "u": {
+        "_id": "tpExNHJdn8MFuBjKW",
+        "username": "dev",
+        "name": "Dev"
+      },
+      "_updatedAt": "2026-11-25T22:00:52.056Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "tpExNHJdn8MFuBjKW",
+        "2GT4pRbt2T5aAEWBC",
+        "MEEn2ySCANppEgnhE"
+      ],
+      "tcount": 2,
+      "tlm": "2026-11-25T22:00:52.027Z"
+    },
+    {
+      "_id": "qjGQQKvFbm5GSbiNW",
+      "rid": "6b075a7d8fd9f72c1faa1ed1",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T22:00:50.531Z",
+      "u": {
+        "_id": "2GT4pRbt2T5aAEWBC",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T22:00:50.940Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "2GT4pRbt2T5aAEWBC",
+        "MEEn2ySCANppEgnhE"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T22:00:50.889Z"
+    }
+  ],
+  "count": 3,
+  "offset": 0,
+  "total": 3,
+  "success": true
+}

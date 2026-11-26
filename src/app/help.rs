@@ -70,6 +70,7 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "open_thread",
         "open the thread of the message under the cursor",
     ),
+    ("list_threads", "list this room's threads"),
     (
         "reply_in_thread",
         "reply in the thread of the message under the cursor",
@@ -133,6 +134,34 @@ pub fn build(keymap: &Keymap) -> Vec<HelpLine> {
         );
         lines.push(HelpLine::Blank);
     }
+    // The thread list's motions, `select` and `/` are the Normal-mode rows above, applied to the
+    // list while it is focused; `move_left` and `move_right` pick the filter there. Only `q` and
+    // `Esc` are fixed keys of the list.
+    let bound = |name: &str| -> String {
+        let mut keys: Vec<String> = keymap
+            .bindings(Mode::Normal)
+            .into_iter()
+            .filter(|(_, action)| name_of(action) == Some(name))
+            .map(|(chords, _)| format_keys(&chords))
+            .collect();
+        keys.sort();
+        keys.join(" ")
+    };
+    lines.push(HelpLine::Heading("Thread list (focused)".to_string()));
+    for (keys, desc) in [
+        (
+            format!("{} / {}", bound("move_left"), bound("move_right")),
+            "previous or next filter: all, following, unread".to_string(),
+        ),
+        ("q Esc".to_string(), "close the list".to_string()),
+        (
+            bound("search_start"),
+            "search the threads (Enter keeps, Esc clears)".to_string(),
+        ),
+    ] {
+        lines.push(HelpLine::Row { keys, desc });
+    }
+    lines.push(HelpLine::Blank);
     lines.push(HelpLine::Heading("Commands".to_string()));
     for def in COMMANDS {
         let keys = def
@@ -196,6 +225,17 @@ mod tests {
         assert!(has(&lines, "?", "show what the selected object can do"));
         assert!(has(&lines, "dd", "delete your message under the cursor"));
         assert!(has(&lines, "<C-d>", "half a page down"));
+    }
+
+    #[test]
+    fn the_thread_list_keys_are_listed() {
+        let lines = build(&default_keymap());
+        assert!(has(&lines, "q Esc", "close the list"));
+        assert!(rows(&lines).iter().any(|(k, d)| {
+            d == "previous or next filter: all, following, unread"
+                && k.contains('h')
+                && k.contains('l')
+        }));
     }
 
     #[test]

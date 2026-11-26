@@ -42,6 +42,8 @@ pub struct ThreadPane {
     pub next_offset: u32,
     /// A further page is in flight.
     pub loading_more: bool,
+    /// Opened from the thread list: closing the pane shows the list again.
+    pub from_list: bool,
 }
 
 impl ThreadPane {
@@ -121,23 +123,48 @@ pub fn open(app: &mut App) {
         return;
     };
     let origin = message.id.clone();
-    open_at(app, room, parent_id, origin, true);
+    open_at(app, room, parent_id, origin, true, None, false);
+}
+
+/// Open the thread `parent_id` chosen in the thread list. `fetched` is the parent when the list had
+/// to fetch it. The main flow is not touched: closing the pane puts the cursor back on the message
+/// it is on now, or leaves it when that is not held.
+pub fn open_from_list(app: &mut App, room: RoomId, parent_id: String, fetched: Option<Message>) {
+    let origin = app
+        .messages
+        .get(&room)
+        .and_then(|held| held.get(messages::view(app, &room).cursor))
+        .map_or_else(|| parent_id.clone(), |m| m.id.clone());
+    open_at(app, room, parent_id, origin, true, fetched, true);
 }
 
 /// Open the pane on thread `parent_id` of `room`, replacing any open one. The parent is taken from
 /// the main flow when it is held and fetched otherwise. With `fetch_replies` the replies are asked
 /// for; without it the thread is known to be empty (a message about to get its first reply), so the
 /// pane is `Loaded` at once. Replies not yet sent come back from the outbox.
-fn open_at(app: &mut App, room: RoomId, parent_id: String, origin: String, fetch_replies: bool) {
+fn open_at(
+    app: &mut App,
+    room: RoomId,
+    parent_id: String,
+    origin: String,
+    fetch_replies: bool,
+    fetched: Option<Message>,
+    from_list: bool,
+) {
     retarget(app, InputTarget::Room);
     if let Some(old) = app.thread.take() {
         keep_unsent(app, &old);
+    }
+    // A thread opened any other way than from the list takes the column from the list for good.
+    if !from_list {
+        app.thread_list = None;
     }
     let parent = app
         .messages
         .get(&room)
         .and_then(|held| held.iter().find(|m| m.id == parent_id))
-        .cloned();
+        .cloned()
+        .or(fetched);
     let fetch_parent = parent.is_none();
     let mut pending = Vec::new();
     app.outbox.retain(|m| {
@@ -162,6 +189,7 @@ fn open_at(app: &mut App, room: RoomId, parent_id: String, origin: String, fetch
         total: 0,
         next_offset: 0,
         loading_more: false,
+        from_list,
     });
     if request {
         app.effects.push(Effect::LoadThread {
@@ -236,7 +264,15 @@ pub fn start_reply(app: &mut App) {
                 .as_ref()
                 .is_some_and(|p| p.room == room && p.parent_id == parent_id);
             if !already_open {
-                open_at(app, room.clone(), parent_id.clone(), origin, has_replies);
+                open_at(
+                    app,
+                    room.clone(),
+                    parent_id.clone(),
+                    origin,
+                    has_replies,
+                    None,
+                    false,
+                );
             }
             parent_id
         }
@@ -277,8 +313,17 @@ pub fn close(app: &mut App) {
         return;
     };
     keep_unsent(app, &pane);
+    // A thread opened from the list gives the column back to it, as it was.
+    let back_to_list = pane.from_list && app.thread_list.is_some();
     if app.focus == crate::app::Focus::Thread {
-        app.focus = crate::app::Focus::Messages;
+        app.focus = if back_to_list {
+            crate::app::Focus::ThreadList
+        } else {
+            crate::app::Focus::Messages
+        };
+    }
+    if back_to_list {
+        return;
     }
     if let Some(index) = app
         .messages
@@ -1656,6 +1701,7 @@ mod tests {
             total: 0,
             next_offset: 0,
             loading_more: false,
+            from_list: false,
         });
         pane_app.focus = Focus::Thread;
         press(&mut pane_app, "ihi<CR>");

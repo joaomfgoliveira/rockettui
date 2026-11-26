@@ -4,21 +4,21 @@ expression: draw_80x24(&app).backend()
 ---
 "┌ Rooms ─────────────────────────┐┏ general ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
 "│  Unread                        │┃  let's sync on this tomorrow               ┃"
-"│> * #general                    │┃bob  Sat 09:46                              ┃"
+"│> * #general                    │┃bob                                Sat 09:46┃"
 "│  * &dev-team                   │┃  morning, anyone seen the build status?    ┃"
-"│  * @alice                      │┃carol  Sat 09:48                            ┃"
+"│  * @alice                      │┃carol                              Sat 09:48┃"
 "│  Folders                       │┃  build is green on main                    ┃"
-"│  ▾ Work (1)                    │┃dave  Sat 09:50                             ┃"
+"│  ▾ Work (1)                    │┃dave                               Sat 09:50┃"
 "│      ~design-review            │┃  can someone review my PR when they get    ┃"
 "│      +platform                 │┃  a chance?                                 ┃"
-"│  ▾ People (1)                  │┃alice  Sat 09:52                            ┃"
+"│  ▾ People (1)                  │┃alice                              Sat 09:52┃"
 "│  Recent                        │┃  standup moved to 10:30 today              ┃"
-"│    #random                     │┃bob  Sat 09:54                              ┃"
+"│    #random                     │┃bob                                Sat 09:54┃"
 "│    &secrets [e2e]              │┃  lunch? 🍕                                 ┃" Hidden by multi-width symbols: [(45, " ")]
-"│    #quiet                      │┃carol  Sat 09:56                            ┃"
+"│    #quiet                      │┃carol                              Sat 09:56┃"
 "│                                │┃  これはラップの確認に使う日本語のテストメッ┃" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " "), (46, " "), (48, " "), (50, " "), (52, " "), (54, " "), (56, " "), (58, " "), (60, " "), (62, " "), (64, " "), (66, " "), (68, " "), (70, " "), (72, " "), (74, " "), (76, " "), (78, " ")]
 "│                                │┃  セージです。                              ┃" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " "), (46, " "), (48, " ")]
-"│                                │┃dave  Sat 09:58                             ┃"
+"│                                │┃dave                               Sat 09:58┃"
 "│                                │┃  I'll take a look after the meeting        ┃"
 "│                                │┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
 "│                                │┌ Input ─────────────────────────────────────┐"

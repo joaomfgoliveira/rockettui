@@ -76,6 +76,9 @@ pub enum Action {
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
+    /// Normal mode (`gT`): open the thread list of the open room, an overlay to find and open a
+    /// thread. With no room open, or an encrypted one, the status line says why.
+    ListThreads,
     /// Normal mode, messages or thread pane focused (`gR`): start a reply to the message under the
     /// cursor, opening its thread (empty when it has no replies yet).
     ReplyInThread,
@@ -174,6 +177,22 @@ pub enum Action {
         offset: u32,
         parent: Option<Message>,
         page: crate::api::ThreadPage,
+    },
+    /// A page of the thread list of `room` arrived (or failed), for the query `generation`. An
+    /// answer for an older query is dropped.
+    ThreadListPage {
+        room: RoomId,
+        generation: u64,
+        offset: u32,
+        result: Result<crate::api::ThreadListPage, crate::api::ApiError>,
+    },
+    /// The typing delay of the thread list ran out: send the search request.
+    ThreadListSearchDue,
+    /// The parent of the thread chosen in the thread list arrived, or could not be fetched.
+    ThreadListParent {
+        room: RoomId,
+        parent_id: String,
+        result: Result<Message, crate::api::ApiError>,
     },
     /// A thread request failed; the error is a fixed kind with no payload text.
     ThreadLoadFailed {
@@ -343,6 +362,26 @@ impl std::fmt::Debug for Action {
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
+            Action::ListThreads => write!(f, "ListThreads"),
+            Action::ThreadListSearchDue => write!(f, "ThreadListSearchDue"),
+            Action::ThreadListPage {
+                room,
+                generation,
+                offset,
+                result,
+            } => write!(
+                f,
+                "ThreadListPage({room:?}, gen={generation}, offset={offset}, {result:?})"
+            ),
+            Action::ThreadListParent {
+                room,
+                parent_id,
+                result,
+            } => write!(
+                f,
+                "ThreadListParent({room:?}, {parent_id}, {})",
+                if result.is_ok() { "ok" } else { "err" }
+            ),
             Action::ReplyInThread => write!(f, "ReplyInThread"),
             Action::ToggleReplyToChannel => write!(f, "ToggleReplyToChannel"),
             Action::CloseThread => write!(f, "CloseThread"),

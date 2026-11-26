@@ -10,11 +10,11 @@ expression: out
 │  Folders                 │┃                                                  ┃
 │  ▾ Work (1)              │┃                                                  ┃
 │      ~design-review      │┃                                                  ┃
-│      +platform           │┃                                                  ┃
-│  ▾ People (1)            │┌ ? ───────────────────────────────────────────────┐
-│  Recent                  ││Message                                           │
-│    #random               ││gt  open the thread                               │
-│    &secrets [e2e]        ││gf  follow or unfollow the thread                 │
+│      +platform           │┌ ? ───────────────────────────────────────────────┐
+│  ▾ People (1)            ││Message                                           │
+│  Recent                  ││gt  open the thread                               │
+│    #random               ││gf  follow or unfollow the thread                 │
+│    &secrets [e2e]        ││gT  list this room's threads                      │
 │    #quiet                ││gR  reply in its thread                           │
 │                          ││+   add or remove your reaction                   │
 │                          ││gg  jump to the oldest message                    │

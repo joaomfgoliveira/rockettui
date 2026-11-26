@@ -93,6 +93,20 @@ pub enum Effect {
         count: u16,
         fetch_parent: bool,
     },
+    /// One page of the thread list of `room` (`Client::list_threads`): `count` threads from
+    /// `offset` under `filter` and the search text `query`. Answers `Action::ThreadListPage`,
+    /// addressed by `room` and `generation`. The text is a `SendText`, so `Debug` never prints it.
+    ListThreads {
+        room: RoomId,
+        filter: crate::api::ThreadFilter,
+        query: SendText,
+        generation: u64,
+        offset: u32,
+        count: u16,
+    },
+    /// The parent message of a thread chosen in the thread list (`chat.getMessage`), for a thread
+    /// whose parent the main flow does not hold. Answers `Action::ThreadListParent`.
+    FetchThreadParent { room: RoomId, parent_id: String },
     /// One page of the server search of `room`: `GET chat.search`, `count` results from `offset`.
     /// Answers `Action::SearchPage`, addressed by `room` and `search_id`. The query is a
     /// `SendText`, so `Debug` never prints it.
@@ -209,6 +223,22 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     offset,
                     error,
                 },
+                Effect::ListThreads {
+                    room,
+                    generation,
+                    offset,
+                    ..
+                } => Action::ThreadListPage {
+                    room,
+                    generation,
+                    offset,
+                    result: Err(error),
+                },
+                Effect::FetchThreadParent { room, parent_id } => Action::ThreadListParent {
+                    room,
+                    parent_id,
+                    result: Err(error),
+                },
                 Effect::SearchRoom {
                     room,
                     search_id,
@@ -307,6 +337,32 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                     error,
                 }],
             }
+        }
+        Effect::ListThreads {
+            room,
+            filter,
+            query,
+            generation,
+            offset,
+            count,
+        } => {
+            let result = client
+                .list_threads(&room, filter, query.as_str(), offset, count)
+                .await;
+            vec![Action::ThreadListPage {
+                room,
+                generation,
+                offset,
+                result,
+            }]
+        }
+        Effect::FetchThreadParent { room, parent_id } => {
+            let result = client.get_message(&room, &parent_id).await;
+            vec![Action::ThreadListParent {
+                room,
+                parent_id,
+                result,
+            }]
         }
         Effect::SearchRoom {
             room,

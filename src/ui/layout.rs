@@ -34,6 +34,13 @@ pub struct Areas {
 }
 
 impl Areas {
+    /// The whole thread column, the pane and its input bar together: what the thread list takes,
+    /// since it has no input bar. `None` while the column is closed.
+    pub fn column(&self) -> Option<Rect> {
+        self.thread
+            .map(|pane| self.thread_input.map_or(pane, |bar| pane.union(bar)))
+    }
+
     /// True when the thread pane replaces the message pane instead of sitting beside it.
     pub fn thread_takes_over(&self) -> bool {
         self.thread == Some(self.messages)

@@ -1,0 +1,29 @@
+{
+  "threads": [
+    {
+      "_id": "qjGQQKvFbm5GSbiNW",
+      "rid": "6b075a7d8fd9f72c1faa1ed1",
+      "msg": "threadlist capture alpha deploy plan",
+      "ts": "2026-11-25T22:00:50.531Z",
+      "u": {
+        "_id": "2GT4pRbt2T5aAEWBC",
+        "username": "alice",
+        "name": "Alice"
+      },
+      "_updatedAt": "2026-11-25T22:00:50.940Z",
+      "mentions": [],
+      "channels": [],
+      "urls": [],
+      "replies": [
+        "2GT4pRbt2T5aAEWBC",
+        "MEEn2ySCANppEgnhE"
+      ],
+      "tcount": 1,
+      "tlm": "2026-11-25T22:00:50.889Z"
+    }
+  ],
+  "count": 1,
+  "offset": 0,
+  "total": 1,
+  "success": true
+}

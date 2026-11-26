@@ -20,7 +20,7 @@ pub enum MessageLayout {
     /// rows hang under the body. The author name is bold and colored by `palette::author_color`.
     #[default]
     Compact,
-    /// An `author  time` header row, then the body indented by 2.
+    /// An `author ... time` header row (the time at the right edge), then the body indented by 2.
     TwoLine,
 }
 
@@ -194,7 +194,13 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             .fg(author_color(&author, &ctx.theme.author_palette))
     };
     let width = usize::from(width);
-    match ctx.layout {
+    // The thread pane always uses the two-line layout, whatever the setting.
+    let layout = if ctx.in_thread {
+        MessageLayout::TwoLine
+    } else {
+        ctx.layout
+    };
+    match layout {
         MessageLayout::Compact => {
             // A time wider than the room's column (not possible for a room's own messages) keeps
             // its own width, so the hanging indent still matches the first row.
@@ -231,15 +237,18 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
         }
         MessageLayout::TwoLine => {
             let body_width = width.saturating_sub(2 + tag_width(msg, ctx)).max(MIN_BODY);
-            let mut header = vec![
-                Span::styled(author, name),
-                Span::raw("  "),
-                Span::styled(time, time_style),
-            ];
+            // The author at the left and the time at the right edge, as in the thread pane. A
+            // tombstone is one row: its text follows the author.
+            let mut header = vec![Span::styled(author, name)];
             if deleted {
-                // A tombstone is one row: the text sits on the header row.
                 header.push(Span::raw("  "));
                 header.push(Span::styled(DELETED_TEXT, body_style));
+            }
+            let used: usize = header.iter().map(|s| s.content.width()).sum();
+            let gap = width.saturating_sub(used + time.width()).max(2);
+            header.push(Span::raw(" ".repeat(gap)));
+            header.push(Span::styled(time, time_style));
+            if deleted {
                 return vec![Line::from(header)];
             }
             std::iter::once(Line::from(header))
@@ -319,7 +328,8 @@ fn body_rows(
 fn thread_marker_text(msg: &Message, ctx: &RowCtx) -> String {
     let count = msg.tcount;
     let noun = if count == 1 { "reply" } else { "replies" };
-    let following = if ctx.own_id.is_some_and(|id| msg.followed_by(id)) {
+    // The thread pane's title already says it, so its parent's row does not repeat it.
+    let following = if !ctx.in_thread && ctx.own_id.is_some_and(|id| msg.followed_by(id)) {
         ", following"
     } else {
         ""
@@ -514,7 +524,7 @@ pub fn message_rows(msg: &Message, width: u16, ctx: &RowCtx) -> usize {
 /// The day divider drawn above `msg`, or `None` when it falls on the same day as `prev` (the message
 /// above it in the list). The first message of a list (`prev` is `None`) gets one, so the list
 /// always says what day it starts on. A message whose time cannot be represented gets none. The
-/// divider is one row of `width` columns: `── YYYY-MM-DD ───…` in `theme.messages_notice`.
+/// divider is one row of `width` columns: `── YYYY-MM-DD ───…` in `theme.messages_time`.
 pub fn divider_row(
     msg: &Message,
     prev: Option<&Message>,
@@ -531,7 +541,7 @@ pub fn divider_row(
     text.extend(std::iter::repeat_n('─', fill));
     // Chars are all one column wide here; a width narrower than the label clips it.
     let text: String = text.chars().take(width).collect();
-    Some(Line::from(Span::styled(text, ctx.theme.messages_notice)))
+    Some(Line::from(Span::styled(text, ctx.theme.messages_time)))
 }
 
 /// The `unread` divider drawn above `msg`, or `None` when the divider is not above this message.
@@ -738,7 +748,7 @@ mod tests {
         let rows = render_rows(&m, 60, &ctx);
         let first = &rows[0].spans[0];
         assert_eq!(first.content, "2026-11-14 00:00");
-        assert!(first.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(first.style.fg, Some(Color::Gray));
         assert_eq!(text(&rows[0]), "2026-11-14 00:00 bob  hi");
     }
 
@@ -755,8 +765,9 @@ mod tests {
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(spans[3].style, Style::default());
         assert_eq!(spans[4].style, Style::default());
-        assert_eq!(spans[0].style.fg, None);
-        assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+        // The time is a plain light grey, not dimmed.
+        assert_eq!(spans[0].style.fg, Some(Color::Gray));
+        assert!(!spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -769,7 +780,7 @@ mod tests {
         let rows = rows_themed(&m, 60, MessageLayout::Compact, &theme);
         let spans = &rows[0].spans;
         assert_eq!(spans[0].style.fg, Some(Color::Indexed(1)), "time");
-        assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(!spans[0].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(spans[2].style.fg, Some(Color::Indexed(3)), "author");
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(spans[4].style.fg, Some(Color::Indexed(2)), "body");
@@ -803,7 +814,7 @@ mod tests {
     fn two_line_author_colored() {
         let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
         let rows = rows_at(&msg("alice", body), 30, MessageLayout::TwoLine, 0);
-        assert_eq!(text(&rows[0]), "alice  00:00");
+        assert_eq!(text(&rows[0]), format!("alice{}00:00", " ".repeat(30 - 10)));
         let spans = &rows[0].spans;
         assert_eq!(
             spans[0].style.fg,
@@ -811,7 +822,7 @@ mod tests {
         );
         assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(spans[1].style, Style::default());
-        assert_eq!(spans[2].style.fg, None);
+        assert_eq!(spans[2].style.fg, Some(Color::Gray), "the time");
         for row in &rows[1..] {
             for span in &row.spans {
                 assert_eq!(span.style.fg, None);
@@ -1038,7 +1049,7 @@ mod tests {
     fn two_line_layout() {
         let body = "the quick brown fox jumps over the lazy dog and keeps on running far away";
         let rows = texts(&rows_at(&msg("alice", body), 30, MessageLayout::TwoLine, 0));
-        assert_eq!(rows[0], "alice  00:00");
+        assert_eq!(rows[0], format!("alice{}00:00", " ".repeat(30 - 10)));
         assert!(rows.len() > 2, "{rows:?}");
         for row in &rows[1..] {
             assert!(row.starts_with("  "), "{row:?}");
@@ -1309,7 +1320,13 @@ mod tests {
         assert_eq!(marker.style, theme.messages_edited);
         assert_ne!(marker.style, theme.messages_body, "the marker must differ");
         let two = rows_themed(&m, 60, MessageLayout::TwoLine, &theme);
-        assert_eq!(texts(&two), ["alice  00:00", "  hello there (edited)"]);
+        assert_eq!(
+            texts(&two),
+            [
+                format!("alice{}00:00", " ".repeat(60 - 10)),
+                "  hello there (edited)".to_string()
+            ]
+        );
         // An unedited message is unchanged.
         let plain = rows_themed(
             &msg("alice", "hello there"),
@@ -1357,7 +1374,13 @@ mod tests {
         let compact = rows_themed(&m, 60, MessageLayout::Compact, &theme);
         assert_eq!(texts(&compact), ["00:00 alice  message deleted"]);
         let two = rows_themed(&m, 60, MessageLayout::TwoLine, &theme);
-        assert_eq!(texts(&two), ["alice  00:00  message deleted"]);
+        assert_eq!(
+            texts(&two),
+            [format!(
+                "alice  message deleted{}00:00",
+                " ".repeat(60 - "alice  message deleted".len() - "00:00".len())
+            )]
+        );
         for rows in [&compact, &two] {
             assert_eq!(rows.len(), 1);
             for span in rows[0]

@@ -269,12 +269,48 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_thread_says_following_in_the_marker_row_and_the_header() {
+    fn a_followed_thread_says_following_in_the_header_and_not_again_in_the_marker_row() {
         let app = followed_thread_app(vec!["me"]);
         let out = render_to_string(&app, 160, 24);
         assert!(out.contains("Thread, following"), "{out}");
-        assert!(out.contains("replies, last 00:11, following"), "{out}");
+        // The message pane's marker row says it; the thread pane's own does not repeat the title.
+        let pane: Vec<&str> = out
+            .lines()
+            .map(|l| l.split('│').next_back().unwrap_or(""))
+            .collect();
+        let marker = pane
+            .iter()
+            .find(|l| l.contains("replies, last"))
+            .expect("marker row");
+        assert!(!marker.contains("following"), "{marker}");
+        assert!(out.matches("following").count() == 2, "{out}");
         insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn the_pane_has_a_divider_only_where_the_day_changes() {
+        let mut app = app_with_thread(160, 24);
+        if let Some(pane) = app.thread.as_mut() {
+            // The last reply comes the next day.
+            if let Some(last) = pane.messages.last_mut() {
+                last.ts += 86_400;
+            }
+        }
+        let out = render_to_string(&app, 160, 24);
+        let column: Vec<&str> = out
+            .lines()
+            .map(|l| l.rsplit('┃').nth(1).unwrap_or(""))
+            .filter(|l| l.contains('─'))
+            .collect();
+        assert_eq!(
+            column.len(),
+            2,
+            "one per day, none between messages: {column:?}"
+        );
+        assert!(column[0].contains("1970-01-01"), "{column:?}");
+        assert!(column[1].contains("1970-01-02"), "{column:?}");
+        // The header shows the hour only.
+        assert!(!out.contains("1970-01-01 00:"), "{out}");
     }
 
     #[test]

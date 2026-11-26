@@ -112,6 +112,9 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.
         (Mode::Normal, "gt", Action::OpenThread),
+        // `gT` (`list_threads`) opens the thread list of the open room, a pane in the thread column. A sixth
+        // continuation of the `g` prefix.
+        (Mode::Normal, "gT", Action::ListThreads),
         // `gf` (`toggle_follow_thread`) follows the thread of the message under the cursor, or
         // unfollows it when it is already followed. A fifth continuation of the `g` prefix.
         (Mode::Normal, "gf", Action::ToggleFollowThread),
