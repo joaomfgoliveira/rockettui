@@ -122,6 +122,10 @@ pub struct RowCtx<'a> {
     pub in_thread: bool,
     /// The user's own id, to tell whether they follow a thread (`None` until known).
     pub own_id: Option<&'a str>,
+    /// The longest pause, in seconds, between two messages of one author that still share a
+    /// header (`continues`); `None` draws every message with its own. Set only for the room pane
+    /// in the two-line layout and for the thread pane.
+    pub grouping: Option<u32>,
 }
 
 /// Display width of the widest formatted time among `msgs`, or 0 for an empty slice. Compact pads
@@ -587,12 +591,81 @@ pub fn unread_row(msg: &Message, width: u16, ctx: &RowCtx) -> Option<Line<'stati
     )))
 }
 
-/// Rows `msg` takes in a list: its dividers (0 to 2) plus `message_rows`. The reducer's row model
-/// uses this, so scrolling agrees with what `divider_row` and `render_rows` draw.
-pub fn block_rows(msg: &Message, prev: Option<&Message>, width: u16, ctx: &RowCtx) -> usize {
-    usize::from(divider_row(msg, prev, width, ctx).is_some())
-        + usize::from(unread_row(msg, width, ctx).is_some())
-        + message_rows(msg, width, ctx)
+/// True when `msg` continues the group `prev` belongs to, whose first message is `head`: it is
+/// drawn without a header row. Needs `ctx.grouping`, two `Normal`, `Sent` messages of one author
+/// and thread, `msg` no more than that many seconds after `head` (the group's first message, so a
+/// long burst splits where the time runs out), no divider above `msg`, and no thread marker row
+/// under `prev`. `head` is `prev` itself when `prev` starts its group.
+pub fn continues(
+    msg: &Message,
+    prev: Option<&Message>,
+    head: Option<&Message>,
+    ctx: &RowCtx,
+) -> bool {
+    let (Some(gap), Some(prev), Some(head)) = (ctx.grouping, prev, head) else {
+        return false;
+    };
+    let plain = |m: &Message| m.kind == MessageKind::Normal && m.send == SendState::Sent;
+    plain(msg)
+        && plain(prev)
+        && msg.author == prev.author
+        && msg.tmid == prev.tmid
+        && msg.ts >= prev.ts
+        && (0..=i64::from(gap)).contains(&(msg.ts - head.ts))
+        && divider_row(msg, Some(prev), 0, ctx).is_none()
+        && ctx.unread_before != Some(msg.id.as_str())
+        && !(prev.tmid.is_none() && prev.tcount > 0)
+}
+
+/// For every message of `msgs`, whether it continues the one before it (`continues`), tracking
+/// where each group started. One pass, so the drawing and the row model share the answer.
+pub fn continuation_flags(msgs: &[Message], ctx: &RowCtx) -> Vec<bool> {
+    let mut head = 0;
+    (0..msgs.len())
+        .map(|i| {
+            let prev = i.checked_sub(1).map(|p| &msgs[p]);
+            let joins = continues(&msgs[i], prev, Some(&msgs[head]), ctx);
+            if !joins {
+                head = i;
+            }
+            joins
+        })
+        .collect()
+}
+
+/// The lines `msg` takes in a list: its dividers (0 to 2), then its rows, without the header row
+/// when it `continues` the group before it (see `continuation_flags`). The drawing and the
+/// reducer's row model both come through here, so scrolling agrees with what is drawn. Also
+/// returns how many leading lines are dividers, so a caller can leave them out of the cursor
+/// highlight.
+pub fn block_lines(
+    msg: &Message,
+    prev: Option<&Message>,
+    continues: bool,
+    width: u16,
+    ctx: &RowCtx,
+) -> (usize, Vec<Line<'static>>) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.extend(divider_row(msg, prev, width, ctx));
+    lines.extend(unread_row(msg, width, ctx));
+    let dividers = lines.len();
+    let mut rows = render_rows(msg, width, ctx);
+    if continues {
+        rows.remove(0);
+    }
+    lines.extend(rows);
+    (dividers, lines)
+}
+
+/// Rows `msg` takes in a list: the length of `block_lines`.
+pub fn block_rows(
+    msg: &Message,
+    prev: Option<&Message>,
+    continues: bool,
+    width: u16,
+    ctx: &RowCtx,
+) -> usize {
+    block_lines(msg, prev, continues, width, ctx).1.len()
 }
 
 #[cfg(test)]
@@ -647,6 +720,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         render_rows(m, width, &ctx)
@@ -674,6 +748,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         render_rows(m, width, &ctx)
@@ -738,6 +813,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let bodies: Vec<usize> = msgs
@@ -773,6 +849,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let rows = render_rows(&m, 60, &ctx);
@@ -1181,6 +1258,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let sent = render_rows(&msg("alice", "hello there"), 60, &ctx);
@@ -1225,6 +1303,7 @@ mod tests {
                 unread_before: None,
                 unread_threads: None,
                 in_thread: false,
+                grouping: None,
                 own_id: None,
             };
             for state in [
@@ -1265,6 +1344,7 @@ mod tests {
                     unread_before: None,
                     unread_threads: None,
                     in_thread: false,
+                    grouping: None,
                     own_id: None,
                 };
                 let m = with_state(state, "alice", "hello there");
@@ -1396,6 +1476,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         assert_eq!(message_rows(&m, 40, &ctx), 2);
@@ -1517,6 +1598,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         divider_row(msg, prev, width, &ctx)
@@ -1782,13 +1864,14 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let with = parent(3, Some(AT_1402));
         let without = msg("alice", "hello");
         assert_eq!(
-            block_rows(&with, None, 60, &ctx),
-            block_rows(&without, None, 60, &ctx) + 1
+            block_rows(&with, None, false, 60, &ctx),
+            block_rows(&without, None, false, 60, &ctx) + 1
         );
     }
 
@@ -1835,6 +1918,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         render_rows(m, width, &ctx)
@@ -1866,6 +1950,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         render_rows(m, width, &ctx)
@@ -2199,6 +2284,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         render_rows(m, width, &ctx)
@@ -2546,12 +2632,13 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let m = msg("alice", &vec![":tada:"; 40].join(" "));
         assert_eq!(message_rows(&m, 40, &ctx), render_rows(&m, 40, &ctx).len());
         assert_eq!(
-            block_rows(&m, None, 40, &ctx),
+            block_rows(&m, None, false, 40, &ctx),
             message_rows(&m, 40, &ctx) + 1
         );
     }
@@ -2618,6 +2705,7 @@ mod tests {
             unread_before: None,
             unread_threads: None,
             in_thread: false,
+            grouping: None,
             own_id: None,
         };
         let plain = msg("alice", "hello");
@@ -2626,12 +2714,231 @@ mod tests {
             vec![reaction("+1", &["a"]), reaction("tada", &["b"])],
         );
         assert_eq!(
-            block_rows(&m, None, 60, &ctx),
-            block_rows(&plain, None, 60, &ctx) + 1
+            block_rows(&m, None, false, 60, &ctx),
+            block_rows(&plain, None, false, 60, &ctx) + 1
         );
         assert_eq!(
-            block_rows(&m, None, 60, &ctx),
+            block_rows(&m, None, false, 60, &ctx),
             message_rows(&m, 60, &ctx) + 1
         );
+    }
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use super::*;
+    use crate::config::Theme;
+    use crate::data::RoomId;
+
+    /// 2026-01-01 12:00:00 UTC, so a few minutes either side stay on one day.
+    const NOON: i64 = 1_767_268_800;
+
+    fn msg(id: &str, author: &str, ts: i64) -> Message {
+        Message {
+            id: id.to_string(),
+            room_id: RoomId("general".to_string()),
+            author: author.to_string(),
+            ts,
+            body: format!("body {id}"),
+            kind: MessageKind::Normal,
+            send: SendState::Sent,
+            edited: false,
+            plain_text: true,
+            reactions: Vec::new(),
+            tmid: None,
+            tshow: false,
+            tcount: 0,
+            tlm: None,
+            followers: None,
+        }
+    }
+
+    fn with<R>(grouping: Option<u32>, unread: Option<&str>, f: impl FnOnce(&RowCtx) -> R) -> R {
+        let theme = Theme::default();
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::TwoLine,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: None,
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
+            own_user: None,
+            unread_before: unread,
+            unread_threads: None,
+            in_thread: false,
+            grouping,
+            own_id: None,
+        };
+        f(&ctx)
+    }
+
+    fn continues_with(m: &Message, prev: &Message) -> bool {
+        with(Some(300), None, |ctx| {
+            continues(m, Some(prev), Some(prev), ctx)
+        })
+    }
+
+    #[test]
+    fn same_author_within_the_gap_continues() {
+        let a = msg("a", "bob", NOON);
+        assert!(continues_with(&msg("b", "bob", NOON + 300), &a));
+        assert!(!continues_with(&msg("b", "bob", NOON + 301), &a));
+        // A message earlier than the one before it never continues it.
+        assert!(!continues_with(&msg("b", "bob", NOON - 1), &a));
+    }
+
+    #[test]
+    fn the_first_message_never_continues() {
+        with(Some(300), None, |ctx| {
+            assert!(!continues(&msg("a", "bob", NOON), None, None, ctx));
+        });
+    }
+
+    #[test]
+    fn a_group_is_measured_from_its_first_message() {
+        // One message every 100 s, gap 300: 0, 100, 200 and 300 share a header; 400 is more
+        // than 300 s after the first, so it starts a new group, which 500, 600 and 700 join.
+        let msgs: Vec<Message> = (0..8)
+            .map(|i| msg(&i.to_string(), "bob", NOON + i * 100))
+            .collect();
+        let flags = with(Some(300), None, |ctx| continuation_flags(&msgs, ctx));
+        assert_eq!(flags, [false, true, true, true, false, true, true, true]);
+    }
+
+    #[test]
+    fn another_author_breaks_it_and_the_next_one_has_a_header() {
+        let a = msg("a", "bob", NOON);
+        let b = msg("b", "alice", NOON + 10);
+        let c = msg("c", "bob", NOON + 20);
+        assert!(!continues_with(&b, &a));
+        assert!(!continues_with(&c, &b));
+    }
+
+    #[test]
+    fn a_day_change_breaks_it() {
+        let a = msg("a", "bob", 86_400 * 100 - 10);
+        let b = msg("b", "bob", 86_400 * 100 + 10);
+        assert!(!continues_with(&b, &a));
+    }
+
+    #[test]
+    fn the_unread_divider_breaks_it() {
+        let a = msg("a", "bob", NOON);
+        let b = msg("b", "bob", NOON + 10);
+        assert!(with(Some(300), None, |ctx| continues(
+            &b,
+            Some(&a),
+            Some(&a),
+            ctx
+        )));
+        assert!(!with(Some(300), Some("b"), |ctx| continues(
+            &b,
+            Some(&a),
+            Some(&a),
+            ctx
+        )));
+    }
+
+    #[test]
+    fn system_deleted_and_unsent_messages_never_group() {
+        let a = msg("a", "bob", NOON);
+        for kind in [MessageKind::System, MessageKind::Deleted] {
+            let odd = Message {
+                kind,
+                ..msg("b", "bob", NOON + 10)
+            };
+            assert!(!continues_with(&odd, &a), "{kind:?} after");
+            assert!(
+                !continues_with(&msg("c", "bob", NOON + 20), &odd),
+                "{kind:?} before"
+            );
+        }
+        let unsent = Message {
+            send: SendState::Sending,
+            ..msg("b", "bob", NOON + 10)
+        };
+        assert!(!continues_with(&unsent, &a));
+        assert!(!continues_with(&msg("c", "bob", NOON + 20), &unsent));
+    }
+
+    #[test]
+    fn another_thread_breaks_it() {
+        let a = msg("a", "bob", NOON);
+        let reply = Message {
+            tmid: Some("p".to_string()),
+            ..msg("b", "bob", NOON + 10)
+        };
+        assert!(!continues_with(&reply, &a));
+        let reply2 = Message {
+            tmid: Some("p".to_string()),
+            ..msg("c", "bob", NOON + 20)
+        };
+        assert!(continues_with(&reply2, &reply));
+        let other = Message {
+            tmid: Some("q".to_string()),
+            ..msg("d", "bob", NOON + 30)
+        };
+        assert!(!continues_with(&other, &reply2));
+    }
+
+    #[test]
+    fn a_thread_marker_row_on_the_previous_message_breaks_it() {
+        let parent = Message {
+            tcount: 2,
+            ..msg("a", "bob", NOON)
+        };
+        assert!(!continues_with(&msg("b", "bob", NOON + 10), &parent));
+    }
+
+    #[test]
+    fn zero_and_none_turn_it_off() {
+        let a = msg("a", "bob", NOON);
+        let b = msg("b", "bob", NOON + 1);
+        assert!(!with(None, None, |ctx| continues(
+            &b,
+            Some(&a),
+            Some(&a),
+            ctx
+        )));
+    }
+
+    #[test]
+    fn a_grouped_message_drops_only_its_header_row() {
+        let a = msg("a", "bob", NOON);
+        let b = msg("b", "bob", NOON + 10);
+        with(Some(300), None, |ctx| {
+            let (_, lines) = block_lines(&b, Some(&a), true, 40, ctx);
+            let full = render_rows(&b, 40, ctx);
+            assert_eq!(lines.len(), full.len() - 1);
+            assert_eq!(lines[0], full[1]);
+            assert_eq!(block_rows(&b, Some(&a), true, 40, ctx), lines.len());
+        });
+    }
+
+    #[test]
+    fn dividers_are_counted_and_stay_out_of_the_cursor_rows() {
+        let a = msg("a", "bob", NOON);
+        with(Some(300), Some("a"), |ctx| {
+            let (dividers, lines) = block_lines(&a, None, false, 40, ctx);
+            assert_eq!(dividers, 2);
+            assert_eq!(lines.len(), 2 + render_rows(&a, 40, ctx).len());
+        });
+    }
+
+    #[test]
+    fn the_compact_layout_never_groups_through_a_context_with_none() {
+        // pane_row_ctx leaves `grouping` None for compact; with it None nothing is dropped.
+        let a = msg("a", "bob", NOON);
+        let b = msg("b", "bob", NOON + 1);
+        with(None, None, |ctx| {
+            assert_eq!(
+                block_rows(&b, Some(&a), false, 40, ctx),
+                render_rows(&b, 40, ctx).len()
+            );
+        });
     }
 }

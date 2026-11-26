@@ -14,11 +14,13 @@ use unicode_width::UnicodeWidthStr;
 pub const DEFAULT_HISTORY_SIZE: u16 = 50;
 pub const DEFAULT_KEY_TIMEOUT_MS: u64 = 1000;
 pub const DEFAULT_MARK_READ_DELAY_MS: u64 = 3000;
+pub const DEFAULT_MESSAGE_GROUPING_SECONDS: u32 = 180;
 /// Inclusive bounds of the integer settings (D-13; the key timeout is A1).
 pub const SIDEBAR_WIDTH_RANGE: (i64, i64) = (10, 60);
 pub const HISTORY_SIZE_RANGE: (i64, i64) = (1, 1000);
 pub const KEY_TIMEOUT_MS_RANGE: (i64, i64) = (100, 5000);
 pub const MARK_READ_DELAY_MS_RANGE: (i64, i64) = (0, 60_000);
+pub const MESSAGE_GROUPING_SECONDS_RANGE: (i64, i64) = (0, 3600);
 /// Widest a rendered timestamp may be, in columns (A7).
 pub const MAX_TIMESTAMP_WIDTH: usize = 40;
 /// Widest an `[emoji_aliases]` value may be, in columns.
@@ -106,6 +108,9 @@ pub struct Settings {
     /// config.toml key `mark_read_delay_ms`: how long a room stays open before it is marked read on
     /// the server. 0 marks it at once.
     pub mark_read_delay_ms: u64,
+    /// config.toml key `message_grouping_seconds`: the longest pause between two messages of one
+    /// author that still share a header in the two-line layout. 0 turns grouping off.
+    pub message_grouping_seconds: u32,
     /// config.toml key `follow_on_send` (D-05): `"always"` (default) jumps to the newest message
     /// after every send; `"if_at_bottom"` follows only when the newest row was already visible.
     pub follow_on_send: FollowOnSend,
@@ -127,6 +132,7 @@ impl Default for Settings {
             message_layout: MessageLayout::Compact,
             key_timeout_ms: DEFAULT_KEY_TIMEOUT_MS,
             mark_read_delay_ms: DEFAULT_MARK_READ_DELAY_MS,
+            message_grouping_seconds: DEFAULT_MESSAGE_GROUPING_SECONDS,
             follow_on_send: FollowOnSend::Always,
             emoji_aliases: HashMap::new(),
         }
@@ -141,6 +147,7 @@ const KNOWN_KEYS: &[&str] = &[
     "message_layout",
     "key_timeout_ms",
     "mark_read_delay_ms",
+    "message_grouping_seconds",
     "follow_on_send",
     "emoji_aliases",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
@@ -231,6 +238,13 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
         let (lo, hi) = MARK_READ_DELAY_MS_RANGE;
         if let Some(n) = reader.int_in(value, "mark_read_delay_ms", lo, hi) {
             settings.mark_read_delay_ms = u64::try_from(n).unwrap_or(settings.mark_read_delay_ms);
+        }
+    }
+    if let Some(value) = table.get("message_grouping_seconds") {
+        let (lo, hi) = MESSAGE_GROUPING_SECONDS_RANGE;
+        if let Some(n) = reader.int_in(value, "message_grouping_seconds", lo, hi) {
+            settings.message_grouping_seconds =
+                u32::try_from(n).unwrap_or(settings.message_grouping_seconds);
         }
     }
     if let Some(value) = table.get("emoji_aliases") {
@@ -463,6 +477,7 @@ mod tests {
         assert_eq!(defaults.message_layout, MessageLayout::Compact);
         assert_eq!(defaults.key_timeout_ms, 1000);
         assert_eq!(defaults.mark_read_delay_ms, 3000);
+        assert_eq!(defaults.message_grouping_seconds, 180);
         assert_eq!(defaults.follow_on_send, FollowOnSend::Always);
         for src in ["", "# only a comment\n"] {
             let (settings, out) = errors_of(src);
@@ -475,11 +490,12 @@ mod tests {
     fn bounds_inclusive() {
         // (key, lo, hi, accepted values, rejected values)
         type Case = (&'static str, i64, i64, &'static [i64], &'static [i64]);
-        let cases: [Case; 4] = [
+        let cases: [Case; 5] = [
             ("sidebar_width", 10, 60, &[10, 60], &[9, 61]),
             ("history_size", 1, 1000, &[1, 1000], &[0, 1001]),
             ("key_timeout_ms", 100, 5000, &[100, 5000], &[99, 5001]),
             ("mark_read_delay_ms", 0, 60_000, &[0, 60_000], &[-1, 60_001]),
+            ("message_grouping_seconds", 0, 3600, &[0, 3600], &[-1, 3601]),
         ];
         for (key, lo, hi, good, bad) in cases {
             for n in good {
@@ -516,6 +532,20 @@ mod tests {
         assert_eq!(settings.mark_read_delay_ms, 3000);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].key.as_deref(), Some("mark_read_delay_ms"));
+    }
+
+    #[test]
+    fn message_grouping_value_and_type() {
+        let grouping = |src: &str| errors_of(src).0.message_grouping_seconds;
+        assert_eq!(grouping("message_grouping_seconds = 120\n"), 120);
+        assert_eq!(grouping("message_grouping_seconds = 0\n"), 0);
+        let (settings, out) = errors_of("message_grouping_seconds = \"5m\"\n");
+        assert_eq!(settings.message_grouping_seconds, 180);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("message_grouping_seconds"));
+        let (_, out) = errors_of("message_grouping_seconds = 100000\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("message_grouping_seconds"));
     }
 
     #[test]

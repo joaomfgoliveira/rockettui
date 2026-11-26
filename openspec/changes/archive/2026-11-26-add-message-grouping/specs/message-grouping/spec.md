@@ -7,19 +7,19 @@ Draws consecutive messages from one author under a single header in the room and
 ## ADDED Requirements
 
 ### Requirement: Grouping consecutive messages
-In the two-line layout, a message SHALL continue the message before it, and so be drawn without its own header row, when both have the same author, are of the same thread (or both of none), were written on the same local day and no more than `message_grouping_seconds` apart. The gap is measured from the message directly before it, not from the first message of the group. A group's header SHALL show the author and the time of its first message; each body SHALL stay indented as under any header.
+In the two-line layout, a message SHALL continue the message before it, and so be drawn without its own header row, when both have the same author, are of the same thread (or both of none), were written on the same local day and the message is no more than `message_grouping_seconds` after the first message of the group. The gap is measured from the first message of the group, not from the message directly before it, so a group never spans more than the gap. A group's header SHALL show the author and the time of its first message; each body SHALL stay indented as under any header.
 
 #### Scenario: Burst under one header
 - **WHEN** `joliveira` writes three messages one minute apart
 - **THEN** one header with the author and the first message's time is drawn, with the three bodies under it
 
 #### Scenario: Gap
-- **WHEN** `joliveira` writes a message 20 minutes after their previous one and the setting is 300
+- **WHEN** `joliveira` writes a message 20 minutes after their previous one and the setting is 180
 - **THEN** it has its own header with its own time
 
-#### Scenario: Chained group
-- **WHEN** one author writes a message every 4 minutes for half an hour and the setting is 300
-- **THEN** all of them are under one header, because each is within the gap of the one before it
+#### Scenario: Long burst splits
+- **WHEN** one author writes a message every 2 minutes for 10 minutes and the setting is 180
+- **THEN** the messages at 0 and 2 minutes share the first header, the one at 4 minutes starts a new group (more than 180 s after the first), and so on every second message
 
 #### Scenario: Another author
 - **WHEN** a message follows one from a different author
