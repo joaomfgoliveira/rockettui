@@ -1,0 +1,57 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Display settings
+`config.toml` SHALL support `keymap_preset` (`vim` or `vim-extras`), `sidebar_width` (10-60), `history_size` (1-1000, default 50), `timestamp_format` (strftime-style, default `%H:%M`), `message_layout` (`compact` by default, or `two_line`), `key_timeout_ms` (100-5000, default 1000) and `mark_read_delay_ms` (0-60000, default 3000; `0` marks an open room read at once) and `message_grouping_seconds` (0-3600, default 300; `0` turns message grouping off, see `message-grouping`). Out-of-range or invalid values SHALL be config errors.
+
+#### Scenario: Sidebar width
+- **WHEN** the user sets `sidebar_width = 40`
+- **THEN** the sidebar is 40 columns wide
+
+#### Scenario: Invalid width
+- **WHEN** the user sets `sidebar_width = 5`
+- **THEN** the error screen reports the value and the allowed range
+
+#### Scenario: Grouping gap
+- **WHEN** the user sets `message_grouping_seconds = 120`
+- **THEN** messages of one author more than 2 minutes apart have their own headers
+
+#### Scenario: Invalid grouping gap
+- **WHEN** the user sets `message_grouping_seconds = 100000`
+- **THEN** the error screen reports the value and the allowed range
+
+#### Scenario: Mark read delay
+- **WHEN** the user sets `mark_read_delay_ms = 5000`
+- **THEN** an open unread room is marked read after 5 seconds
+
+#### Scenario: Invalid mark read delay
+- **WHEN** the user sets `mark_read_delay_ms = 100000`
+- **THEN** the error screen reports the value and the allowed range
+
+### Requirement: Timestamps in local time
+The app SHALL render message timestamps in the system local time using the configured format. A message header SHALL show only its time; a message that continues a group (see `message-grouping`) has no header and so shows no time of its own. A divider line with the date as `YYYY-MM-DD` in the local time zone SHALL be drawn above the first message of each day, including the first message of the list, wherever the messages pane or the results list shows messages.
+
+#### Scenario: Grouped message
+- **WHEN** a message continues the one before it
+- **THEN** it shows no time and the group's header shows the time of its first message
+
+#### Scenario: Custom format
+- **WHEN** `timestamp_format = "%H:%M:%S"`
+- **THEN** message rows show hours, minutes and seconds
+
+#### Scenario: Divider for the first message
+- **WHEN** a room's messages are shown
+- **THEN** a divider with the date of the first message is above it
+
+#### Scenario: Divider when the day changes
+- **WHEN** a message written on 2026-11-24 follows one written on 2026-11-23
+- **THEN** a `2026-11-24` divider is drawn between them
+
+#### Scenario: No divider within a day
+- **WHEN** two neighbouring messages were written on the same local day
+- **THEN** no divider is drawn between them
+
+#### Scenario: Cursor skips dividers
+- **WHEN** the user moves the message cursor over a day change
+- **THEN** it goes from message to message and the divider is not highlighted
