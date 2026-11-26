@@ -6,6 +6,8 @@
 //! Pure: no I/O and no `Frame`.
 
 use crate::api::ApiError;
+use crate::app::input_buf::InputBuffer;
+use crate::app::update::edit_input;
 use crate::app::{App, Focus, MAX_CMDLINE, Mode, StatusMsg, emoji, jump, messages, send, thread};
 use crate::data::{Message, MessageKind, RoomId, SendState};
 use crate::effect::{Effect, EmojiName};
@@ -124,12 +126,32 @@ fn existing(app: &App, message: &Message) -> Vec<Candidate> {
 /// name and then alphabetically, and cut at `MAX_CANDIDATES`. Each candidate carries the message's
 /// current count and own flag for its name, so choosing one the user already gave is a take-back.
 pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
+    candidates_for(app, Some(message), query)
+}
+
+/// `candidates` for a message or, with `None`, for the draft: no existing reactions, no marks, and
+/// the unicode emoji the server refuses are offered too (a character needs no server name).
+fn candidates_for(app: &App, message: Option<&Message>, query: &str) -> Vec<Candidate> {
     let query = needle(query);
+    let Some(message) = message else {
+        return search_all(app, None, &query);
+    };
     if query.is_empty() {
         return existing(app, message);
     }
+    search_all(app, Some(message), &query)
+}
+
+fn search_all(app: &App, message: Option<&Message>, query: &str) -> Vec<Candidate> {
+    let insert = message.is_none();
+    if query.is_empty() {
+        return Vec::new();
+    }
     let me = app.own_username.as_deref();
     let mark = |name: &str| -> (usize, bool) {
+        let Some(message) = message else {
+            return (0, false);
+        };
         message
             .reactions
             .iter()
@@ -164,7 +186,7 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
     };
 
     for (name, text) in aliases {
-        if let Some(rank) = rank_of(name, &query) {
+        if let Some(rank) = rank_of(name, query) {
             offer(rank, name, name.clone(), text.clone(), Source::Alias);
         }
     }
@@ -176,7 +198,7 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
         }
         let names =
             std::iter::once(emoji.name.as_str()).chain(emoji.aliases.iter().map(String::as_str));
-        if let Some(rank) = best_rank(names, &query) {
+        if let Some(rank) = best_rank(names, query) {
             let glyph = resolve(&emoji.name, aliases);
             offer(rank, &emoji.name, emoji.name.clone(), glyph, Source::Custom);
         }
@@ -185,12 +207,12 @@ pub fn candidates(app: &App, message: &Message, query: &str) -> Vec<Candidate> {
         let Some(first) = emoji.shortcodes().next() else {
             continue;
         };
-        let Some(sent) = send_name(first) else {
+        let Some(sent) = sendable(first, insert) else {
             continue;
         };
         let names = emoji.shortcodes().chain(std::iter::once(sent));
-        if let Some(rank) = best_rank(names, &query) {
-            let (name, glyph) = unicode_cell(emoji, first, sent, tone);
+        if let Some(rank) = best_rank(names, query) {
+            let (name, glyph) = unicode_cell(emoji, first, sent, tone, insert);
             offer(rank, sent, name, glyph, Source::Unicode);
         }
     }
@@ -219,6 +241,12 @@ fn skin_tone(tone: u8) -> Option<SkinTone> {
     }
 }
 
+/// The name a unicode emoji goes by: the one the server accepts, or for a draft, where the server's
+/// opinion does not matter, the crate's first shortcode when it accepts none.
+fn sendable(first: &'static str, insert: bool) -> Option<&'static str> {
+    send_name(first).or(insert.then_some(first))
+}
+
 /// What to send and what to draw for a unicode emoji in skin tone `tone` (0 for none): the toned
 /// name and glyph when the emoji has tones and the server accepts their names, else the plain ones.
 fn unicode_cell(
@@ -226,7 +254,16 @@ fn unicode_cell(
     first: &'static str,
     sent: &str,
     tone: u8,
+    insert: bool,
 ) -> (String, String) {
+    // In a draft the glyph is all there is: the tone applies whenever the emoji has one, and the
+    // name stays the plain one so a pick counts once.
+    if insert {
+        let glyph = skin_tone(tone)
+            .and_then(|t| emoji.with_skin_tone(t))
+            .unwrap_or(emoji);
+        return (sent.to_string(), glyph.as_str().to_string());
+    }
     if let Some(toned) = skin_tone(tone).and_then(|t| emoji.with_skin_tone(t))
         && let Some(name) = tone_name(first, tone)
     {
@@ -246,7 +283,10 @@ static BY_SENT: LazyLock<HashMap<&'static str, &'static Emoji>> = LazyLock::new(
 });
 
 /// How the message stands with reaction `name`: how many gave it and whether the user did.
-fn mark(app: &App, message: &Message, name: &str) -> (usize, bool) {
+fn mark(app: &App, message: Option<&Message>, name: &str) -> (usize, bool) {
+    let Some(message) = message else {
+        return (0, false);
+    };
     let me = app.own_username.as_deref();
     message
         .reactions
@@ -342,7 +382,7 @@ pub struct Section {
 /// The cell for a name the user picked before, when it is still offered: an alias, a custom emoji
 /// or a unicode emoji (in the skin tone in use). `None` for anything else, so a name the server
 /// dropped drops out of "Frequently used" without being forgotten.
-fn offered_cell(app: &App, message: &Message, name: &str) -> Option<Candidate> {
+fn offered_cell(app: &App, message: Option<&Message>, name: &str) -> Option<Candidate> {
     let aliases = &app.settings.emoji_aliases;
     let (sent, glyph, source) = if let Some(text) = aliases.get(name) {
         (name.to_string(), text.clone(), Source::Alias)
@@ -355,9 +395,20 @@ fn offered_cell(app: &App, message: &Message, name: &str) -> Option<Candidate> {
             Source::Custom,
         )
     } else {
-        let emoji = BY_SENT.get(name)?;
+        let emoji = match BY_SENT.get(name) {
+            Some(emoji) => emoji,
+            // A draft also offers the emoji the server refuses, counted under their first name.
+            None if message.is_none() => emojis::get_by_shortcode(name)?,
+            None => return None,
+        };
         let first = emoji.shortcodes().next()?;
-        let (sent, glyph) = unicode_cell(emoji, first, name, app.emoji_recents.tone);
+        let (sent, glyph) = unicode_cell(
+            emoji,
+            first,
+            name,
+            app.emoji_recents.tone,
+            message.is_none(),
+        );
         (sent, glyph, Source::Unicode)
     };
     let (count, own) = mark(app, message, &sent);
@@ -371,17 +422,18 @@ fn offered_cell(app: &App, message: &Message, name: &str) -> Option<Candidate> {
 }
 
 /// The unicode emoji of `groups` the server accepts, in the crate's order, in the skin tone in use.
-fn group_cells(app: &App, message: &Message, groups: &[Group]) -> Vec<Candidate> {
+fn group_cells(app: &App, message: Option<&Message>, groups: &[Group]) -> Vec<Candidate> {
+    let insert = message.is_none();
     let tone = app.emoji_recents.tone;
     let mut cells = Vec::new();
     for emoji in groups.iter().flat_map(|group| group.emojis()) {
         let Some(first) = emoji.shortcodes().next() else {
             continue;
         };
-        let Some(sent) = send_name(first) else {
+        let Some(sent) = sendable(first, insert) else {
             continue;
         };
-        let (name, glyph) = unicode_cell(emoji, first, sent, tone);
+        let (name, glyph) = unicode_cell(emoji, first, sent, tone, insert);
         let (count, own) = mark(app, message, &name);
         cells.push(Candidate {
             name,
@@ -400,6 +452,12 @@ fn group_cells(app: &App, message: &Message, groups: &[Group]) -> Vec<Candidate>
 /// left out when empty. With a search: one "Results" section from `candidates`, or none when the
 /// search matches nothing. The skin tone in use is applied to every emoji that has tones.
 pub fn sections(app: &App, message: &Message, query: &str) -> Vec<Section> {
+    sections_for(app, Some(message), query)
+}
+
+/// `sections` for a message or, with `None`, for the draft: no "On this message", no marks, and the
+/// emoji the server refuses are offered.
+fn sections_for(app: &App, message: Option<&Message>, query: &str) -> Vec<Section> {
     let mut out: Vec<Section> = Vec::new();
     let mut push = |kind: SectionKind, cells: Vec<Candidate>| {
         if !cells.is_empty() {
@@ -407,10 +465,12 @@ pub fn sections(app: &App, message: &Message, query: &str) -> Vec<Section> {
         }
     };
     if !needle(query).is_empty() {
-        push(SectionKind::Results, candidates(app, message, query));
+        push(SectionKind::Results, candidates_for(app, message, query));
         return out;
     }
-    push(SectionKind::OnMessage, existing(app, message));
+    if let Some(message) = message {
+        push(SectionKind::OnMessage, existing(app, message));
+    }
     let frequent = app
         .emoji_recents
         .top(crate::app::emoji_recents::MAX_FREQUENT, |name| {
@@ -605,26 +665,34 @@ fn under_cursor<'a>(app: &'a App, room: &RoomId) -> Option<&'a Message> {
 /// without it the app cannot tell whether choosing a reaction adds it or takes it back.
 const NO_USERNAME: &str = "Username not loaded yet: try again in a moment";
 
-/// The open picker: the message it was opened on (by room and id, never a copy of its reactions),
-/// what has been typed and which result is selected. Everything shown is derived from these and
-/// the app on every draw, so a live change shows up without any plumbing.
+/// What the box does with the emoji it is given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// React to a message: held by room and id, never a copy of its reactions.
+    React { room: RoomId, id: String },
+    /// Put the emoji in the draft, in place of the `:` that opened the box.
+    Insert,
+}
+
+/// The open emoji box: what it is for, what has been typed and which result is selected.
+/// Everything shown is derived from these and the app on every draw, so a live change shows up
+/// without any plumbing.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ReactPicker {
-    pub room: RoomId,
-    pub id: String,
+pub struct EmojiBox {
+    pub target: Target,
     pub query: String,
     pub selected: usize,
-    /// True while searching, false while browsing. The picker opens browsing, as a vim buffer
-    /// opens in Normal mode: keys move and choose, and only `/`, `i` and `a` start typing.
+    /// True while searching, false while browsing. The box opens browsing, as a vim buffer opens in
+    /// Normal mode: keys move and choose, and only `/`, `i` and `a` start typing. The insert target
+    /// is always typing.
     pub typing: bool,
 }
 
 /// Redacting `Debug`: the typed search text is never printed, only its length.
-impl std::fmt::Debug for ReactPicker {
+impl std::fmt::Debug for EmojiBox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReactPicker")
-            .field("room", &self.room)
-            .field("id", &self.id)
+        f.debug_struct("EmojiBox")
+            .field("target", &self.target)
             .field("query_len", &self.query.chars().count())
             .field("selected", &self.selected)
             .field("typing", &self.typing)
@@ -643,18 +711,29 @@ pub struct View {
     pub selected: usize,
     /// True while searching (the search line is live input), false while browsing.
     pub typing: bool,
+    /// True for the box opened from a colon in the draft.
+    pub insert: bool,
 }
 
-/// The message the picker was opened on, while the room still holds it.
-fn held<'a>(app: &'a App, picker: &ReactPicker) -> Option<&'a Message> {
-    thread::held_message(app, &picker.room, &picker.id)
+/// The message the box was opened on, while the room still holds it. `None` for the insert target,
+/// which has no message.
+fn held<'a>(app: &'a App, picker: &EmojiBox) -> Option<&'a Message> {
+    match &picker.target {
+        Target::React { room, id } => thread::held_message(app, room, id),
+        Target::Insert => None,
+    }
 }
 
-/// The picker's content now, `None` when it is closed or its message is gone.
+/// The box's content now, `None` when it is closed or its message is gone.
 pub fn view(app: &App) -> Option<View> {
-    let picker = app.react_picker.as_ref()?;
-    let message = held(app, picker)?;
-    let sections = sections(app, message, &picker.query);
+    let picker = app.emoji_box.as_ref()?;
+    let insert = picker.target == Target::Insert;
+    let message = if insert {
+        None
+    } else {
+        Some(held(app, picker)?)
+    };
+    let sections = sections_for(app, message, &picker.query);
     let candidates = flatten(&sections);
     let selected = picker.selected.min(candidates.len().saturating_sub(1));
     Some(View {
@@ -663,6 +742,7 @@ pub fn view(app: &App) -> Option<View> {
         candidates,
         selected,
         typing: picker.typing,
+        insert,
     })
 }
 
@@ -696,9 +776,8 @@ pub fn open(app: &mut App) {
     app.matcher.reset();
     // The list is the session's (`app::emoji`): a failed load is tried again here as well.
     emoji::ensure_loaded(app);
-    app.react_picker = Some(ReactPicker {
-        room,
-        id,
+    app.emoji_box = Some(EmojiBox {
+        target: Target::React { room, id },
         query: String::new(),
         selected: 0,
         typing: false,
@@ -710,13 +789,19 @@ pub fn open(app: &mut App) {
 /// `search_key`.
 pub fn key(app: &mut App, chord: Chord) {
     if chord.code == KeyCode::Char('c') && chord.mods == KeyModifiers::CONTROL {
-        app.react_picker = None;
+        app.emoji_box = None;
         return;
     }
-    let Some(typing) = app.react_picker.as_ref().map(|p| p.typing) else {
+    let Some(typing) = app.emoji_box.as_ref().map(|p| p.typing) else {
         return;
     };
-    if typing {
+    if app
+        .emoji_box
+        .as_ref()
+        .is_some_and(|b| b.target == Target::Insert)
+    {
+        insert_key(app, chord);
+    } else if typing {
         search_key(app, chord);
     } else {
         browse_key(app, chord);
@@ -783,15 +868,15 @@ fn browse_key(app: &mut App, chord: Chord) {
     } else if chord.code == KeyCode::Enter {
         send_selected(app);
     } else if plain('q') || (chord.code == KeyCode::Esc && chord.mods.is_empty()) {
-        app.react_picker = None;
+        app.emoji_box = None;
     } else if plain('/') {
-        if let Some(picker) = app.react_picker.as_mut() {
+        if let Some(picker) = app.emoji_box.as_mut() {
             picker.query.clear();
             picker.selected = 0;
             picker.typing = true;
         }
     } else if (plain('i') || plain('a'))
-        && let Some(picker) = app.react_picker.as_mut()
+        && let Some(picker) = app.emoji_box.as_mut()
     {
         picker.typing = true;
     }
@@ -809,11 +894,11 @@ fn search_key(app: &mut App, chord: Chord) {
     } else if chord.code == KeyCode::Enter {
         send_selected(app);
     } else if chord.code == KeyCode::Esc {
-        if let Some(picker) = app.react_picker.as_mut() {
+        if let Some(picker) = app.emoji_box.as_mut() {
             picker.typing = false;
         }
     } else if chord.code == KeyCode::Backspace {
-        let Some(picker) = app.react_picker.as_mut() else {
+        let Some(picker) = app.emoji_box.as_mut() else {
             return;
         };
         if picker.query.pop().is_none() {
@@ -824,7 +909,7 @@ fn search_key(app: &mut App, chord: Chord) {
     } else if let KeyCode::Char(c) = chord.code
         && chord.mods.is_empty()
         && !c.is_control()
-        && let Some(picker) = app.react_picker.as_mut()
+        && let Some(picker) = app.emoji_box.as_mut()
         && picker.query.chars().count() < MAX_CMDLINE
     {
         picker.query.push(c);
@@ -835,7 +920,15 @@ fn search_key(app: &mut App, chord: Chord) {
 /// A paste while searching: one line, capped, control characters removed. While browsing there is
 /// no text to paste into, so a paste does nothing.
 pub fn paste(app: &mut App, text: &str) {
-    if let Some(picker) = app.react_picker.as_mut()
+    if app
+        .emoji_box
+        .as_ref()
+        .is_some_and(|b| b.target == Target::Insert)
+    {
+        insert_paste(app, text);
+        return;
+    }
+    if let Some(picker) = app.emoji_box.as_mut()
         && picker.typing
     {
         let room = MAX_CMDLINE.saturating_sub(picker.query.chars().count());
@@ -859,7 +952,7 @@ fn move_selection(app: &mut App, step: Step) {
         Step::NextSection => jump_section(&view.sections, view.selected, true),
         Step::PrevSection => jump_section(&view.sections, view.selected, false),
     };
-    if let Some(picker) = app.react_picker.as_mut() {
+    if let Some(picker) = app.emoji_box.as_mut() {
         picker.selected = selected;
     }
 }
@@ -889,26 +982,29 @@ fn pick_name(app: &App, name: &str) -> String {
 /// back, not from a local guess.
 fn send_selected(app: &mut App) {
     let Some(view) = view(app) else {
-        app.react_picker = None;
+        app.emoji_box = None;
         return;
     };
     let Some(candidate) = view.candidates.get(view.selected) else {
         return;
     };
-    let Some(picker) = app.react_picker.clone() else {
+    let Some(picker) = app.emoji_box.clone() else {
+        return;
+    };
+    let Target::React { id, .. } = picker.target.clone() else {
         return;
     };
     // The room may have become detached while the picker was open.
     if jump::refuse_if_detached(app) {
-        app.react_picker = None;
+        app.emoji_box = None;
         return;
     }
     let Some(own) = app.own_username.clone() else {
-        app.react_picker = None;
+        app.emoji_box = None;
         return;
     };
     let Some(message) = held(app, &picker) else {
-        app.react_picker = None;
+        app.emoji_box = None;
         return;
     };
     let add = !is_given_by(message, &own, &candidate.name);
@@ -921,25 +1017,157 @@ fn send_selected(app: &mut App) {
             .push(Effect::SaveRecents(app.emoji_recents.clone()));
     }
     app.effects.push(Effect::React {
-        id: picker.id,
+        id,
         emoji: EmojiName::new(name),
         add,
     });
-    app.react_picker = None;
+    app.emoji_box = None;
+}
+
+/// True for a character a shortcode is made of.
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')
+}
+
+/// True when a colon typed after `before` (the draft up to the colon) could start a shortcode: the
+/// character before it is not a letter, a digit or another colon, and it is not inside inline code
+/// or a fenced block (an odd number of backticks before it).
+pub fn colon_starts_shortcode(before: &str) -> bool {
+    let after_word = before
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_alphanumeric() || c == ':');
+    !after_word && before.matches('`').count().is_multiple_of(2)
+}
+
+/// A colon was just typed into the draft: open the box to put an emoji in its place when the colon
+/// could start a shortcode. The colon stays in the draft until the box ends.
+pub fn open_insert(app: &mut App) {
+    if app.mode != Mode::Insert || app.emoji_box.is_some() {
+        return;
+    }
+    let before = app.input.text_before_cursor();
+    let Some(before) = before.strip_suffix(':') else {
+        return;
+    };
+    if !colon_starts_shortcode(before) {
+        return;
+    }
+    app.matcher.reset();
+    emoji::ensure_loaded(app);
+    app.emoji_box = Some(EmojiBox {
+        target: Target::Insert,
+        query: String::new(),
+        selected: 0,
+        typing: true,
+    });
+}
+
+/// A key while the box is open from a colon: name characters are the search, the movement keys do
+/// what they do anywhere in the box, `Enter` puts the emoji in the draft, `Esc` leaves the colon,
+/// `Backspace` on an empty search takes it back, and any other character closes the box and goes
+/// into the draft after what was typed. Nothing else does anything.
+fn insert_key(app: &mut App, chord: Chord) {
+    if let Some(step) = step_key(chord) {
+        move_selection(app, step);
+    } else if tone_key(chord) {
+        cycle_tone(app);
+    } else if chord.code == KeyCode::Enter {
+        insert_selected(app);
+    } else if chord.code == KeyCode::Esc {
+        app.emoji_box = None;
+    } else if chord.code == KeyCode::Backspace {
+        let Some(picker) = app.emoji_box.as_mut() else {
+            return;
+        };
+        if picker.query.pop().is_none() {
+            app.emoji_box = None;
+            edit_input(app, InputBuffer::backspace);
+        } else {
+            picker.selected = 0;
+        }
+    } else if let KeyCode::Char(c) = chord.code
+        && chord.mods.is_empty()
+        && !c.is_control()
+    {
+        if is_name_char(c) {
+            if let Some(picker) = app.emoji_box.as_mut()
+                && picker.query.chars().count() < MAX_CMDLINE
+            {
+                picker.query.push(c);
+                picker.selected = 0;
+            }
+        } else {
+            fall_through(app, &c.to_string());
+        }
+    }
+}
+
+/// A paste while the box is open from a colon: all name characters extend the search, anything else
+/// closes the box and goes into the draft after the search.
+fn insert_paste(app: &mut App, text: &str) {
+    if text.chars().all(is_name_char) {
+        if let Some(picker) = app.emoji_box.as_mut() {
+            let room = MAX_CMDLINE.saturating_sub(picker.query.chars().count());
+            picker.query.extend(text.chars().take(room));
+            picker.selected = 0;
+        }
+    } else {
+        fall_through(app, text);
+    }
+}
+
+/// Close the box and put what was typed in the search and then `text` in the draft: what plain
+/// typing would have made.
+fn fall_through(app: &mut App, text: &str) {
+    let Some(picker) = app.emoji_box.take() else {
+        return;
+    };
+    edit_input(app, |input| {
+        input.insert_str(&picker.query);
+        input.insert_str(text);
+    });
+}
+
+/// `Enter` in the box opened from a colon: put the selected emoji in the draft in place of the
+/// colon, count the pick and close. With nothing selected only the box closes.
+fn insert_selected(app: &mut App) {
+    let candidate = view(app).and_then(|v| v.candidates.get(v.selected).cloned());
+    app.emoji_box = None;
+    let Some(candidate) = candidate else {
+        return;
+    };
+    let text = match candidate.source {
+        Source::Custom => format!(":{}:", candidate.name),
+        _ => candidate.glyph.clone(),
+    };
+    let counted = pick_name(app, &candidate.name);
+    app.emoji_recents.record(&counted);
+    app.effects
+        .push(Effect::SaveRecents(app.emoji_recents.clone()));
+    edit_input(app, |input| {
+        if input.text_before_cursor().ends_with(':') {
+            input.backspace();
+        }
+        input.insert_str(&text);
+    });
 }
 
 /// Keep the open picker in step with the room: close it when its message is gone or can no longer
 /// be reacted to (deleted), and keep the selection inside a list that shrank. The reducer calls
 /// this after every action, so a live change shows at once.
 pub fn close_if_stale(app: &mut App) {
-    let Some(picker) = app.react_picker.as_ref() else {
+    let Some(picker) = app.emoji_box.as_ref() else {
         return;
     };
-    let alive = held(app, picker).is_some_and(reactable);
+    let alive = match picker.target {
+        Target::React { .. } => held(app, picker).is_some_and(reactable),
+        Target::Insert => app.mode == Mode::Insert,
+    };
     if !alive {
-        app.react_picker = None;
+        app.emoji_box = None;
     } else if let Some(view) = view(app)
-        && let Some(picker) = app.react_picker.as_mut()
+        && let Some(picker) = app.emoji_box.as_mut()
     {
         picker.selected = view.selected;
     }
@@ -1461,7 +1689,7 @@ mod tests {
     }
 
     fn typing(app: &App) -> bool {
-        app.react_picker.as_ref().expect("open").typing
+        app.emoji_box.as_ref().expect("open").typing
     }
 
     fn type_text(app: &mut App, text: &str) {
@@ -1475,8 +1703,14 @@ mod tests {
         let (mut app, room) = picker_app("alice", Vec::new());
         let mode = app.mode;
         press(&mut app, "+");
-        let picker = app.react_picker.clone().expect("open");
-        assert_eq!((picker.room, picker.id.as_str()), (room.clone(), "m1"));
+        let picker = app.emoji_box.clone().expect("open");
+        assert_eq!(
+            picker.target,
+            Target::React {
+                room: room.clone(),
+                id: "m1".to_string()
+            }
+        );
         assert_eq!((picker.query.as_str(), picker.selected), ("", 0));
         assert_eq!(app.mode, mode);
         assert_eq!(app.mode.label(), "NORMAL");
@@ -1488,7 +1722,7 @@ mod tests {
     fn the_picker_opens_on_the_users_own_message_too() {
         let (mut app, _) = picker_app("me", Vec::new());
         press(&mut app, "+");
-        assert!(app.react_picker.is_some());
+        assert!(app.emoji_box.is_some());
     }
 
     #[test]
@@ -1506,7 +1740,7 @@ mod tests {
             slot.kind = kind;
             slot.send = send;
             press(&mut app, "+");
-            assert_eq!(app.react_picker, None, "{kind:?} {send:?}");
+            assert_eq!(app.emoji_box, None, "{kind:?} {send:?}");
             assert!(app.effects.is_empty());
             assert!(app.status_msg.is_none());
         }
@@ -1517,14 +1751,14 @@ mod tests {
         let (mut app, _) = picker_app("alice", Vec::new());
         app.focus = Focus::Sidebar;
         press(&mut app, "+");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         app.focus = Focus::Input;
         press(&mut app, "+");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         app.focus = Focus::Messages;
         app.current_room = None;
         press(&mut app, "+");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
     }
 
     #[test]
@@ -1538,7 +1772,7 @@ mod tests {
             },
         );
         press(&mut app, "+");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         assert!(status(&app).contains("older messages"), "{}", status(&app));
         assert!(
             app.effects.is_empty(),
@@ -1551,7 +1785,7 @@ mod tests {
         let (mut app, _) = picker_app("alice", Vec::new());
         app.own_username = None;
         press(&mut app, "+");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         assert_eq!(
             status(&app),
             "Username not loaded yet: try again in a moment"
@@ -1571,7 +1805,7 @@ mod tests {
         assert_eq!(names(&view(&app).unwrap().candidates), ["ship_it"]);
         press(&mut app, "<Esc>");
         press(&mut app, "<Esc>");
-        assert!(app.react_picker.is_none());
+        assert!(app.emoji_box.is_none());
 
         // A failed load: the picker works from unicode meanwhile and asks again on opening.
         app.custom_emojis = CustomEmojis::Loading;
@@ -1592,7 +1826,7 @@ mod tests {
             &mut app,
             Action::CustomEmojisLoaded(vec![custom("zzship_it", &[])]),
         );
-        assert!(app.react_picker.is_some(), "still open");
+        assert!(app.emoji_box.is_some(), "still open");
         assert_eq!(names(&view(&app).unwrap().candidates), ["zzship_it"]);
     }
 
@@ -1603,7 +1837,7 @@ mod tests {
         press(&mut app, "/");
         // `j` would move the cursor, `:` would open the command line, `?` the context popup.
         type_text(&mut app, "j:?/gr");
-        let picker = app.react_picker.as_ref().expect("still open");
+        let picker = app.emoji_box.as_ref().expect("still open");
         assert_eq!(picker.query, "j:?/gr");
         assert_eq!(messages::view(&app, &room).cursor, 1);
         assert_eq!(app.mode.label(), "NORMAL");
@@ -1648,12 +1882,12 @@ mod tests {
         search_for(&mut app, "ta");
         press(&mut app, "<Right>");
         press(&mut app, "<Right>");
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 2);
+        assert_eq!(app.emoji_box.as_ref().unwrap().selected, 2);
         type_text(&mut app, "d");
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
+        assert_eq!(app.emoji_box.as_ref().unwrap().selected, 0);
         press(&mut app, "<Right>");
         press(&mut app, "<BS>");
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
+        assert_eq!(app.emoji_box.as_ref().unwrap().selected, 0);
     }
 
     #[test]
@@ -1663,7 +1897,7 @@ mod tests {
             press(&mut app, "+");
             app.effects.clear();
             press(&mut app, close);
-            assert_eq!(app.react_picker, None, "{close}");
+            assert_eq!(app.emoji_box, None, "{close}");
             assert!(reacts(&app).is_empty(), "{close}");
         }
     }
@@ -1678,7 +1912,7 @@ mod tests {
                 search_for(&mut app, "tada");
             }
             press(&mut app, "<C-c>");
-            assert_eq!(app.react_picker, None, "searching: {searching}");
+            assert_eq!(app.emoji_box, None, "searching: {searching}");
             assert!(reacts(&app).is_empty());
         }
     }
@@ -1689,16 +1923,16 @@ mod tests {
         press(&mut app, "+");
         search_for(&mut app, "ab");
         press(&mut app, "<BS>");
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "a");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "a");
         assert!(typing(&app));
         press(&mut app, "<BS>");
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "");
         assert!(
             typing(&app),
             "an empty search is still a search until the next Backspace"
         );
         press(&mut app, "<BS>");
-        assert!(app.react_picker.is_some(), "still open");
+        assert!(app.emoji_box.is_some(), "still open");
         assert!(!typing(&app), "back to browsing");
         assert!(reacts(&app).is_empty());
     }
@@ -1709,18 +1943,18 @@ mod tests {
         press(&mut app, "+");
         // While browsing there is no text to paste into.
         update(&mut app, Action::Paste("ignored".to_string()));
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "");
         press(&mut app, "/");
         update(&mut app, Action::Paste("ta\u{1b}[31mda\nx".to_string()));
-        let query = app.react_picker.as_ref().unwrap().query.clone();
+        let query = app.emoji_box.as_ref().unwrap().query.clone();
         assert!(!query.chars().any(char::is_control), "{query:?}");
         assert!(query.starts_with("ta"), "{query:?}");
         update(&mut app, Action::Paste("z".repeat(1000)));
-        assert!(app.react_picker.as_ref().unwrap().query.chars().count() <= MAX_CMDLINE);
+        assert!(app.emoji_box.as_ref().unwrap().query.chars().count() <= MAX_CMDLINE);
         // Typing past the cap adds nothing either.
-        let before = app.react_picker.as_ref().unwrap().query.clone();
+        let before = app.emoji_box.as_ref().unwrap().query.clone();
         type_text(&mut app, "q");
-        assert_eq!(app.react_picker.as_ref().unwrap().query, before);
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, before);
     }
 
     // ---- browsing and searching
@@ -1733,7 +1967,7 @@ mod tests {
             assert!(!typing(&app));
             // A letter is not text: it is a browsing key or nothing.
             press(&mut app, "x");
-            assert_eq!(app.react_picker.as_ref().unwrap().query, "");
+            assert_eq!(app.emoji_box.as_ref().unwrap().query, "");
         }
     }
 
@@ -1743,15 +1977,15 @@ mod tests {
         press(&mut app, "+");
         search_for(&mut app, "tada");
         press(&mut app, "<Esc>");
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "tada");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "tada");
         press(&mut app, "/");
         assert!(typing(&app));
         assert_eq!(
-            app.react_picker.as_ref().unwrap().query,
+            app.emoji_box.as_ref().unwrap().query,
             "",
             "a new search starts empty"
         );
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 0);
+        assert_eq!(app.emoji_box.as_ref().unwrap().selected, 0);
     }
 
     #[test]
@@ -1764,9 +1998,9 @@ mod tests {
             assert!(!typing(&app));
             press(&mut app, key);
             assert!(typing(&app), "{key}");
-            assert_eq!(app.react_picker.as_ref().unwrap().query, "tad", "{key}");
+            assert_eq!(app.emoji_box.as_ref().unwrap().query, "tad", "{key}");
             type_text(&mut app, "a");
-            assert_eq!(app.react_picker.as_ref().unwrap().query, "tada", "{key}");
+            assert_eq!(app.emoji_box.as_ref().unwrap().query, "tada", "{key}");
         }
     }
 
@@ -1779,7 +2013,7 @@ mod tests {
         assert!(!results.is_empty());
         app.effects.clear();
         press(&mut app, "<Esc>");
-        assert!(app.react_picker.is_some(), "not closed");
+        assert!(app.emoji_box.is_some(), "not closed");
         assert!(!typing(&app));
         assert_eq!(
             view(&app).unwrap().candidates,
@@ -1789,7 +2023,7 @@ mod tests {
         assert!(reacts(&app).is_empty(), "nothing was sent");
         // A second Esc, now browsing, closes.
         press(&mut app, "<Esc>");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
     }
 
     #[test]
@@ -1838,7 +2072,7 @@ mod tests {
             reacts(&app),
             [("m1".to_string(), "tada".to_string(), false)]
         );
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
     }
 
     #[test]
@@ -1860,13 +2094,13 @@ mod tests {
     fn other_keys_do_nothing_while_browsing_and_never_reach_the_keymap() {
         let (mut app, room) = picker_app("alice", vec![reaction("tada", &["ana"])]);
         press(&mut app, "+");
-        let before = app.react_picker.clone();
+        let before = app.emoji_box.clone();
         for key in [
             "x", "z", ":", "?", "d", "e", "r", "n", "g", "G", "+", "1", " ",
         ] {
             press(&mut app, key);
         }
-        assert_eq!(app.react_picker, before, "nothing about the picker changed");
+        assert_eq!(app.emoji_box, before, "nothing about the picker changed");
         assert_eq!(
             messages::view(&app, &room).cursor,
             1,
@@ -1886,7 +2120,7 @@ mod tests {
         let (mut app, _) = picker_app("alice", Vec::new());
         press(&mut app, "+");
         update(&mut app, Action::KeyTimeout);
-        assert!(app.react_picker.is_some());
+        assert!(app.emoji_box.is_some());
     }
 
     #[test]
@@ -1897,7 +2131,7 @@ mod tests {
         search_for(&mut app, "tada");
         press(&mut app, "<CR>");
         assert_eq!(reacts(&app), [("m1".to_string(), "tada".to_string(), true)]);
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         // The row is not guessed at: the message is as the server last said.
         assert_eq!(
             app.messages[&app.current_room.clone().unwrap()][1]
@@ -1918,7 +2152,7 @@ mod tests {
             reacts(&app),
             [("m1".to_string(), "tada".to_string(), false)]
         );
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
     }
 
     #[test]
@@ -1975,7 +2209,7 @@ mod tests {
         app.effects.clear();
         search_for(&mut app, "zzzzqqqq");
         press(&mut app, "<CR>"); // no match
-        assert!(app.react_picker.is_some());
+        assert!(app.emoji_box.is_some());
         assert!(reacts(&app).is_empty());
     }
 
@@ -1993,7 +2227,7 @@ mod tests {
             },
         );
         press(&mut app, "<CR>");
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         assert!(reacts(&app).is_empty());
         assert!(status(&app).contains("older messages"));
     }
@@ -2011,7 +2245,7 @@ mod tests {
         };
         live.ts = app.messages[&room][1].ts;
         update(&mut app, Action::RtMessage(live));
-        assert!(app.react_picker.is_some(), "still open");
+        assert!(app.emoji_box.is_some(), "still open");
         assert_eq!(on_message(&app), ["+1", "rocket"]);
     }
 
@@ -2037,7 +2271,7 @@ mod tests {
         let view = view(&app).unwrap();
         assert_eq!(view.selected, 1);
         assert!(view.selected < view.candidates.len());
-        assert_eq!(app.react_picker.as_ref().unwrap().selected, 1);
+        assert_eq!(app.emoji_box.as_ref().unwrap().selected, 1);
     }
 
     #[test]
@@ -2051,10 +2285,10 @@ mod tests {
                 id: "m1".to_string(),
             },
         );
-        assert_eq!(app.react_picker, None);
+        assert_eq!(app.emoji_box, None);
         // The key after that is an ordinary key again.
         press(&mut app, "j");
-        assert!(app.react_picker.is_none());
+        assert!(app.emoji_box.is_none());
     }
 
     #[test]
@@ -2069,7 +2303,7 @@ mod tests {
         newer.ts = i64::MAX / 4 + 10;
         update(&mut app, Action::RtMessage(newer));
         assert_eq!(app.messages[&room].len(), 4);
-        assert!(app.react_picker.is_some());
+        assert!(app.emoji_box.is_some());
     }
 
     // ---- sections, the grid, tones and picks
@@ -2181,7 +2415,7 @@ mod tests {
         assert_eq!(kinds(&app), [SectionKind::Results]);
         assert_eq!(view(&app).unwrap().sections[0].cells[0].name, "tada");
         // The ranking is the one `candidates` gives.
-        let message = held(&app, app.react_picker.as_ref().unwrap()).unwrap();
+        let message = held(&app, app.emoji_box.as_ref().unwrap()).unwrap();
         assert_eq!(
             view(&app).unwrap().candidates,
             candidates(&app, message, "tad")
@@ -2365,7 +2599,7 @@ mod tests {
         search_for(&mut app, "ab");
         press(&mut app, "<C-t>");
         assert_eq!(app.emoji_recents.tone, 2);
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "ab");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "ab");
         assert!(typing(&app));
         for _ in 0..4 {
             press(&mut app, "<C-t>");
@@ -2381,7 +2615,7 @@ mod tests {
         press(&mut app, "/");
         // `h`, `l`, `H` and `L` are text, not movement.
         type_text(&mut app, "hlHL");
-        assert_eq!(app.react_picker.as_ref().unwrap().query, "hlHL");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "hlHL");
         press(&mut app, "<BS>");
         press(&mut app, "<BS>");
         press(&mut app, "<BS>");
@@ -2477,12 +2711,285 @@ mod tests {
         press(&mut app, "+");
         search_for(&mut app, "sentinelquery");
         assert_eq!(
-            app.react_picker.as_ref().unwrap().query,
+            app.emoji_box.as_ref().unwrap().query,
             "sentinelquery",
             "the whole text was typed"
         );
-        let shown = format!("{:?} {:#?}", app.react_picker, app.react_picker);
+        let shown = format!("{:?} {:#?}", app.emoji_box, app.emoji_box);
         assert!(!shown.contains("sentinelquery"), "{shown}");
         assert!(shown.contains("query_len"), "{shown}");
+    }
+
+    // --- The box opened from a colon in the draft. ---
+
+    /// An app in Insert mode on an empty draft.
+    fn insert_app() -> App {
+        let (mut app, _) = picker_app("alice", Vec::new());
+        press(&mut app, "i");
+        assert_eq!(app.mode, Mode::Insert);
+        app
+    }
+
+    /// Type `text` key by key, spaces included.
+    fn type_draft(app: &mut App, text: &str) {
+        for c in text.chars() {
+            if c == ' ' {
+                press(app, "<Space>");
+            } else {
+                press(app, &c.to_string());
+            }
+        }
+    }
+
+    fn open_box(app: &App) -> bool {
+        app.emoji_box
+            .as_ref()
+            .is_some_and(|b| b.target == Target::Insert)
+    }
+
+    #[test]
+    fn a_colon_starts_a_shortcode_unless_after_a_word_a_colon_or_inside_code() {
+        assert!(colon_starts_shortcode(""));
+        assert!(colon_starts_shortcode("ship it "));
+        assert!(colon_starts_shortcode("("));
+        assert!(colon_starts_shortcode("a,"));
+        assert!(colon_starts_shortcode("line\n"));
+        assert!(!colon_starts_shortcode("10"));
+        assert!(!colon_starts_shortcode("std:"));
+        assert!(!colon_starts_shortcode("`code "));
+        assert!(!colon_starts_shortcode("```\nfn "));
+        assert!(colon_starts_shortcode("`code` "));
+    }
+
+    #[test]
+    fn a_colon_opens_the_box_searching_at_the_start_and_after_a_space() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        assert!(open_box(&app));
+        assert!(typing(&app));
+        assert_eq!(app.input.text(), ":");
+        let mut app = insert_app();
+        type_draft(&mut app, "ship it :");
+        assert!(open_box(&app));
+        assert_eq!(app.input.text(), "ship it :");
+        assert!(view(&app).unwrap().insert);
+    }
+
+    #[test]
+    fn colons_in_times_paths_and_code_do_not_open_the_box() {
+        for text in ["10:30", "std::fs", "`a :", "```\nx :"] {
+            let mut app = insert_app();
+            for c in text.chars() {
+                match c {
+                    ' ' => press(&mut app, "<Space>"),
+                    '\n' => press(&mut app, "<S-CR>"),
+                    c => press(&mut app, &c.to_string()),
+                }
+                assert!(!open_box(&app), "{text:?}");
+            }
+        }
+        let mut app = insert_app();
+        type_draft(&mut app, "(:");
+        assert!(open_box(&app));
+    }
+
+    #[test]
+    fn a_paste_with_a_colon_does_not_open_the_box() {
+        let mut app = insert_app();
+        update(&mut app, Action::Paste("see :".to_string()));
+        assert!(app.emoji_box.is_none());
+        assert_eq!(app.input.text(), "see :");
+    }
+
+    #[test]
+    fn typing_goes_to_the_search_and_never_to_the_draft_or_the_keymap() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        type_draft(&mut app, "tadj");
+        let b = app.emoji_box.as_ref().unwrap();
+        assert_eq!(b.query, "tadj");
+        assert_eq!(app.input.text(), ":");
+        press(&mut app, "<BS>");
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "tad");
+        assert!(
+            view(&app)
+                .unwrap()
+                .candidates
+                .iter()
+                .any(|c| c.name == "tada")
+        );
+    }
+
+    #[test]
+    fn the_arrows_move_and_enter_puts_that_emoji_in_the_draft() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        type_draft(&mut app, "tad");
+        let second = view(&app).unwrap().candidates[1].glyph.clone();
+        press(&mut app, "<Right>");
+        press(&mut app, "<CR>");
+        assert!(app.emoji_box.is_none());
+        assert_eq!(app.input.text(), second);
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn enter_on_an_empty_search_takes_the_first_emoji_of_the_grid() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        let first = view(&app).unwrap().candidates[0].glyph.clone();
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), first);
+    }
+
+    #[test]
+    fn a_unicode_emoji_replaces_the_colon_and_the_cursor_follows_it() {
+        let mut app = insert_app();
+        type_draft(&mut app, "ship it :");
+        type_draft(&mut app, "tada");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "ship it \u{1F389}");
+        type_draft(&mut app, "!");
+        assert_eq!(app.input.text(), "ship it \u{1F389}!");
+    }
+
+    #[test]
+    fn the_skin_tone_in_use_applies_to_the_inserted_emoji() {
+        let mut app = insert_app();
+        app.emoji_recents.tone = 3;
+        press(&mut app, ":");
+        type_draft(&mut app, "thumbsup");
+        press(&mut app, "<CR>");
+        let want = emojis::get("\u{1F44D}")
+            .unwrap()
+            .with_skin_tone(SkinTone::Medium)
+            .unwrap();
+        assert_eq!(app.input.text(), want.as_str());
+    }
+
+    #[test]
+    fn an_alias_inserts_its_text_and_a_custom_emoji_inserts_its_name() {
+        let mut app = insert_app();
+        app.settings
+            .emoji_aliases
+            .insert("partyparrot".to_string(), "\u{1F99C}".to_string());
+        app.custom_emojis = emoji::CustomEmojis::Loaded(vec![custom("rtshipit", &[])]);
+        press(&mut app, ":");
+        type_draft(&mut app, "partyparrot");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "\u{1F99C}");
+        type_draft(&mut app, " :");
+        type_draft(&mut app, "rtshipit");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "\u{1F99C} :rtshipit:");
+    }
+
+    #[test]
+    fn the_emoji_replaces_a_colon_in_the_middle_of_a_draft() {
+        let mut app = insert_app();
+        type_draft(&mut app, "a b");
+        press(&mut app, "<Left>");
+        press(&mut app, "<Left>");
+        type_draft(&mut app, " :");
+        assert!(open_box(&app));
+        assert_eq!(app.input.text(), "a : b");
+        type_draft(&mut app, "tada");
+        press(&mut app, "<CR>");
+        assert_eq!(app.input.text(), "a \u{1F389} b");
+    }
+
+    #[test]
+    fn enter_with_no_match_closes_the_box_and_keeps_the_colon() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        type_draft(&mut app, "zzqqxx");
+        press(&mut app, "<CR>");
+        assert!(app.emoji_box.is_none());
+        assert_eq!(app.input.text(), ":");
+        assert!(app.emoji_recents.is_empty());
+    }
+
+    #[test]
+    fn a_character_that_is_not_a_name_closes_the_box_and_goes_to_the_draft() {
+        for (typed, draft) in [(":)", ":)"), (":tada ", ":tada "), (":tada:", ":tada:")] {
+            let mut app = insert_app();
+            type_draft(&mut app, typed);
+            assert!(app.emoji_box.is_none(), "{typed}");
+            assert_eq!(app.input.text(), draft);
+            assert_eq!(app.mode, Mode::Insert);
+        }
+    }
+
+    #[test]
+    fn a_paste_with_a_space_closes_the_box_after_what_was_typed() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        type_draft(&mut app, "ta");
+        update(&mut app, Action::Paste("da now".to_string()));
+        assert!(app.emoji_box.is_none());
+        assert_eq!(app.input.text(), ":tada now");
+        let mut app = insert_app();
+        press(&mut app, ":");
+        update(&mut app, Action::Paste("tada".to_string()));
+        assert_eq!(app.emoji_box.as_ref().unwrap().query, "tada");
+    }
+
+    #[test]
+    fn esc_and_ctrl_c_leave_the_colon_and_the_search_out_of_the_draft() {
+        for key in ["<Esc>", "<C-c>"] {
+            let mut app = insert_app();
+            press(&mut app, ":");
+            type_draft(&mut app, "tad");
+            press(&mut app, key);
+            assert!(app.emoji_box.is_none());
+            assert_eq!(app.input.text(), ":");
+            assert_eq!(app.mode, Mode::Insert);
+            assert!(app.emoji_recents.is_empty());
+            assert_eq!(sent_effects(&app), 0);
+        }
+    }
+
+    #[test]
+    fn backspace_on_an_empty_search_takes_the_colon_back() {
+        let mut app = insert_app();
+        type_draft(&mut app, "a :");
+        press(&mut app, "<BS>");
+        assert!(app.emoji_box.is_none());
+        assert_eq!(app.input.text(), "a ");
+    }
+
+    #[test]
+    fn the_box_from_a_colon_has_no_message_section_and_no_marks() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        let shown = view(&app).unwrap();
+        assert_ne!(shown.sections[0].kind, SectionKind::OnMessage);
+        assert!(shown.candidates.iter().all(|c| c.count == 0 && !c.own));
+        // The server's table accepts every emoji today, so the refusal path is the rule itself:
+        // a draft falls back to the crate's first shortcode, a reaction offers nothing.
+        assert_eq!(sendable("tada", true), Some("tada"));
+    }
+
+    #[test]
+    fn a_pick_is_counted_and_saved_and_escape_counts_nothing() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        type_draft(&mut app, "tada");
+        press(&mut app, "<CR>");
+        assert_eq!(app.emoji_recents.count_of("tada"), 1);
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::SaveRecents(_)))
+        );
+    }
+
+    #[test]
+    fn leaving_insert_mode_while_the_box_is_open_closes_it() {
+        let mut app = insert_app();
+        press(&mut app, ":");
+        app.mode = Mode::Normal;
+        close_if_stale(&mut app);
+        assert!(app.emoji_box.is_none());
     }
 }

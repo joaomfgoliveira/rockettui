@@ -11,9 +11,9 @@ expression: out
 ┃  ▾ Work (1)              ┃│gr                 show who reacted to the message│
 ┃      ~design-review      ┃│:                  start a : command              │
 ┃      +platform           ┃│<C-k>              switch to another room by name │
-┃  ▾ People (1)            ┃│a                  type a message (Insert mode)   │
-┃  Recent                  ┃│i                  type a message (Insert mode)   │
-┃    #random               ┃│o                  type a message (Insert mode)   │
+┃  ▾ People (1)            ┃│a                  type a message (: for emoji)   │
+┃  Recent                  ┃│i                  type a message (: for emoji)   │
+┃    #random               ┃│o                  type a message (: for emoji)   │
 ┃    &secrets [e2e]        ┃│                                                  │
 ┃    #quiet                ┃│Insert mode                                       │
 ┃                          ┃│<C-b>              also show the thread reply in t│
