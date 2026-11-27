@@ -86,6 +86,35 @@ impl std::fmt::Debug for AttachmentRef {
     }
 }
 
+/// Which attachment to download to be opened: the server path of the file (`/file-upload/...`),
+/// its media type and the size the server reports. All are server text or numbers about a user's
+/// file, so its `Debug` prints only lengths.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DownloadRef {
+    pub path: String,
+    pub mime: String,
+    pub size: Option<u64>,
+}
+
+impl std::fmt::Debug for DownloadRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DownloadRef(<{}> bytes, <{}> bytes)",
+            self.path.len(),
+            self.mime.len()
+        )
+    }
+}
+
+/// Why the external program did not run: it could not be started, or it exited with an error right
+/// away. Nothing of the program's output or arguments is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenError {
+    CannotStart,
+    ExitedWithError,
+}
+
 /// One IO intent: a fetch, or one send attempt.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -226,6 +255,18 @@ pub enum Effect {
     /// `VIEW_SHRINK_TO` pixels). Makes no request and needs no server. Answers
     /// `Action::AttachmentViewReady` or `Action::AttachmentViewFailed`.
     LoadAttachmentView(AttachmentRef),
+    /// Download an attachment to the downloads cache under a name the client builds (a hash of
+    /// its path and an extension from its media type), unless that file is already there, so a
+    /// second open makes no request. Answers `Action::AttachmentDownloaded` or
+    /// `Action::AttachmentDownloadFailed`.
+    DownloadAttachment(DownloadRef),
+    /// Run an external program on a downloaded file: `command` is the program and its leading
+    /// arguments, the file is added as the last one, never through a shell, with the standard
+    /// streams detached. Answers `Action::AttachmentOpened`. Needs no server.
+    OpenFile {
+        command: Vec<String>,
+        file: std::path::PathBuf,
+    },
     /// Mark `room` read with `POST subscriptions.read`. Answers `Action::MarkReadDone`; a failure
     /// answers nothing, the room just stays unread.
     MarkRead { room: RoomId },
@@ -237,6 +278,15 @@ pub enum Effect {
 /// Perform `effect` and return the Actions that report the outcome. `client` is `Err` when the
 /// HTTP client could not be built, which fails every effect with that error.
 pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action> {
+    // A file that is already downloaded needs no server, so it is opened even offline.
+    if let Effect::DownloadAttachment(download) = &effect
+        && let Some(file) = downloaded_file(download)
+    {
+        return vec![Action::AttachmentDownloaded {
+            download: download.clone(),
+            file,
+        }];
+    }
     // The state file needs no server, so these two run even when the client could not be built.
     match effect {
         Effect::LoadRecents => {
@@ -252,6 +302,7 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 tokio::task::spawn_blocking(move || save_recents(dir.as_deref(), &recents)).await;
             return Vec::new();
         }
+        Effect::OpenFile { command, file } => return vec![open_file(command, file).await],
         _ => {}
     }
     let client = match client {
@@ -328,6 +379,12 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::FetchAttachmentImage(image) => Action::AttachmentImageFailed(image),
                 Effect::LoadRecents | Effect::SaveRecents(_) => return Vec::new(),
                 Effect::LoadAttachmentView(image) => Action::AttachmentViewFailed(image),
+                Effect::DownloadAttachment(download) => Action::AttachmentDownloadFailed {
+                    download,
+                    error: crate::api::DownloadError::Failed,
+                },
+                // Handled before the client was looked at.
+                Effect::OpenFile { .. } => return Vec::new(),
             }];
         }
     };
@@ -575,8 +632,106 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::LoadAttachmentView(image) => vec![
             load_attachment_view(&client, attachment_cache_dir_from_env().as_deref(), image).await,
         ],
-        Effect::LoadRecents | Effect::SaveRecents(_) => Vec::new(),
+        Effect::DownloadAttachment(download) => {
+            vec![download_attachment(&client, download).await]
+        }
+        Effect::LoadRecents | Effect::SaveRecents(_) | Effect::OpenFile { .. } => Vec::new(),
     }
+}
+
+/// The downloads directory from the environment, `None` when there is no usable one.
+fn downloads_dir_from_env() -> Option<std::path::PathBuf> {
+    crate::download::downloads_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+/// The file of `download` when it is already in `dir`: a regular file under the name the client
+/// builds. `None` for a media type outside the list, which is never opened.
+fn downloaded_file_in(dir: &std::path::Path, download: &DownloadRef) -> Option<std::path::PathBuf> {
+    let file = dir.join(crate::download::file_name(&download.path, &download.mime)?);
+    std::fs::metadata(&file)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .map(|_| file)
+}
+
+fn downloaded_file(download: &DownloadRef) -> Option<std::path::PathBuf> {
+    downloaded_file_in(&downloads_dir_from_env()?, download)
+}
+
+/// Download `download` into `dir` (see `Effect::DownloadAttachment`). A media type outside the
+/// list is refused before anything is requested.
+pub async fn download_attachment_into(
+    client: &Client,
+    dir: Option<&std::path::Path>,
+    download: DownloadRef,
+) -> Action {
+    use crate::api::{DownloadError, MAX_DOWNLOAD_BYTES};
+    let failed = |download, error| Action::AttachmentDownloadFailed { download, error };
+    let Some(name) = crate::download::file_name(&download.path, &download.mime) else {
+        return failed(download, DownloadError::Refused);
+    };
+    let Some(dir) = dir else {
+        return failed(download, DownloadError::Save);
+    };
+    if let Some(file) = downloaded_file_in(dir, &download) {
+        return Action::AttachmentDownloaded { download, file };
+    }
+    if download.size.is_some_and(|n| n > MAX_DOWNLOAD_BYTES as u64) {
+        return failed(download, DownloadError::TooLarge);
+    }
+    match client
+        .download_attachment(&download.path, dir, &name, MAX_DOWNLOAD_BYTES)
+        .await
+    {
+        Ok(file) => Action::AttachmentDownloaded { download, file },
+        Err(error) => failed(download, error),
+    }
+}
+
+async fn download_attachment(client: &Client, download: DownloadRef) -> Action {
+    download_attachment_into(client, downloads_dir_from_env().as_deref(), download).await
+}
+
+/// How long a program that was just started is watched for an immediate failure.
+const EARLY_EXIT_WATCH: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Start `command` (the program and its leading arguments) with `file` as the last argument. No
+/// shell: every entry is one argument as written. The standard streams are detached so the program
+/// cannot draw over the interface. The program is watched for a moment, so one that fails at
+/// once is reported; after that it is left to run, and a background task reaps it when it ends so
+/// it never lingers as a zombie. The client never waits for it and never stops it.
+pub async fn open_file(command: Vec<String>, file: std::path::PathBuf) -> Action {
+    use std::process::{Command, Stdio};
+    let Some((program, args)) = command.split_first() else {
+        return Action::AttachmentOpened(Err(OpenError::CannotStart));
+    };
+    let spawned = Command::new(program)
+        .args(args)
+        .arg(&file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return Action::AttachmentOpened(Err(OpenError::CannotStart));
+    };
+    let deadline = tokio::time::Instant::now() + EARLY_EXIT_WATCH;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Action::AttachmentOpened(Ok(())),
+            Ok(Some(_)) => return Action::AttachmentOpened(Err(OpenError::ExitedWithError)),
+            Ok(None) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            // Still running, or it cannot be asked: it started.
+            Ok(None) | Err(_) => break,
+        }
+    }
+    // Reap it when it ends, off the async threads.
+    drop(tokio::task::spawn_blocking(move || {
+        let _ = child.wait();
+    }));
+    Action::AttachmentOpened(Ok(()))
 }
 
 /// The state directory from the environment, `None` when there is no usable one.
@@ -1722,6 +1877,219 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
             .mount(server)
             .await;
+    }
+
+    fn download_ref() -> DownloadRef {
+        DownloadRef {
+            path: "/file-upload/v1/clip.mp4".to_string(),
+            mime: "video/mp4".to_string(),
+            size: Some(100),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_download_is_saved_under_a_client_built_name_and_not_asked_for_twice() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/v1/clip.mp4"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"video bytes".to_vec()))
+            .mount(&server)
+            .await;
+        let dir = cache_tmp("download-ok");
+        let action =
+            download_attachment_into(&client_for(&server), Some(&dir), download_ref()).await;
+        let Action::AttachmentDownloaded { download, file } = action else {
+            panic!("expected the file, got {action:?}");
+        };
+        assert_eq!(download, download_ref());
+        assert_eq!(file.parent(), Some(dir.as_path()));
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.ends_with(".mp4") && !name.contains("clip"), "{name}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"video bytes");
+        // Asking again opens the same file with no request.
+        let second = MockServer::start().await;
+        let again =
+            download_attachment_into(&client_for(&second), Some(&dir), download_ref()).await;
+        assert_eq!(
+            again,
+            Action::AttachmentDownloaded {
+                download: download_ref(),
+                file: file.clone()
+            }
+        );
+        assert!(second.received_requests().await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_download_of_an_unlisted_type_or_a_hostile_name_is_refused_before_any_request() {
+        let server = MockServer::start().await;
+        let dir = cache_tmp("download-refused");
+        let mut pdf = download_ref();
+        pdf.mime = "application/pdf".to_string();
+        let action = download_attachment_into(&client_for(&server), Some(&dir), pdf.clone()).await;
+        assert_eq!(
+            action,
+            Action::AttachmentDownloadFailed {
+                download: pdf,
+                error: crate::api::DownloadError::Refused
+            }
+        );
+        let mut absolute = download_ref();
+        absolute.path = "https://elsewhere.example/file-upload/a/b.mp4".to_string();
+        let action =
+            download_attachment_into(&client_for(&server), Some(&dir), absolute.clone()).await;
+        assert_eq!(
+            action,
+            Action::AttachmentDownloadFailed {
+                download: absolute,
+                error: crate::api::DownloadError::Refused
+            }
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(!dir.exists());
+    }
+
+    #[tokio::test]
+    async fn a_download_over_the_reported_size_makes_no_request_and_a_404_fails() {
+        let server = MockServer::start().await;
+        let dir = cache_tmp("download-fail");
+        let mut big = download_ref();
+        big.size = Some(crate::api::MAX_DOWNLOAD_BYTES as u64 + 1);
+        let action = download_attachment_into(&client_for(&server), Some(&dir), big.clone()).await;
+        assert_eq!(
+            action,
+            Action::AttachmentDownloadFailed {
+                download: big,
+                error: crate::api::DownloadError::TooLarge
+            }
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let action =
+            download_attachment_into(&client_for(&server), Some(&dir), download_ref()).await;
+        assert!(matches!(
+            action,
+            Action::AttachmentDownloadFailed {
+                error: crate::api::DownloadError::Failed,
+                ..
+            }
+        ));
+        // No directory to save in: the file could not be saved.
+        let action = download_attachment_into(&client_for(&server), None, download_ref()).await;
+        assert!(matches!(
+            action,
+            Action::AttachmentDownloadFailed {
+                error: crate::api::DownloadError::Save,
+                ..
+            }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shell script in a fresh temporary directory, run as a program.
+    #[cfg(unix)]
+    fn script(name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = cache_tmp(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("player.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, path)
+    }
+
+    #[cfg(unix)]
+    async fn wait_for(path: &std::path::Path) -> String {
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && !text.is_empty()
+            {
+                return text;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the program did not write its file");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_program_gets_its_arguments_then_the_file_as_one_last_argument() {
+        // The script writes what it was given to a file named in its own text.
+        let out = cache_tmp("open-args-out").with_extension("txt");
+        let (dir2, program2) = script(
+            "open-args2",
+            &format!(
+                "printf '%s\\n' \"$#\" \"$1\" \"$2\" \"$3\" > '{}'",
+                out.display()
+            ),
+        );
+        let file = dir2.join("my clip; rm -rf $HOME.mp4");
+        let action = open_file(
+            vec![
+                program2.display().to_string(),
+                "--force-window".to_string(),
+                "a b".to_string(),
+            ],
+            file.clone(),
+        )
+        .await;
+        assert_eq!(action, Action::AttachmentOpened(Ok(())));
+        let seen = wait_for(&out).await;
+        let lines: Vec<&str> = seen.lines().collect();
+        assert_eq!(lines[0], "3", "no shell splitting: {seen}");
+        assert_eq!(lines[1], "--force-window");
+        assert_eq!(lines[2], "a b");
+        assert_eq!(
+            lines[3],
+            file.display().to_string(),
+            "the file, as one argument"
+        );
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_program_that_is_missing_or_fails_at_once_is_reported() {
+        let action = open_file(
+            vec!["/nonexistent/definitely-not-a-player".to_string()],
+            "/tmp/x.mp4".into(),
+        )
+        .await;
+        assert_eq!(
+            action,
+            Action::AttachmentOpened(Err(OpenError::CannotStart))
+        );
+        assert_eq!(
+            open_file(Vec::new(), "/tmp/x.mp4".into()).await,
+            Action::AttachmentOpened(Err(OpenError::CannotStart))
+        );
+        let (dir, failing) = script("open-fail", "exit 3");
+        let action = open_file(vec![failing.display().to_string()], "/tmp/x.mp4".into()).await;
+        assert_eq!(
+            action,
+            Action::AttachmentOpened(Err(OpenError::ExitedWithError))
+        );
+        let (dir_ok, quick) = script("open-quick", "exit 0");
+        let action = open_file(vec![quick.display().to_string()], "/tmp/x.mp4".into()).await;
+        assert_eq!(action, Action::AttachmentOpened(Ok(())));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir_ok);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_program_that_keeps_running_does_not_hold_the_client() {
+        let (dir, slow) = script("open-slow", "sleep 2");
+        let started = std::time::Instant::now();
+        let action = open_file(vec![slow.display().to_string()], "/tmp/x.mp4".into()).await;
+        assert_eq!(action, Action::AttachmentOpened(Ok(())));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

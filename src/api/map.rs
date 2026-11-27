@@ -337,7 +337,30 @@ fn attachments(msg: &WireMsg) -> Vec<Attachment> {
     }
     for a in &msg.attachments {
         let name = a.title.as_deref().unwrap_or("");
-        let path = a.image_url.as_deref().filter(|p| fetchable_path(p));
+        // The file the attachment serves: an image, else a video, else an audio file, each with
+        // its own media type and size.
+        let (url, media_type, media_size) = if a.image_url.is_some() || a.image_type.is_some() {
+            (
+                a.image_url.as_deref(),
+                a.image_type.as_deref(),
+                a.image_size,
+            )
+        } else if a.video_url.is_some() || a.video_type.is_some() {
+            (
+                a.video_url.as_deref(),
+                a.video_type.as_deref(),
+                a.video_size,
+            )
+        } else if a.audio_url.is_some() || a.audio_type.is_some() {
+            (
+                a.audio_url.as_deref(),
+                a.audio_type.as_deref(),
+                a.audio_size,
+            )
+        } else {
+            (None, None, None)
+        };
+        let path = url.filter(|p| fetchable_path(p));
         // The original, when `image_url` is a thumbnail of it.
         let full = a
             .title_link
@@ -347,11 +370,16 @@ fn attachments(msg: &WireMsg) -> Vec<Attachment> {
             .image_dimensions
             .as_ref()
             .and_then(|d| Some((d.width.filter(|w| *w > 0)?, d.height.filter(|h| *h > 0)?)));
-        let kind = if a.image_url.is_some() || a.image_type.is_some() {
-            attachment_kind(a.image_type.as_deref().or(Some("image/")))
+        let default_type = if a.image_url.is_some() || a.image_type.is_some() {
+            Some("image/")
+        } else if a.video_url.is_some() || a.video_type.is_some() {
+            Some("video/")
+        } else if a.audio_url.is_some() || a.audio_type.is_some() {
+            Some("audio/")
         } else {
-            AttachmentKind::Other
+            None
         };
+        let kind = attachment_kind(media_type.or(default_type));
         if name.is_empty() || is_thumb(name) {
             continue;
         }
@@ -361,8 +389,8 @@ fn attachments(msg: &WireMsg) -> Vec<Attachment> {
             }
             existing.path = existing.path.take().or(path.map(str::to_string));
             existing.full_path = existing.full_path.take().or(full.map(str::to_string));
-            existing.mime = existing.mime.take().or(a.image_type.clone());
-            existing.size = existing.size.or(a.image_size);
+            existing.mime = existing.mime.take().or(media_type.map(str::to_string));
+            existing.size = existing.size.or(media_size);
             existing.dims = existing.dims.or(dims);
             continue;
         }
@@ -371,8 +399,8 @@ fn attachments(msg: &WireMsg) -> Vec<Attachment> {
             name: name.to_string(),
             path: path.map(str::to_string),
             full_path: full.map(str::to_string),
-            mime: a.image_type.clone(),
-            size: a.image_size,
+            mime: media_type.map(str::to_string),
+            size: media_size,
             dims,
         });
     }
@@ -1644,6 +1672,40 @@ mod tests {
         assert_eq!(names, ["a.png", "b.png"]);
         assert_eq!(m.attachments[0].dims, Some((10, 20)));
         assert!(m.attachments[1].path.is_none(), "a parent segment");
+    }
+
+    #[test]
+    fn a_video_attachment_keeps_its_path_type_and_size() {
+        let m = attach_msg("a-video");
+        assert_eq!(m.body, "[attachment: clip.mp4 (4.8 MB)]");
+        assert_eq!(m.attachments.len(), 1, "the file and the attachment merge");
+        let a = &m.attachments[0];
+        assert_eq!(a.kind, AttachmentKind::Video);
+        assert_eq!(a.path.as_deref(), Some("/file-upload/v1/clip.mp4"));
+        assert!(a.full_path.is_none(), "the original is the path itself");
+        assert_eq!(a.mime.as_deref(), Some("video/mp4"));
+        assert_eq!(a.size, Some(5_000_000));
+        assert!(a.dims.is_none());
+    }
+
+    #[test]
+    fn an_audio_attachment_keeps_its_path_type_and_size() {
+        let m = attach_msg("a-audio");
+        assert_eq!(m.body, "[attachment: voice.ogg (4.0 KB)]");
+        let a = &m.attachments[0];
+        assert_eq!(a.kind, AttachmentKind::Audio);
+        assert_eq!(a.path.as_deref(), Some("/file-upload/a1/voice.ogg"));
+        assert_eq!(a.mime.as_deref(), Some("audio/ogg"));
+        assert_eq!(a.size, Some(4096));
+    }
+
+    #[test]
+    fn a_video_at_an_absolute_address_has_no_path() {
+        let m = attach_msg("a-video-abs");
+        let a = &m.attachments[0];
+        assert_eq!(a.kind, AttachmentKind::Video);
+        assert_eq!(a.mime.as_deref(), Some("video/mp4"));
+        assert!(a.path.is_none() && a.full_path.is_none());
     }
 
     #[test]

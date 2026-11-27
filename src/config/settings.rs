@@ -130,6 +130,46 @@ pub struct Settings {
     /// their `:name:` in the theme's `[messages.custom_emoji]` style (their image where the
     /// terminal can show it).
     pub emoji_aliases: HashMap<String, String>,
+    /// config.toml table `[open]`: the program that opens a downloaded attachment, per kind.
+    pub open: OpenSettings,
+}
+
+/// The programs `[open]` names: each an argument list (the program, then its leading arguments),
+/// never a shell string. The file is added as the last argument when one runs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenSettings {
+    pub image: Option<Vec<String>>,
+    pub video: Option<Vec<String>>,
+    pub audio: Option<Vec<String>>,
+    pub default: Option<Vec<String>>,
+}
+
+impl OpenSettings {
+    /// The command (program and leading arguments) for an attachment of `kind`: its own key, else
+    /// `default`, else the platform's opener. `None` for a kind that is not opened.
+    pub fn command(&self, kind: crate::data::AttachmentKind) -> Option<Vec<String>> {
+        use crate::data::AttachmentKind;
+        let own = match kind {
+            AttachmentKind::Image => &self.image,
+            AttachmentKind::Video => &self.video,
+            AttachmentKind::Audio => &self.audio,
+            AttachmentKind::Other => return None,
+        };
+        Some(
+            own.clone()
+                .or_else(|| self.default.clone())
+                .unwrap_or_else(|| vec![platform_opener().to_string()]),
+        )
+    }
+}
+
+/// The opener used when `[open]` names none: `open` on macOS, `xdg-open` elsewhere.
+pub const fn platform_opener() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    }
 }
 
 impl Default for Settings {
@@ -148,6 +188,7 @@ impl Default for Settings {
             animate_images: true,
             image_max_rows: DEFAULT_IMAGE_MAX_ROWS,
             emoji_aliases: HashMap::new(),
+            open: OpenSettings::default(),
         }
     }
 }
@@ -166,6 +207,7 @@ const KNOWN_KEYS: &[&str] = &[
     "animate_images",
     "image_max_rows",
     "emoji_aliases",
+    "open",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
     "server_url",
     "user_id",
@@ -282,9 +324,94 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
     if let Some(value) = table.get("emoji_aliases") {
         settings.emoji_aliases = parse_emoji_aliases(&mut reader, value);
     }
+    if let Some(value) = table.get("open") {
+        settings.open = parse_open(&mut reader, value);
+    }
     // D-03: unknown keys and tables only warn. The connection keys are known (Phase 3, D-01).
     reader.warn_unknown(table, KNOWN_KEYS, "");
     settings
+}
+
+/// Read the `[open]` table. Each key is a non-empty array of strings whose first entry, the
+/// program, is not empty; no entry may hold a NUL character. An invalid key is reported and left
+/// unset, the others are kept.
+fn parse_open(reader: &mut Reader<'_>, value: &Spanned<DeValue<'_>>) -> OpenSettings {
+    let mut open = OpenSettings::default();
+    let DeValue::Table(table) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            "open",
+            format!("expected a table, found {}", value.get_ref().type_str()),
+        );
+        return open;
+    };
+    for (name, slot) in [
+        ("image", &mut open.image),
+        ("video", &mut open.video),
+        ("audio", &mut open.audio),
+        ("default", &mut open.default),
+    ] {
+        if let Some(entry) = table.get(name) {
+            *slot = open_command(reader, entry, &format!("open.{name}"));
+        }
+    }
+    reader.warn_unknown(table, &["image", "video", "audio", "default"], "open.");
+    open
+}
+
+/// One program and its leading arguments from an array of strings.
+fn open_command(
+    reader: &mut Reader<'_>,
+    value: &Spanned<DeValue<'_>>,
+    key: &str,
+) -> Option<Vec<String>> {
+    let DeValue::Array(items) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            key,
+            format!(
+                "expected an array of strings, found {}",
+                value.get_ref().type_str()
+            ),
+        );
+        return None;
+    };
+    if items.is_empty() {
+        reader.error(
+            value.span().start,
+            key,
+            "a program is required: an array with the program first, then its arguments",
+        );
+        return None;
+    }
+    let mut command = Vec::new();
+    for item in items.iter() {
+        let DeValue::String(text) = item.get_ref() else {
+            reader.error(
+                item.span().start,
+                key,
+                format!(
+                    "every entry must be a string, found {}",
+                    item.get_ref().type_str()
+                ),
+            );
+            return None;
+        };
+        if text.contains('\0') {
+            reader.error(item.span().start, key, "must not contain a NUL character");
+            return None;
+        }
+        command.push(text.to_string());
+    }
+    if command[0].is_empty() {
+        reader.error(
+            items[0].span().start,
+            key,
+            "the program name must not be empty",
+        );
+        return None;
+    }
+    Some(command)
 }
 
 /// At most this many characters of a user-written alias name are echoed in an error.
@@ -598,6 +725,91 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].key.as_deref(), Some("animate_images"));
+    }
+
+    #[test]
+    fn open_defaults_to_the_platform_opener() {
+        use crate::data::AttachmentKind::*;
+        let (settings, out) = errors_of("");
+        assert!(out.is_empty());
+        assert_eq!(settings.open, OpenSettings::default());
+        for kind in [Image, Video, Audio] {
+            assert_eq!(
+                settings.open.command(kind),
+                Some(vec![platform_opener().to_string()])
+            );
+        }
+        assert_eq!(
+            settings.open.command(Other),
+            None,
+            "other files are not opened"
+        );
+        let (settings, out) = errors_of("[open]\n");
+        assert!(out.is_empty(), "known table, no warning: {out:?}");
+        assert_eq!(settings.open, OpenSettings::default());
+    }
+
+    #[test]
+    fn open_reads_each_key_and_falls_back_to_default() {
+        use crate::data::AttachmentKind::*;
+        let (settings, out) = errors_of(
+            "[open]\nvideo = [\"mpv\", \"--force-window\"]\nimage = [\"feh\"]\ndefault = [\"xdg-open\"]\n",
+        );
+        assert!(out.is_empty(), "{out:?}");
+        let cmd = |k| settings.open.command(k).unwrap();
+        assert_eq!(cmd(Video), ["mpv", "--force-window"]);
+        assert_eq!(cmd(Image), ["feh"]);
+        assert_eq!(cmd(Audio), ["xdg-open"], "falls back to default");
+        let (settings, out) = errors_of("[open]\naudio = [\"vlc\", \"--intf\", \"dummy\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(
+            settings.open.command(Audio).unwrap(),
+            ["vlc", "--intf", "dummy"]
+        );
+        assert_eq!(
+            settings.open.command(Video).unwrap(),
+            [platform_opener()],
+            "no default set: the platform opener"
+        );
+    }
+
+    #[test]
+    fn open_rejects_an_empty_list_a_non_array_and_bad_entries() {
+        use crate::data::AttachmentKind::*;
+        let (settings, out) = errors_of("[open]\nvideo = []\n");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].key.as_deref(), Some("open.video"));
+        assert!(out[0].message.contains("program is required"));
+        assert_eq!(settings.open.video, None, "an invalid key stays unset");
+        let (_, out) = errors_of("[open]\nvideo = \"mpv\"\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("open.video"));
+        assert_eq!(out[0].message, "expected an array of strings, found string");
+        let (_, out) = errors_of("[open]\nvideo = [\"mpv\", 3]\n");
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].message.contains("must be a string"),
+            "{}",
+            out[0].message
+        );
+        let (_, out) = errors_of("[open]\nvideo = [\"\", \"x\"]\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "the program name must not be empty");
+        let (_, out) = errors_of("[open]\nvideo = [\"mpv\", \"a\\u0000b\"]\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "must not contain a NUL character");
+        // The other keys are still read when one is wrong.
+        let (settings, out) = errors_of("[open]\nvideo = []\naudio = [\"vlc\"]\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(settings.open.command(Audio).unwrap(), ["vlc"]);
+        let (_, out) = errors_of("open = 3\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("open"));
+        let (_, out) = errors_of("[open]\nmovie = [\"x\"]\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, Severity::Warning);
+        assert_eq!(out[0].key.as_deref(), Some("open.movie"));
+        let _ = (Image, Other);
     }
 
     #[test]

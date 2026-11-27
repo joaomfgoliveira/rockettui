@@ -7,8 +7,8 @@ use crate::app::emoji::EmojiView;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, attachments, channels, command, edit,
-    emoji, follow, help, history, image_view, jump, react, reactions, read, realtime, results,
-    search, send, sidebar, switcher, thread, thread_list,
+    emoji, follow, help, history, image_view, jump, open, react, reactions, read, realtime,
+    results, search, send, sidebar, switcher, thread, thread_list,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -244,6 +244,11 @@ fn reduce(app: &mut App, action: Action) {
             image_view::on_view_ready(app, image, decoded)
         }
         Action::AttachmentViewFailed(image) => image_view::on_view_failed(app, image),
+        Action::AttachmentDownloaded { download, file } => open::on_downloaded(app, download, file),
+        Action::AttachmentDownloadFailed { download, error } => {
+            open::on_download_failed(app, download, error)
+        }
+        Action::AttachmentOpened(result) => open::on_opened(app, result),
         Action::RtConnected => realtime::on_connected(app),
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),
@@ -378,6 +383,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowReactions => reactions::open(app),
         Action::OpenChannel => channels::open(app),
         Action::ShowImage => image_view::open(app),
+        Action::OpenAttachment => open::open(app),
         Action::OpenThread => thread::open(app),
         Action::ListThreads => thread_list::open(app),
         Action::ThreadListSearchDue => thread_list::on_search_due(app),

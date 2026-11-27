@@ -18,5 +18,13 @@
 {"_id":"a-thumb","msg":"","ts":"2026-11-16T10:00:05.000Z","u":{"username":"bob"},
  "file":{"_id":"o1","name":"big.png","type":"image/png","size":3670016},
  "files":[{"_id":"o1","name":"big.png","type":"image/png","size":3670016},{"_id":"t1","name":"thumb-big.png","type":"image/png","size":9000}],
- "attachments":[{"title":"big.png","title_link":"/file-upload/o1/big.png","image_url":"/file-upload/t1/thumb-big.png","image_type":"image/png","image_size":9000,"image_dimensions":{"width":1920,"height":1080}}]}
+ "attachments":[{"title":"big.png","title_link":"/file-upload/o1/big.png","image_url":"/file-upload/t1/thumb-big.png","image_type":"image/png","image_size":9000,"image_dimensions":{"width":1920,"height":1080}}]},
+{"_id":"a-video","msg":"","ts":"2026-11-16T10:00:06.000Z","u":{"username":"bob"},
+ "file":{"_id":"v1","name":"clip.mp4","type":"video/mp4","size":5000000},
+ "files":[{"_id":"v1","name":"clip.mp4","type":"video/mp4","size":5000000}],
+ "attachments":[{"title":"clip.mp4","type":"file","title_link":"/file-upload/v1/clip.mp4","video_url":"/file-upload/v1/clip.mp4","video_type":"video/mp4","video_size":5000000}]},
+{"_id":"a-audio","msg":"","ts":"2026-11-16T10:00:07.000Z","u":{"username":"bob"},
+ "attachments":[{"title":"voice.ogg","title_link":"/file-upload/a1/voice.ogg","audio_url":"/file-upload/a1/voice.ogg","audio_type":"audio/ogg","audio_size":4096}]},
+{"_id":"a-video-abs","msg":"","ts":"2026-11-16T10:00:08.000Z","u":{"username":"bob"},
+ "attachments":[{"title":"Remote","video_url":"https://example.com/v.mp4","video_type":"video/mp4","video_size":10}]}
 ]}

@@ -17,6 +17,7 @@ pub mod image_view;
 pub mod input_buf;
 pub mod jump;
 pub mod messages;
+pub mod open;
 pub mod react;
 pub mod reactions;
 pub mod read;
@@ -248,6 +249,8 @@ pub struct App {
     pub images: emoji::Images,
     /// The attachment images of the session: fetched, failed and in flight (`app::attachments`).
     pub attachment_images: attachments::AttachmentImages,
+    /// The attachments being downloaded to be opened (`app::open`).
+    pub opening: open::Opening,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub emoji_box: Option<react::EmojiBox>,
     /// What the emoji box remembers: "Frequently used" and the skin tone. Loaded once at start from
@@ -355,6 +358,7 @@ impl App {
             graphics: emoji::Graphics::default(),
             images: emoji::Images::default(),
             attachment_images: attachments::AttachmentImages::default(),
+            opening: open::Opening::default(),
             anim_ms: 0,
             emoji_box: None,
             emoji_recents: emoji_recents::Recents::default(),

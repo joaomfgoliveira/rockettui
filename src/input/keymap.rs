@@ -113,6 +113,9 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Normal, "gc", Action::OpenChannel),
         // `gp` (`show_image`) opens the image of the message under the cursor at full size.
         (Mode::Normal, "gp", Action::ShowImage),
+        // `go` (`open_attachment`) downloads the image, video or audio of the message under the
+        // cursor and opens it with the user's own program.
+        (Mode::Normal, "go", Action::OpenAttachment),
         // `gt` (`open_thread`) opens the thread of the message under the cursor in the thread pane.
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.

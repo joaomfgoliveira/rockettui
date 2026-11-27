@@ -54,6 +54,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "show_reactions",
     "open_channel",
     "show_image",
+    "open_attachment",
     "react_message",
     "open_thread",
     "list_threads",
@@ -110,6 +111,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "show_reactions" => Action::ShowReactions,
         "open_channel" => Action::OpenChannel,
         "show_image" => Action::ShowImage,
+        "open_attachment" => Action::OpenAttachment,
         "react_message" => Action::ReactMessage,
         "open_thread" => Action::OpenThread,
         "list_threads" => Action::ListThreads,
@@ -169,6 +171,7 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::ShowReactions => Some("show_reactions"),
         Action::OpenChannel => Some("open_channel"),
         Action::ShowImage => Some("show_image"),
+        Action::OpenAttachment => Some("open_attachment"),
         Action::ReactMessage => Some("react_message"),
         Action::OpenThread => Some("open_thread"),
         Action::ListThreads => Some("list_threads"),
@@ -231,6 +234,9 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::AttachmentImageFailed(_)
         | Action::AttachmentViewReady { .. }
         | Action::AttachmentViewFailed(_)
+        | Action::AttachmentDownloaded { .. }
+        | Action::AttachmentDownloadFailed { .. }
+        | Action::AttachmentOpened(_)
         | Action::RtConnected
         | Action::RtDisconnected
         | Action::RtRejected

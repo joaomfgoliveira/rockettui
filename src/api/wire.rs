@@ -361,6 +361,13 @@ pub struct WireAttach {
     pub image_type: Option<String>,
     pub image_size: Option<u64>,
     pub image_dimensions: Option<WireDims>,
+    /// Where a video or an audio file is served, its media type and its size.
+    pub video_url: Option<String>,
+    pub video_type: Option<String>,
+    pub video_size: Option<u64>,
+    pub audio_url: Option<String>,
+    pub audio_type: Option<String>,
+    pub audio_size: Option<u64>,
 }
 
 /// The pixel size the server reports for an image.
