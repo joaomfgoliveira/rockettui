@@ -24,8 +24,8 @@
 ## 4. Integration
 
 - [x] 4.1 Run `cargo fmt --check`, `cargo clippy` and `cargo test`; verify they pass
-- [ ] 4.2 Ask the user to check the highlights and `gc` by eye against their local Docker server (kitty terminal, mentions in a channel and a thread); the checks are theirs to run
-- [ ] 4.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
+- [x] 4.2 Ask the user to check the highlights and `gc` by eye against their local Docker server (kitty terminal, mentions in a channel and a thread); the checks are theirs to run
+- [x] 4.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
 
 ## Workflow follow-up
 

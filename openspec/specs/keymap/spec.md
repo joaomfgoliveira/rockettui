@@ -40,7 +40,7 @@ Keys SHALL be written in Vim notation such as `<C-d>`, `<Esc>`, `<CR>` and `gg`.
 - **THEN** `Ctrl-d` does nothing
 
 ### Requirement: Action vocabulary
-Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_reactions`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message`, `gr` to `show_reactions` and `?` to `show_context` in Normal mode; `show_help` has no default key.
+Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_reactions`, `open_channel`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message`, `gr` to `show_reactions`, `gc` to `open_channel` and `?` to `show_context` in Normal mode; `show_help` has no default key.
 
 #### Scenario: Command binding
 - **WHEN** the user binds `"<C-q>" = "cmd:quit"`
@@ -69,6 +69,18 @@ Bindable actions SHALL be a fixed set of snake_case names (including `retry_send
 #### Scenario: Unbind reactions
 - **WHEN** the user sets `"gr" = "none"` in `[normal]`
 - **THEN** `gr` does nothing
+
+#### Scenario: Default open-channel key
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `gc` runs `open_channel` in Normal mode in every preset, and the other `g` bindings are unchanged
+
+#### Scenario: Rebind open channel
+- **WHEN** the user binds `"C" = "open_channel"` in `[normal]`
+- **THEN** `C` opens the channel the cursor message references
+
+#### Scenario: Unbind open channel
+- **WHEN** the user sets `"gc" = "none"` in `[normal]`
+- **THEN** `gc` does nothing
 
 ### Requirement: Safe overrides
 The app SHALL reject overrides that bind the same keys twice in one mode table of `keymap.toml`, make one binding a prefix of another, remove all ways to leave a mode or quit (lockout), or bind a multi-key sequence starting with a plain character (no Ctrl or Alt) in Insert or Command mode. A user binding replaces a preset binding of the same keys.
