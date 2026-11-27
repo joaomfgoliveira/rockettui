@@ -415,7 +415,7 @@ pub fn status_text(
             if player.paused {
                 "\u{25b6}"
             } else {
-                "\u{25ae}\u{25ae}"
+                "\u{2016}"
             }
         ));
     }
@@ -1313,7 +1313,7 @@ mod tests {
         let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-playing");
         set_position(&mut app, 12);
         let row = status_row(&app);
-        assert!(row.starts_with("0:12 / 0:48  Space ▮▮  q ■"), "{row:?}");
+        assert!(row.starts_with("0:12 / 0:48  Space ‖  q ■"), "{row:?}");
         // Fixed width: the row is as wide as the box whatever the digits.
         assert_eq!(row.chars().count(), pane_video_box(&app).0);
         set_position(&mut app, 3);
@@ -1336,7 +1336,7 @@ mod tests {
         app.video.as_mut().unwrap().duration = None;
         set_position(&mut app, 75);
         let row = status_row(&app);
-        assert!(row.starts_with("1:15 / --:--  Space ▮▮"), "{row:?}");
+        assert!(row.starts_with("1:15 / --:--  Space ‖"), "{row:?}");
         // An hour or more reads h:mm:ss.
         assert_eq!(clock(std::time::Duration::from_secs(3725)), "1:02:05");
         assert_eq!(clock(std::time::Duration::from_secs(59)), "0:59");
@@ -1354,13 +1354,13 @@ mod tests {
         )
         .keymap;
         let row = status_row(&app);
-        assert!(row.contains("s ▮▮") && row.contains("x ■"), "{row:?}");
+        assert!(row.contains("s ‖") && row.contains("x ■"), "{row:?}");
         assert!(!row.contains("Space"), "{row:?}");
     }
 
     #[test]
     fn a_narrow_pane_cuts_the_status_row_to_the_box() {
-        assert_eq!(fixed_width("0:12 / 0:48  Space ▮▮  q ■", 10), "0:12 / 0:4");
+        assert_eq!(fixed_width("0:12 / 0:48  Space ‖  q ■", 10), "0:12 / 0:4");
         assert_eq!(fixed_width("ab", 5), "ab   ");
         assert_eq!(fixed_width("", 0), "");
         // A wide character is not cut in half.
@@ -1493,7 +1493,7 @@ mod tests {
         assert!(!text.contains("see 1"), "{text}");
         // The status row is in the bottom border, as wide as the overlay's border allows.
         assert!(
-            lines[21].contains("0:00 / 0:48  Space ▮▮  q ■"),
+            lines[21].contains("0:00 / 0:48  Space ‖  q ■"),
             "{}",
             lines[21]
         );
@@ -1574,7 +1574,7 @@ mod tests {
         let text = status_text(app.video.as_ref().unwrap(), Some(&app.keymap), 200);
         assert!(
             text.trim_end()
-                .ends_with("Space ▮▮  q ■  h/l 5s  H/L 30s  gV full"),
+                .ends_with("Space ‖  q ■  h/l 5s  H/L 30s  gV full"),
             "{text:?}"
         );
         // Cut to the box on a narrow one, never wider.
