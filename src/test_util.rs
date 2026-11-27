@@ -113,6 +113,7 @@ pub(crate) fn sample_message(id: &str) -> crate::data::Message {
         tlm: None,
         followers: None,
         refs: None,
+        attachments: Vec::new(),
         reactions: Vec::new(),
     }
 }

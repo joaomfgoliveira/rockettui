@@ -562,6 +562,7 @@ mod tests {
             tlm: Some(110),
             followers: None,
             refs: None,
+            attachments: Vec::new(),
         }
     }
 

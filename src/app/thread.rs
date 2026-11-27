@@ -669,6 +669,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -678,6 +679,7 @@ mod tests {
             tlm: Some(ts + 10),
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             ..msg(id, ts)
         }
     }
@@ -1111,6 +1113,7 @@ mod tests {
                 tlm: Some(300),
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 ..parent("p", 110, 3)
             },
         );

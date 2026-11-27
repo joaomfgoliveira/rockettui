@@ -166,6 +166,21 @@ impl Reader<'_> {
         }
     }
 
+    /// A boolean value, or an error when the value has another type.
+    pub fn boolean(&mut self, value: &Spanned<DeValue<'_>>, key: &str) -> Option<bool> {
+        match value.get_ref() {
+            DeValue::Boolean(b) => Some(*b),
+            other => {
+                self.error(
+                    value.span().start,
+                    key,
+                    format!("expected true or false, found {}", other.type_str()),
+                );
+                None
+            }
+        }
+    }
+
     /// A string value that must be one of `choices`.
     pub fn one_of<T: Copy>(
         &mut self,

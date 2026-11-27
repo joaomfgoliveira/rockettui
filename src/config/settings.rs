@@ -15,12 +15,14 @@ pub const DEFAULT_HISTORY_SIZE: u16 = 50;
 pub const DEFAULT_KEY_TIMEOUT_MS: u64 = 1000;
 pub const DEFAULT_MARK_READ_DELAY_MS: u64 = 3000;
 pub const DEFAULT_MESSAGE_GROUPING_SECONDS: u32 = 180;
+pub const DEFAULT_IMAGE_MAX_ROWS: u16 = 12;
 /// Inclusive bounds of the integer settings (D-13; the key timeout is A1).
 pub const SIDEBAR_WIDTH_RANGE: (i64, i64) = (10, 60);
 pub const HISTORY_SIZE_RANGE: (i64, i64) = (1, 1000);
 pub const KEY_TIMEOUT_MS_RANGE: (i64, i64) = (100, 5000);
 pub const MARK_READ_DELAY_MS_RANGE: (i64, i64) = (0, 60_000);
 pub const MESSAGE_GROUPING_SECONDS_RANGE: (i64, i64) = (0, 3600);
+pub const IMAGE_MAX_ROWS_RANGE: (i64, i64) = (3, 40);
 /// Widest a rendered timestamp may be, in columns (A7).
 pub const MAX_TIMESTAMP_WIDTH: usize = 40;
 /// Widest an `[emoji_aliases]` value may be, in columns.
@@ -114,6 +116,14 @@ pub struct Settings {
     /// config.toml key `follow_on_send` (D-05): `"always"` (default) jumps to the newest message
     /// after every send; `"if_at_bottom"` follows only when the newest row was already visible.
     pub follow_on_send: FollowOnSend,
+    /// config.toml key `inline_images`: draw image attachments inline (and fetch them) where the
+    /// terminal can show images. On by default.
+    pub inline_images: bool,
+    /// config.toml key `animate_images`: play animated gif and webp attachments. On by default;
+    /// off shows their first frame.
+    pub animate_images: bool,
+    /// config.toml key `image_max_rows`: the tallest an inline image may be, in rows.
+    pub image_max_rows: u16,
     /// config.toml table `[emoji_aliases]`: the text drawn for a reaction by shortcode name
     /// (without colons), so a custom server emoji can show as a lookalike. Empty by default. An
     /// alias wins over the unicode table and over the server's custom emojis, which are drawn as
@@ -134,6 +144,9 @@ impl Default for Settings {
             mark_read_delay_ms: DEFAULT_MARK_READ_DELAY_MS,
             message_grouping_seconds: DEFAULT_MESSAGE_GROUPING_SECONDS,
             follow_on_send: FollowOnSend::Always,
+            inline_images: true,
+            animate_images: true,
+            image_max_rows: DEFAULT_IMAGE_MAX_ROWS,
             emoji_aliases: HashMap::new(),
         }
     }
@@ -149,6 +162,9 @@ const KNOWN_KEYS: &[&str] = &[
     "mark_read_delay_ms",
     "message_grouping_seconds",
     "follow_on_send",
+    "inline_images",
+    "animate_images",
+    "image_max_rows",
     "emoji_aliases",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
     "server_url",
@@ -245,6 +261,22 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
         if let Some(n) = reader.int_in(value, "message_grouping_seconds", lo, hi) {
             settings.message_grouping_seconds =
                 u32::try_from(n).unwrap_or(settings.message_grouping_seconds);
+        }
+    }
+    if let Some(value) = table.get("inline_images")
+        && let Some(on) = reader.boolean(value, "inline_images")
+    {
+        settings.inline_images = on;
+    }
+    if let Some(value) = table.get("animate_images")
+        && let Some(on) = reader.boolean(value, "animate_images")
+    {
+        settings.animate_images = on;
+    }
+    if let Some(value) = table.get("image_max_rows") {
+        let (lo, hi) = IMAGE_MAX_ROWS_RANGE;
+        if let Some(n) = reader.int_in(value, "image_max_rows", lo, hi) {
+            settings.image_max_rows = u16::try_from(n).unwrap_or(settings.image_max_rows);
         }
     }
     if let Some(value) = table.get("emoji_aliases") {
@@ -479,6 +511,9 @@ mod tests {
         assert_eq!(defaults.mark_read_delay_ms, 3000);
         assert_eq!(defaults.message_grouping_seconds, 180);
         assert_eq!(defaults.follow_on_send, FollowOnSend::Always);
+        assert!(defaults.inline_images);
+        assert!(defaults.animate_images);
+        assert_eq!(defaults.image_max_rows, 12);
         for src in ["", "# only a comment\n"] {
             let (settings, out) = errors_of(src);
             assert_eq!(settings, defaults);
@@ -490,12 +525,13 @@ mod tests {
     fn bounds_inclusive() {
         // (key, lo, hi, accepted values, rejected values)
         type Case = (&'static str, i64, i64, &'static [i64], &'static [i64]);
-        let cases: [Case; 5] = [
+        let cases: [Case; 6] = [
             ("sidebar_width", 10, 60, &[10, 60], &[9, 61]),
             ("history_size", 1, 1000, &[1, 1000], &[0, 1001]),
             ("key_timeout_ms", 100, 5000, &[100, 5000], &[99, 5001]),
             ("mark_read_delay_ms", 0, 60_000, &[0, 60_000], &[-1, 60_001]),
             ("message_grouping_seconds", 0, 3600, &[0, 3600], &[-1, 3601]),
+            ("image_max_rows", 3, 40, &[3, 40], &[2, 41, 100]),
         ];
         for (key, lo, hi, good, bad) in cases {
             for n in good {
@@ -546,6 +582,39 @@ mod tests {
         let (_, out) = errors_of("message_grouping_seconds = 100000\n");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].key.as_deref(), Some("message_grouping_seconds"));
+    }
+
+    #[test]
+    fn animate_images_setting() {
+        let (settings, out) = errors_of("");
+        assert!(out.is_empty() && settings.animate_images);
+        let (settings, out) = errors_of("animate_images = false\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert!(!settings.animate_images);
+        let (settings, out) = errors_of("animate_images = \"no\"\n");
+        assert!(
+            settings.animate_images,
+            "an invalid value keeps the default"
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("animate_images"));
+    }
+
+    #[test]
+    fn inline_image_settings() {
+        let (settings, out) = errors_of("");
+        assert!(out.is_empty() && settings.inline_images && settings.image_max_rows == 12);
+        let (settings, out) = errors_of("inline_images = false\nimage_max_rows = 20\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert!(!settings.inline_images);
+        assert_eq!(settings.image_max_rows, 20);
+        let (settings, out) = errors_of("inline_images = \"no\"\n");
+        assert!(settings.inline_images, "an invalid value keeps the default");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("inline_images"));
+        let (_, out) = errors_of("image_max_rows = 100\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "must be between 3 and 40, got 100");
     }
 
     #[test]

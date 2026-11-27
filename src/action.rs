@@ -78,6 +78,10 @@ pub enum Action {
     /// subscribed to gets a status notice and nothing else: the client never joins a room. Anything
     /// else is a silent no-op.
     OpenChannel,
+    /// Normal mode, messages pane focused, cursor on a message with an image attachment (`gp`):
+    /// open its first image at the largest size the terminal allows. A message with no image, an
+    /// image that is not ready or a terminal without images gets a status notice.
+    ShowImage,
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
@@ -288,6 +292,23 @@ pub enum Action {
     },
     /// The image of a custom emoji could not be fetched or decoded. Final for the session.
     EmojiImageFailed(crate::effect::EmojiRef),
+    /// An attachment image was fetched and decoded for its inline box
+    /// (`Effect::FetchAttachmentImage`).
+    AttachmentImageReady {
+        image: crate::effect::AttachmentRef,
+        decoded: crate::emoji_image::Rgba,
+    },
+    /// An attachment image could not be fetched or decoded. Final for the session.
+    AttachmentImageFailed(crate::effect::AttachmentRef),
+    /// An attachment image was read from the cache and decoded for the full-size view
+    /// (`Effect::LoadAttachmentView`).
+    AttachmentViewReady {
+        image: crate::effect::AttachmentRef,
+        decoded: crate::emoji_image::Rgba,
+    },
+    /// The full-size image could not be read from the cache or decoded; the view keeps the
+    /// smaller image it already has.
+    AttachmentViewFailed(crate::effect::AttachmentRef),
     /// The realtime connection is live (logged in and subscribed). Produced only by the realtime
     /// task. The reducer decides from `App.rt_seen_live` whether it is a reconnect.
     RtConnected,
@@ -375,6 +396,7 @@ impl std::fmt::Debug for Action {
             Action::DeleteMessage => write!(f, "DeleteMessage"),
             Action::ShowReactions => write!(f, "ShowReactions"),
             Action::OpenChannel => write!(f, "OpenChannel"),
+            Action::ShowImage => write!(f, "ShowImage"),
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
@@ -528,6 +550,16 @@ impl std::fmt::Debug for Action {
                 write!(f, "EmojiImageReady({emoji:?}, {image:?})")
             }
             Action::EmojiImageFailed(emoji) => write!(f, "EmojiImageFailed({emoji:?})"),
+            Action::AttachmentImageReady { image, decoded } => {
+                write!(f, "AttachmentImageReady({image:?}, {decoded:?})")
+            }
+            Action::AttachmentImageFailed(image) => {
+                write!(f, "AttachmentImageFailed({image:?})")
+            }
+            Action::AttachmentViewReady { image, decoded } => {
+                write!(f, "AttachmentViewReady({image:?}, {decoded:?})")
+            }
+            Action::AttachmentViewFailed(image) => write!(f, "AttachmentViewFailed({image:?})"),
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),
@@ -570,6 +602,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
@@ -614,6 +647,7 @@ mod tests {
                 tlm: None,
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
@@ -658,6 +692,7 @@ mod tests {
                 tlm: None,
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 reactions: Vec::new(),
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),

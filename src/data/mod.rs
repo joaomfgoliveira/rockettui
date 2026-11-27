@@ -266,6 +266,45 @@ pub struct Message {
     /// `None` when the message carried neither list (older history, other servers). Private:
     /// drawn as highlights and used to open a channel, never logged.
     pub refs: Option<Refs>,
+    /// The files and attachments of the message, in the order the server lists them; empty when
+    /// there are none. Private: names and paths are never drawn raw, logged or formatted.
+    pub attachments: Vec<Attachment>,
+}
+
+/// What kind of file an attachment is, from its media type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Image,
+    Video,
+    Audio,
+    Other,
+}
+
+/// One file or attachment of a message. Every text field is untrusted: sanitize before drawing.
+#[derive(Clone, PartialEq)]
+pub struct Attachment {
+    pub kind: AttachmentKind,
+    pub name: String,
+    /// The server path of the file, only when it starts with `/file-upload/`: the one thing that
+    /// may be requested. Absolute addresses and link previews of other sites leave it `None`.
+    pub path: Option<String>,
+    /// The path of the original file when the server shows a thumbnail under `path` (same rules
+    /// as `path`); `None` when `path` already is the original.
+    pub full_path: Option<String>,
+    pub mime: Option<String>,
+    /// Size in bytes as the server reports it.
+    pub size: Option<u64>,
+    /// Pixel width and height of an image as the server reports it.
+    pub dims: Option<(u32, u32)>,
+}
+
+/// Redacting `Debug`: the kind only. No name, path or media type is printed.
+impl std::fmt::Debug for Attachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Attachment")
+            .field("kind", &self.kind)
+            .finish()
+    }
 }
 
 /// The mentions and channel references of one message, as the server lists them.
@@ -356,6 +395,7 @@ impl std::fmt::Debug for Message {
             .field("plain_text", &self.plain_text)
             .field("reactions", &self.reactions.len())
             .field("refs", &self.refs)
+            .field("attachments", &self.attachments.len())
             .finish()
     }
 }
@@ -376,6 +416,36 @@ mod tests {
     }
 
     #[test]
+    fn debug_hides_attachment_names_and_paths() {
+        let mut message = crate::test_util::sample_message("m1");
+        message.attachments = vec![Attachment {
+            kind: AttachmentKind::Image,
+            name: "SENTINEL-NAME-7b2f.png".to_string(),
+            path: Some("/file-upload/SENTINEL-PATH-3d8c/x.png".to_string()),
+            full_path: None,
+            mime: Some("image/SENTINEL-MIME".to_string()),
+            size: Some(1234),
+            dims: Some((777, 888)),
+        }];
+        for shown in [
+            format!("{message:?}"),
+            format!("{message:#?}"),
+            format!("{:?}", message.attachments),
+        ] {
+            for secret in [
+                "SENTINEL-NAME",
+                "SENTINEL-PATH",
+                "SENTINEL-MIME",
+                "1234",
+                "777",
+            ] {
+                assert!(!shown.contains(secret), "{secret} in {shown}");
+            }
+        }
+        assert!(format!("{message:?}").contains("attachments: 1"));
+    }
+
+    #[test]
     fn debug_shows_only_the_number_of_reactions() {
         let message = Message {
             edited: false,
@@ -386,6 +456,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: vec![Reaction {
                 name: "SENTINEL-REACTION-5c1e".to_string(),
                 users: vec!["SENTINEL-USER-9a4d".to_string(), "other".to_string()],
@@ -437,6 +508,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),

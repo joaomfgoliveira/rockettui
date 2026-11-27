@@ -109,6 +109,9 @@ pub struct RowCtx<'a> {
     /// The server's custom emojis and how they are drawn now (`app::emoji`): asked after the
     /// aliases and the unicode table.
     pub emoji: crate::app::emoji::EmojiView<'a>,
+    /// The attachment images and whether they are drawn (`app::attachments`): their box rows
+    /// follow the caption and the text of a message that has an image.
+    pub attach: crate::ui::attachment::AttachView<'a>,
     /// The user's own username, to tell their reactions from the others (`None` until known).
     pub own_user: Option<&'a str>,
     /// The id of the message the `unread` divider is drawn above, when this list is the open
@@ -135,6 +138,31 @@ pub fn time_column(msgs: &[Message], format: &TimeFormat, zone: Zone) -> usize {
         .map(|m| format_ts(format, m.ts, zone).width())
         .max()
         .unwrap_or(0)
+}
+
+/// The columns the body of `msg` has at `width` columns in layout `ctx`: what is left of the row
+/// after the prefix (Compact) or the two-column indent (TwoLine) and the thread tag, never fewer
+/// than `MIN_BODY`. The one place this is worked out: `render_rows` uses it for the rows and the
+/// terminal placement of an attachment image uses it to size the box the rows reserved.
+pub fn body_width(msg: &Message, width: usize, ctx: &RowCtx) -> usize {
+    let layout = if ctx.in_thread {
+        MessageLayout::TwoLine
+    } else {
+        ctx.layout
+    };
+    match layout {
+        MessageLayout::Compact => {
+            let (time, _) = send_look(msg, ctx);
+            let time_col = ctx.time_col.max(time.width());
+            let col = ctx
+                .author_col
+                .min(width.saturating_sub(time_col + 1 + 2 + MIN_BODY));
+            width
+                .saturating_sub(time_col + 1 + col + 2 + tag_width(msg, ctx))
+                .max(MIN_BODY)
+        }
+        MessageLayout::TwoLine => width.saturating_sub(2 + tag_width(msg, ctx)).max(MIN_BODY),
+    }
 }
 
 /// The styled rows of one message at `width` columns, laid out as `ctx` says.
@@ -219,9 +247,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
             let author = fit_author(&author, col).into_owned();
             let pad = " ".repeat(col - author.width() + 2);
             let prefix_width = time_col + 1 + col + 2;
-            let body_width = width
-                .saturating_sub(prefix_width + tag_width(msg, ctx))
-                .max(MIN_BODY);
+            let body_width = body_width(msg, width, ctx);
             let indent = " ".repeat(prefix_width);
             tag_reply(msg, body_rows(msg, body_width, body_style, ctx), ctx)
                 .into_iter()
@@ -243,7 +269,7 @@ pub fn render_rows(msg: &Message, width: u16, ctx: &RowCtx) -> Vec<Line<'static>
                 .collect()
         }
         MessageLayout::TwoLine => {
-            let body_width = width.saturating_sub(2 + tag_width(msg, ctx)).max(MIN_BODY);
+            let body_width = body_width(msg, width, ctx);
             // The author at the left and the time at the right edge, as in the thread pane. A
             // tombstone is one row: its text follows the author.
             let mut header = vec![Span::styled(author, name)];
@@ -331,6 +357,14 @@ fn body_rows(
             )]);
         }
     }
+    // The image boxes of the attachments come after the caption and the text (and the edited
+    // marker), before the reactions. Their rows are decided from metadata, never from the bytes.
+    rows.extend(crate::ui::attachment::image_rows(
+        msg,
+        width,
+        &ctx.attach,
+        ctx.theme.messages_notice,
+    ));
     rows.extend(reaction_rows(msg, width, ctx));
     rows.extend(thread_rows(msg, width, ctx));
     rows
@@ -709,6 +743,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
@@ -739,6 +774,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -767,6 +803,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -832,6 +869,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -868,6 +906,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -1277,6 +1316,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -1322,6 +1362,7 @@ mod tests {
                 search: None,
                 aliases: &crate::ui::emoji::NO_ALIASES,
                 emoji: crate::app::emoji::EmojiView::none(),
+                attach: crate::ui::attachment::AttachView::none(),
                 own_user: None,
                 unread_before: None,
                 unread_threads: None,
@@ -1363,6 +1404,7 @@ mod tests {
                     search: None,
                     aliases: &crate::ui::emoji::NO_ALIASES,
                     emoji: crate::app::emoji::EmojiView::none(),
+                    attach: crate::ui::attachment::AttachView::none(),
                     own_user: None,
                     unread_before: None,
                     unread_threads: None,
@@ -1433,6 +1475,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             ..msg(author, body)
         }
@@ -1496,6 +1539,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -1541,6 +1585,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             ..deleted("alice")
         };
@@ -1596,6 +1641,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: format!("m{ts}"),
             room_id: RoomId("r".to_string()),
@@ -1620,6 +1666,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -1886,6 +1933,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -1940,6 +1988,7 @@ mod tests {
             search: None,
             aliases,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: own,
             unread_before: None,
             unread_threads: None,
@@ -1972,6 +2021,7 @@ mod tests {
                 custom,
                 ..crate::app::emoji::EmojiView::none()
             },
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: Some("me"),
             unread_before: None,
             unread_threads: None,
@@ -2230,6 +2280,7 @@ mod tests {
             search: Some("bob"),
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -2550,6 +2601,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: view,
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: Some("me"),
             unread_before: None,
             unread_threads: None,
@@ -2905,6 +2957,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -2978,6 +3031,7 @@ mod tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: None,
             unread_threads: None,
@@ -3028,6 +3082,7 @@ mod grouping_tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -3044,6 +3099,7 @@ mod grouping_tests {
             search: None,
             aliases: &crate::ui::emoji::NO_ALIASES,
             emoji: crate::app::emoji::EmojiView::none(),
+            attach: crate::ui::attachment::AttachView::none(),
             own_user: None,
             unread_before: unread,
             unread_threads: None,

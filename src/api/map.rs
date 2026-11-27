@@ -6,8 +6,8 @@
 use crate::api::wire::{ApiDate, WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits, THREAD_ROW_TEXT_CHARS, ThreadRow};
 use crate::data::{
-    CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Refs, Room, RoomId, RoomKind,
-    SendState, ThreadUnread, Unread,
+    Attachment, AttachmentKind, CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction,
+    Refs, Room, RoomId, RoomKind, SendState, ThreadUnread, Unread,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -165,8 +165,9 @@ pub(crate) const ENCRYPTED_TEXT: &str = "[encrypted message]";
 ///   leftover, `Normal` with the fixed text, `msg` and `content` ignored;
 /// - any other `t` is a system message, drawn as a one-liner by type (`au` and `ru` append the
 ///   target user the server puts in `msg`);
-/// - otherwise the text, followed by ` [attachment: <name>]` for the file, each listed file and
-///   each attachment title, every name once.
+/// - otherwise the text, followed by ` [attachment: <name> (<size>)]` for the file, each listed
+///   file and each attachment title, every name once, the size when the server reports it. The
+///   thumbnail the server makes of an image (`thumb-<name>`) is not listed.
 fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
     // `rm`: the server keeps a deleted message as this type when it shows deleted status. It is a
     // tombstone, not a system message; its text is already gone.
@@ -190,24 +191,19 @@ fn kind_and_body(msg: &WireMsg) -> (MessageKind, String) {
         };
         return (MessageKind::System, text);
     }
-    let mut names: Vec<&str> = Vec::new();
-    let candidates = msg
-        .file
-        .iter()
-        .chain(&msg.files)
-        .filter_map(|f| f.name.as_deref())
-        .chain(msg.attachments.iter().filter_map(|a| a.title.as_deref()));
-    for name in candidates {
-        if !name.is_empty() && !names.contains(&name) {
-            names.push(name);
-        }
-    }
     let mut body = msg.msg.clone();
-    for name in names {
+    for attachment in attachments(msg) {
         if !body.is_empty() {
             body.push(' ');
         }
-        body.push_str(&format!("[attachment: {name}]"));
+        match attachment.size {
+            Some(size) => body.push_str(&format!(
+                "[attachment: {} ({})]",
+                attachment.name,
+                human_size(size)
+            )),
+            None => body.push_str(&format!("[attachment: {}]", attachment.name)),
+        }
     }
     (MessageKind::Normal, body)
 }
@@ -219,6 +215,11 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
     let (kind, body) = kind_and_body(&msg);
     let edited = msg.edited_at.is_some() && kind != MessageKind::Deleted;
     let plain_text = is_plain_text(&msg, kind);
+    let attachments = if kind == MessageKind::Normal && msg.t.is_none() {
+        attachments(&msg)
+    } else {
+        Vec::new()
+    };
     let reactions = reactions(&msg, kind);
     let (tmid, tshow, tcount, tlm) = (
         msg.tmid.filter(|t| !t.is_empty()),
@@ -252,7 +253,130 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         tlm,
         followers,
         refs,
+        attachments,
     }
+}
+
+/// The only prefix of a path the client may fetch: files the server itself stores.
+pub(crate) const FILE_UPLOAD_PREFIX: &str = "/file-upload/";
+
+/// True for a server path the client may request: under `/file-upload/`, with no query, fragment,
+/// parent segment (written out or percent-encoded), backslash, encoded slash or control character. Anything else (an absolute address, a link
+/// preview of another site) is never requested.
+pub(crate) fn fetchable_path(path: &str) -> bool {
+    path.starts_with(FILE_UPLOAD_PREFIX)
+        && path.len() > FILE_UPLOAD_PREFIX.len()
+        && !path.chars().any(|c| c.is_control() || "?#\\".contains(c))
+        && !path.split('/').any(|seg| {
+            let seg = seg.to_ascii_lowercase().replace("%2e", ".");
+            seg == ".." || seg == "."
+        })
+        && !["%2f", "%5c", "%00"]
+            .iter()
+            .any(|enc| path.to_ascii_lowercase().contains(enc))
+}
+
+fn attachment_kind(mime: Option<&str>) -> AttachmentKind {
+    match mime.map(|m| m.split('/').next().unwrap_or("")) {
+        Some("image") => AttachmentKind::Image,
+        Some("video") => AttachmentKind::Video,
+        Some("audio") => AttachmentKind::Audio,
+        _ => AttachmentKind::Other,
+    }
+}
+
+/// A size in bytes as a short label: `812 B`, `34.5 KB`, `2.1 MB`, `1.3 GB`.
+pub(crate) fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+/// The attachments of one wire message, in the order the server lists them: the file, each listed
+/// file, then each attachment. Every name is kept once, the way the caption lists it; an
+/// attachment that repeats the name of a file adds its path, type, size and dimensions to it.
+fn attachments(msg: &WireMsg) -> Vec<Attachment> {
+    let mut out: Vec<Attachment> = Vec::new();
+    // The server stores a thumbnail of an image as a file of its own, `thumb-<name>`, next to the
+    // original. It is the same picture, so it is not listed when the original is.
+    let names: Vec<&str> = msg
+        .file
+        .iter()
+        .chain(&msg.files)
+        .filter_map(|f| f.name.as_deref())
+        .chain(msg.attachments.iter().filter_map(|a| a.title.as_deref()))
+        .collect();
+    let is_thumb = |name: &str| {
+        name.strip_prefix("thumb-")
+            .is_some_and(|original| !original.is_empty() && names.contains(&original))
+    };
+    for f in msg.file.iter().chain(&msg.files) {
+        let Some(name) = f.name.as_deref().filter(|n| !n.is_empty() && !is_thumb(n)) else {
+            continue;
+        };
+        if out.iter().any(|a| a.name == name) {
+            continue;
+        }
+        out.push(Attachment {
+            kind: attachment_kind(f.mime.as_deref()),
+            name: name.to_string(),
+            path: None,
+            full_path: None,
+            mime: f.mime.clone(),
+            size: f.size,
+            dims: None,
+        });
+    }
+    for a in &msg.attachments {
+        let name = a.title.as_deref().unwrap_or("");
+        let path = a.image_url.as_deref().filter(|p| fetchable_path(p));
+        // The original, when `image_url` is a thumbnail of it.
+        let full = a
+            .title_link
+            .as_deref()
+            .filter(|p| fetchable_path(p) && Some(*p) != path);
+        let dims = a
+            .image_dimensions
+            .as_ref()
+            .and_then(|d| Some((d.width.filter(|w| *w > 0)?, d.height.filter(|h| *h > 0)?)));
+        let kind = if a.image_url.is_some() || a.image_type.is_some() {
+            attachment_kind(a.image_type.as_deref().or(Some("image/")))
+        } else {
+            AttachmentKind::Other
+        };
+        if name.is_empty() || is_thumb(name) {
+            continue;
+        }
+        if let Some(existing) = out.iter_mut().find(|e| e.name == name) {
+            if existing.kind == AttachmentKind::Other {
+                existing.kind = kind;
+            }
+            existing.path = existing.path.take().or(path.map(str::to_string));
+            existing.full_path = existing.full_path.take().or(full.map(str::to_string));
+            existing.mime = existing.mime.take().or(a.image_type.clone());
+            existing.size = existing.size.or(a.image_size);
+            existing.dims = existing.dims.or(dims);
+            continue;
+        }
+        out.push(Attachment {
+            kind,
+            name: name.to_string(),
+            path: path.map(str::to_string),
+            full_path: full.map(str::to_string),
+            mime: a.image_type.clone(),
+            size: a.image_size,
+            dims,
+        });
+    }
+    out
 }
 
 /// The names in a `mentions` (`username`) or `channels` (`name`) list: entries that are not
@@ -1457,5 +1581,126 @@ mod tests {
         assert_eq!(rows[1].first_line.chars().count(), THREAD_ROW_TEXT_CHARS);
         assert_eq!((rows[1].author.as_str(), rows[1].replies), ("unknown", 0));
         assert!(rows[1].last_reply.is_none() && rows[1].followers.is_empty());
+    }
+
+    const ATTACHMENTS: &str = include_str!("fixtures/history_attachments.json");
+
+    fn attach_msgs() -> Vec<Message> {
+        mapped(ATTACHMENTS)
+    }
+
+    fn attach_msg(id: &str) -> Message {
+        attach_msgs().into_iter().find(|m| m.id == id).expect(id)
+    }
+
+    #[test]
+    fn image_attachment_keeps_metadata_and_caption() {
+        let m = attach_msg("a-image");
+        assert_eq!(m.body, "look [attachment: photo.png (2.0 KB)]");
+        assert!(!m.plain_text);
+        assert_eq!(m.attachments.len(), 1, "the file and the attachment merge");
+        let a = &m.attachments[0];
+        assert_eq!(a.kind, AttachmentKind::Image);
+        assert_eq!(a.name, "photo.png");
+        assert_eq!(a.path.as_deref(), Some("/file-upload/f1/photo.png"));
+        assert_eq!(a.mime.as_deref(), Some("image/png"));
+        assert_eq!(a.size, Some(2048));
+        assert_eq!(a.dims, Some((800, 600)));
+    }
+
+    #[test]
+    fn title_only_attachment_is_of_unknown_kind() {
+        let m = attach_msg("a-title");
+        assert_eq!(m.body, "[attachment: t.pdf]");
+        assert_eq!(m.attachments.len(), 1);
+        let a = &m.attachments[0];
+        assert_eq!(a.kind, AttachmentKind::Other);
+        assert!(a.path.is_none() && a.mime.is_none() && a.size.is_none() && a.dims.is_none());
+    }
+
+    #[test]
+    fn file_only_message_gets_its_kind_from_the_type() {
+        let m = attach_msg("a-file");
+        assert_eq!(m.body, "[attachment: clip.mp4]");
+        assert_eq!(m.attachments.len(), 1);
+        assert_eq!(m.attachments[0].kind, AttachmentKind::Video);
+        assert!(m.attachments[0].path.is_none());
+    }
+
+    #[test]
+    fn link_preview_address_is_never_fetchable() {
+        let m = attach_msg("a-preview");
+        assert_eq!(m.attachments.len(), 1);
+        assert_eq!(m.attachments[0].name, "Example");
+        assert_eq!(m.attachments[0].kind, AttachmentKind::Image);
+        assert!(m.attachments[0].path.is_none(), "an absolute address");
+    }
+
+    #[test]
+    fn attachments_keep_server_order_and_drop_hostile_paths() {
+        let m = attach_msg("a-two");
+        assert_eq!(m.body, "[attachment: a.png (10 B)] [attachment: b.png]");
+        let names: Vec<&str> = m.attachments.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["a.png", "b.png"]);
+        assert_eq!(m.attachments[0].dims, Some((10, 20)));
+        assert!(m.attachments[1].path.is_none(), "a parent segment");
+    }
+
+    #[test]
+    fn a_thumbnail_is_not_listed_and_the_original_is_kept_for_the_view() {
+        let m = attach_msg("a-thumb");
+        assert_eq!(m.body, "[attachment: big.png (3.5 MB)]");
+        assert_eq!(m.attachments.len(), 1, "{:?}", m.attachments);
+        let a = &m.attachments[0];
+        assert_eq!(a.name, "big.png");
+        assert_eq!(a.path.as_deref(), Some("/file-upload/t1/thumb-big.png"));
+        assert_eq!(a.full_path.as_deref(), Some("/file-upload/o1/big.png"));
+        assert_eq!(
+            a.size,
+            Some(3_670_016),
+            "the original's size, from the file"
+        );
+    }
+
+    #[test]
+    fn sizes_read_short() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(3_670_016), "3.5 MB");
+        assert_eq!(human_size(5 * 1024 * 1024 * 1024), "5.0 GB");
+    }
+
+    #[test]
+    fn fetchable_path_rules() {
+        assert!(fetchable_path("/file-upload/id/name.png"));
+        for bad in [
+            "",
+            "/file-upload/",
+            "https://h/file-upload/id/n.png",
+            "//h/file-upload/id/n.png",
+            "/other/id/n.png",
+            "/file-upload/id/../x",
+            "/file-upload/id/n.png?x=1",
+            "/file-upload/id/n.png#f",
+            "/file-upload/id/%2e%2e/x",
+            "/file-upload/id/%2E%2E/x",
+            "/file-upload/id/a%2Fb",
+            "/file-upload/id/a%5cb",
+            "/file-upload/id/a%00b",
+            "/file-upload/id\\n.png",
+            "/file-upload/id/n\u{1b}.png",
+        ] {
+            assert!(!fetchable_path(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn messages_without_files_have_no_attachments() {
+        assert!(
+            one(r#"{"_id":"p","msg":"hi","ts":"2026-11-16T10:00:00.000Z","u":{"username":"a"}}"#)
+                .attachments
+                .is_empty()
+        );
     }
 }

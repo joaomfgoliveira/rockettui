@@ -678,6 +678,41 @@ mod tests {
     }
 
     #[test]
+    fn show_image_default_rebind_unbind_and_clash() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "gp", Action::ShowImage), "{preset:?}");
+            assert!(is(&keymap, "gg", Action::GotoTop), "{preset:?}");
+            assert!(is(&keymap, "gc", Action::OpenChannel), "{preset:?}");
+            assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
+        }
+        let src = "[normal]\n\"P\" = \"show_image\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "P", Action::ShowImage));
+        assert!(is(&keymap, "gp", Action::ShowImage));
+        let keymap = built("[normal]\n\"gp\" = \"none\"\n");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gp"), "none");
+        assert!(is(&keymap, "gg", Action::GotoTop));
+        let found = errors("[normal]\ng = \"goto_top\"\n");
+        assert!(
+            found.iter().any(|p| p.message.contains("`gp`")),
+            "{found:?}"
+        );
+        assert_eq!(
+            crate::input::actions::name_of(&Action::ShowImage),
+            Some("show_image")
+        );
+        assert!(crate::input::actions::ACTION_NAMES.contains(&"show_image"));
+    }
+
+    #[test]
     fn list_threads_default_rebind_unbind_and_unknown_spelling() {
         let is = |keymap: &Keymap, keys: &str, want: Action| {
             matches!(
@@ -910,7 +945,7 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
         // Unbinding all of them leaves nothing: g is no longer a prefix.
         let keymap = built(
-            "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\n",
+            "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\n",
         );
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
@@ -919,13 +954,14 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gf"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gT"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gc"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gp"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "none");
     }
 
     #[test]
     fn none_gg_then_bind_g() {
         // TOML iterates `g` before `gg`; the result must not depend on it.
-        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ng = \"goto_top\"\n";
+        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ng = \"goto_top\"\n";
         assert!(errors(src).is_empty(), "{:?}", problems(src));
         let keymap = built(src);
         let g = parse_keys("g").unwrap();
@@ -938,9 +974,9 @@ mod tests {
 
     #[test]
     fn prefix_clash_names_both() {
-        // `g` is the prefix of seven default bindings, `gg`, `gr`, `gc`, `gt`, `gR`, `gf` and `gT`: one error for each.
+        // `g` is the prefix of eight default bindings, `gg`, `gr`, `gc`, `gp`, `gt`, `gR`, `gf` and `gT`: one error for each.
         let found = errors("[normal]\ng = \"goto_top\"\n");
-        assert_eq!(found.len(), 7, "{found:?}");
+        assert_eq!(found.len(), 8, "{found:?}");
         assert_eq!(line_of(&found[0]), Some(2));
         assert!(found.iter().all(|p| p.message.contains("`g`")), "{found:?}");
         assert!(
@@ -957,8 +993,8 @@ mod tests {
         );
         // Unbinding one of them is not enough; unbinding all resolves it.
         let half = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
-        assert_eq!(errors(half).len(), 6);
-        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\n";
+        assert_eq!(errors(half).len(), 7);
+        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\n";
         assert!(errors(resolved).is_empty());
     }
 

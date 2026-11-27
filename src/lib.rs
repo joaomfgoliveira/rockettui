@@ -20,7 +20,7 @@ use crate::app::update::update;
 use crate::app::{App, ConnState};
 use crate::effect::Effect;
 
-/// How often the screen is redrawn while an animated emoji is on screen. Frame delays are at least
+/// How often the screen is redrawn while an animated emoji or attachment image is on screen. Frame delays are at least
 /// 20 ms; only the two cells of an emoji change, so the terminal sees very little.
 const ANIMATION_TICK: std::time::Duration = std::time::Duration::from_millis(40);
 
@@ -178,7 +178,16 @@ pub async fn run(
         // An image that arrived is in the terminal before the frame that draws it.
         tui::upload_images(&mut app);
         app.anim_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        terminal.draw(|f| ui::view(f, &app))?;
+        let drawn = terminal.draw(|f| ui::view(f, &app))?;
+        // An animated attachment image among the cells just drawn needs the next frame on a timer;
+        // with none on screen nothing is scheduled.
+        let attach_animating = app.attachment_images.animating_among(
+            &ui::attachment::ids_on_screen(drawn.buffer),
+            app.image_view
+                .as_ref()
+                .and_then(|view| view.pixels.as_ref())
+                .map(|pixels| &pixels.image),
+        );
         // Debug-only hook so the pty smoke harness and the manual UAT can prove that a panic
         // restores the terminal. Compiled out of release builds (A17).
         #[cfg(debug_assertions)]
@@ -200,7 +209,8 @@ pub async fn run(
             }
             // An animated emoji is on screen: draw again for its next frame.
             () = sleep_until_opt(
-                app.images.has_animation().then(|| tokio::time::Instant::now() + ANIMATION_TICK)
+                (app.images.has_animation() || attach_animating)
+                    .then(|| tokio::time::Instant::now() + ANIMATION_TICK)
             ) => {}
         }
         while let Ok(action) = rx.try_recv() {
