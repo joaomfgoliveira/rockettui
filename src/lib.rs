@@ -15,6 +15,7 @@ pub mod kitty;
 pub mod realtime;
 pub mod tui;
 pub mod ui;
+pub mod video;
 
 use crate::action::Action;
 use crate::app::update::update;

@@ -302,6 +302,14 @@ pub fn lines(app: &App) -> Context {
     if is_message && crate::app::open::has_attachment_under_cursor(app) {
         message_actions.push(OPEN_ACTION);
     }
+    // What the next press of `play_video` does, when the message has a video the client may fetch.
+    if is_message && let Some(desc) = crate::app::video::next_step(app) {
+        message_actions.push(("play_video", desc));
+    }
+    // Watching it fullscreen, on the same messages (not one whose poster failed).
+    if is_message && crate::app::video::can_play_fullscreen(app) {
+        message_actions.push(("play_video_fullscreen", "watch the video fullscreen"));
+    }
     let mut message_actions_pending = !message_actions.is_empty();
     for (name, desc) in kind.actions() {
         if message_actions_pending && *name == "goto_top" {

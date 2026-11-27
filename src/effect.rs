@@ -107,6 +107,59 @@ impl std::fmt::Debug for DownloadRef {
     }
 }
 
+/// Which video to make a poster of: the server path of the file (`/file-upload/...`), its media
+/// type, the size the server reports and the `ffmpeg` program to use. The first three are server
+/// text or numbers about a user's file, so its `Debug` prints only lengths.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct VideoRef {
+    pub path: String,
+    pub mime: String,
+    pub size: Option<u64>,
+    pub ffmpeg: String,
+}
+
+impl std::fmt::Debug for VideoRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "VideoRef(<{}> bytes, <{}> bytes)",
+            self.path.len(),
+            self.mime.len()
+        )
+    }
+}
+
+/// What starts one playback run of a video: which video, how to decode it and where the run
+/// begins. Server text and numbers about a user's file, so its `Debug` prints only lengths.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VideoStart {
+    pub video: VideoRef,
+    /// The `ffprobe` program, run only when `probe` is set.
+    pub ffprobe: String,
+    /// Seconds into the video the run starts at.
+    pub start_secs: u64,
+    /// The frame size, from the poster (or its fullscreen scaling).
+    pub size: (u32, u32),
+    /// The most a side of the frame may be: `MAX_SIDE`, or `FULLSCREEN_SIDE` for fullscreen.
+    pub max_side: u32,
+    /// The run's number; every action of the run carries it.
+    pub generation: u64,
+    /// Start paused: the first frame is shown and the run holds.
+    pub paused: bool,
+    /// Read the length of the video (the first run of a player; a seek already knows it).
+    pub probe: bool,
+}
+
+impl std::fmt::Debug for VideoStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "VideoStart({:?}, generation {}, start {}, {}x{})",
+            self.video, self.generation, self.start_secs, self.size.0, self.size.1
+        )
+    }
+}
+
 /// Why the external program did not run: it could not be started, or it exited with an error right
 /// away. Nothing of the program's output or arguments is kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,9 +310,20 @@ pub enum Effect {
     LoadAttachmentView(AttachmentRef),
     /// Download an attachment to the downloads cache under a name the client builds (a hash of
     /// its path and an extension from its media type), unless that file is already there, so a
-    /// second open makes no request. Answers `Action::AttachmentDownloaded` or
+    /// second open makes no request. Only `open_attachment` starts it; the one other download is
+    /// inside `LoadVideoPoster`, for a video within the inline limit or one the user asked for. Answers `Action::AttachmentDownloaded` or
     /// `Action::AttachmentDownloadFailed`.
     DownloadAttachment(DownloadRef),
+    /// Make the poster of a video: from the poster cache when it holds one, else download the
+    /// video to the downloads cache (unless it is there), run `ffmpeg` for one frame about a
+    /// second in, decode it with the defensive decoder and keep it in the cache. Answers
+    /// `Action::VideoPosterReady` or `Action::VideoPosterFailed`.
+    LoadVideoPoster(VideoRef),
+    /// Start `ffmpeg` on the downloaded video and a thread that paces its frames (see
+    /// `video::spawn_playback`), after reading the length when asked to. Answers
+    /// `Action::VideoStarted` (the frames then come as `Action::VideoFrame`, and the end as
+    /// `Action::VideoEnded`) or `Action::VideoStartFailed`. Needs no server.
+    StartVideo(VideoStart),
     /// Run an external program on a downloaded file: `command` is the program and its leading
     /// arguments, the file is added as the last one, never through a shell, with the standard
     /// streams detached. Answers `Action::AttachmentOpened`. Needs no server.
@@ -377,7 +441,13 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
                 Effect::FetchEmojiImage(emoji) => Action::EmojiImageFailed(emoji),
                 Effect::FetchAttachmentImage(image) => Action::AttachmentImageFailed(image),
-                Effect::LoadRecents | Effect::SaveRecents(_) => return Vec::new(),
+                Effect::LoadVideoPoster(video) => Action::VideoPosterFailed {
+                    video,
+                    error: crate::video::VideoError::CannotShow,
+                },
+                Effect::LoadRecents | Effect::SaveRecents(_) | Effect::StartVideo(_) => {
+                    return Vec::new();
+                }
                 Effect::LoadAttachmentView(image) => Action::AttachmentViewFailed(image),
                 Effect::DownloadAttachment(download) => Action::AttachmentDownloadFailed {
                     download,
@@ -635,7 +705,137 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::DownloadAttachment(download) => {
             vec![download_attachment(&client, download).await]
         }
-        Effect::LoadRecents | Effect::SaveRecents(_) | Effect::OpenFile { .. } => Vec::new(),
+        Effect::LoadVideoPoster(video) => vec![
+            load_video_poster(
+                &client,
+                attachment_cache_dir_from_env().as_deref(),
+                downloads_dir_from_env().as_deref(),
+                video,
+            )
+            .await,
+        ],
+        // Started by `spawn`, which has the channel the frames go to.
+        Effect::LoadRecents
+        | Effect::SaveRecents(_)
+        | Effect::OpenFile { .. }
+        | Effect::StartVideo(_) => Vec::new(),
+    }
+}
+
+/// Start one playback run (see `Effect::StartVideo`) with the downloaded file looked for in
+/// `downloads`. Blocking: the probe and the start wait on a program. The one answer is sent on
+/// `tx`; the frames are sent by the reader thread.
+pub fn start_video_blocking(
+    downloads: Option<&std::path::Path>,
+    tx: &Sender<Action>,
+    start: VideoStart,
+) {
+    use crate::video::{Playback, PlaybackToken, VideoError, probe_duration, spawn_playback};
+    let generation = start.generation;
+    let started = (|| {
+        let dir = downloads.ok_or(VideoError::CannotShow)?;
+        let download = DownloadRef {
+            path: start.video.path.clone(),
+            mime: start.video.mime.clone(),
+            size: start.video.size,
+        };
+        let file = downloaded_file_in(dir, &download).ok_or(VideoError::CannotShow)?;
+        let duration = if start.probe {
+            probe_duration(&start.ffprobe, &file)
+        } else {
+            None
+        };
+        let handle = spawn_playback(
+            Playback {
+                ffmpeg: start.video.ffmpeg.clone(),
+                file,
+                start_secs: start.start_secs,
+                width: start.size.0,
+                height: start.size.1,
+                max_side: start.max_side,
+                generation,
+                paused: start.paused,
+            },
+            tx.clone(),
+        )?;
+        Ok((duration, PlaybackToken::new(handle)))
+    })();
+    let action = match started {
+        Ok((duration, handle)) => Action::VideoStarted {
+            generation,
+            duration,
+            handle,
+        },
+        Err(error) => Action::VideoStartFailed { generation, error },
+    };
+    let _ = tx.blocking_send(action);
+}
+
+/// The key a video's poster is cached under: the video's server path with a marker, so it never
+/// collides with the file of an image at the same path.
+fn poster_cache_key(path: &str) -> String {
+    format!("{path}#poster")
+}
+
+/// Make the poster `video` names (see `Effect::LoadVideoPoster`). The poster cache is looked at
+/// first and needs neither the server nor `ffmpeg`. A cached poster that no longer decodes is a
+/// miss, not an error. Every failure is `VideoPosterFailed` with a fixed kind; nothing about the
+/// file or the program's output is kept.
+pub async fn load_video_poster(
+    client: &Client,
+    cache: Option<&std::path::Path>,
+    downloads: Option<&std::path::Path>,
+    video: VideoRef,
+) -> Action {
+    use crate::api::{DownloadError, MAX_ATTACHMENT_BYTES};
+    use crate::emoji_image::{
+        INLINE_SHRINK_TO, attachment, decode, read_attachment_cached, write_attachment_cached,
+    };
+    use crate::video::{VideoError, poster_png};
+    let failed = |video, error| Action::VideoPosterFailed { video, error };
+    let key = poster_cache_key(&video.path);
+    let limits = attachment(INLINE_SHRINK_TO, None);
+    if let Some(bytes) =
+        cache.and_then(|dir| read_attachment_cached(dir, &key, video.size, MAX_ATTACHMENT_BYTES))
+        && let Ok(decoded) = decode(&bytes, &limits)
+        && crate::video::frame_len(decoded.width, decoded.height, crate::video::MAX_SIDE).is_some()
+    {
+        return Action::VideoPosterReady { video, decoded };
+    }
+    let download = DownloadRef {
+        path: video.path.clone(),
+        mime: video.mime.clone(),
+        size: video.size,
+    };
+    let file = match download_attachment_into(client, downloads, download).await {
+        Action::AttachmentDownloaded { file, .. } => file,
+        Action::AttachmentDownloadFailed {
+            error: DownloadError::TooLarge,
+            ..
+        } => return failed(video, VideoError::TooLarge),
+        _ => return failed(video, VideoError::CannotShow),
+    };
+    let ffmpeg = video.ffmpeg.clone();
+    // The program and the decoder both work on untrusted bytes: off the async threads.
+    let made = tokio::task::spawn_blocking(move || {
+        let png = poster_png(&ffmpeg, &file)?;
+        let decoded = decode(&png, &limits).map_err(|_| VideoError::CannotShow)?;
+        // The playback frame is this size, so it must be within the frame limit.
+        crate::video::frame_len(decoded.width, decoded.height, crate::video::MAX_SIDE)
+            .ok_or(VideoError::CannotShow)?;
+        Ok::<_, VideoError>((decoded, png))
+    })
+    .await
+    .unwrap_or(Err(VideoError::CannotShow));
+    match made {
+        Ok((decoded, png)) => {
+            if let Some(dir) = cache {
+                // A cache that cannot be written is not an error: the poster stays in memory.
+                write_attachment_cached(dir, &key, video.size, &png);
+            }
+            Action::VideoPosterReady { video, decoded }
+        }
+        Err(error) => failed(video, error),
     }
 }
 
@@ -948,6 +1148,14 @@ pub async fn fetch_emoji_image(
 /// Run `effect` on its own task and send each resulting Action on `tx`. The only place an effect
 /// starts IO.
 pub fn spawn(client: Result<Client, ApiError>, tx: Sender<Action>, effect: Effect) {
+    // A playback needs the channel for its frames, and waits on a program: its own blocking task.
+    if let Effect::StartVideo(start) = effect {
+        let downloads = downloads_dir_from_env();
+        drop(tokio::task::spawn_blocking(move || {
+            start_video_blocking(downloads.as_deref(), &tx, start);
+        }));
+        return;
+    }
     tokio::spawn(async move {
         for action in run(client, effect).await {
             if tx.send(action).await.is_err() {
@@ -2319,5 +2527,215 @@ mod tests {
                 .as_slice(),
             [Action::AttachmentViewFailed(_)]
         ));
+    }
+    // ---- video posters ---------------------------------------------------------------------
+
+    fn png_of(width: u32, height: u32) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut out = Vec::new();
+        let pixels = vec![200u8; (width * height * 4) as usize];
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        out
+    }
+
+    fn video_ref(ffmpeg: &str) -> VideoRef {
+        VideoRef {
+            path: "/file-upload/v1/clip.mp4".to_string(),
+            mime: "video/mp4".to_string(),
+            size: Some(100),
+            ffmpeg: ffmpeg.to_string(),
+        }
+    }
+
+    async fn serve_video(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/file-upload/v1/clip.mp4"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"video bytes".to_vec()))
+            .mount(server)
+            .await;
+    }
+
+    /// A fake `ffmpeg` that records each run and writes `poster` to stdout.
+    fn fake_poster_program(dir: &std::path::Path, poster: &[u8]) -> String {
+        std::fs::write(dir.join("poster.png"), poster).unwrap();
+        crate::video::fake::script(
+            dir,
+            "ffmpeg",
+            "echo run >> \"$(dirname \"$0\")/runs.log\"\ncat \"$(dirname \"$0\")/poster.png\"",
+        )
+    }
+
+    #[tokio::test]
+    async fn a_poster_is_made_cached_and_then_read_from_the_cache_without_running_anything() {
+        let server = MockServer::start().await;
+        serve_video(&server).await;
+        let fake = crate::video::fake::temp_dir("poster-fx");
+        let program = fake_poster_program(&fake, &png_of(16, 9));
+        let downloads = cache_tmp("poster-downloads");
+        let cache = cache_tmp("poster-cache");
+        let action = load_video_poster(
+            &client_for(&server),
+            Some(&cache),
+            Some(&downloads),
+            video_ref(&program),
+        )
+        .await;
+        let Action::VideoPosterReady { video, decoded } = action else {
+            panic!("expected a poster, got {action:?}");
+        };
+        assert_eq!(video, video_ref(&program));
+        assert_eq!((decoded.width, decoded.height), (16, 9));
+        assert_eq!(
+            std::fs::read_to_string(fake.join("runs.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_dir(&cache).unwrap().count(),
+            1,
+            "the poster is cached"
+        );
+        // A later session: no server, and not even a program that exists.
+        let second = MockServer::start().await;
+        let nowhere = fake.join("gone").to_string_lossy().into_owned();
+        let again = load_video_poster(
+            &client_for(&second),
+            Some(&cache),
+            Some(&cache_tmp("poster-downloads-2")),
+            video_ref(&nowhere),
+        )
+        .await;
+        assert!(
+            matches!(again, Action::VideoPosterReady { .. }),
+            "{again:?}"
+        );
+        assert!(second.received_requests().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(fake.join("runs.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "ffmpeg did not run again"
+        );
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&downloads);
+    }
+
+    #[tokio::test]
+    async fn a_poster_that_cannot_be_made_fails_with_a_fixed_kind_and_caches_nothing() {
+        use crate::video::VideoError;
+        let server = MockServer::start().await;
+        serve_video(&server).await;
+        let fake = crate::video::fake::temp_dir("poster-fail");
+        let downloads = cache_tmp("poster-fail-downloads");
+        let cache = cache_tmp("poster-fail-cache");
+        let run = |program: String, size: Option<u64>| {
+            let (server, downloads, cache) = (&server, &downloads, &cache);
+            async move {
+                let mut video = video_ref(&program);
+                video.size = size;
+                load_video_poster(&client_for(server), Some(cache), Some(downloads), video).await
+            }
+        };
+        let kind = |action: Action| match action {
+            Action::VideoPosterFailed { error, .. } => error,
+            other => panic!("expected a failure, got {other:?}"),
+        };
+        // ffmpeg is not installed.
+        let missing = fake.join("none").to_string_lossy().into_owned();
+        assert_eq!(
+            kind(run(missing, Some(100)).await),
+            VideoError::ProgramMissing
+        );
+        // ffmpeg fails.
+        let failing = crate::video::fake::script(&fake, "fails", "exit 1");
+        assert_eq!(kind(run(failing, Some(100)).await), VideoError::CannotShow);
+        // ffmpeg writes something that is not an image.
+        let junk = fake_poster_program(&fake, b"<html>not a png</html>");
+        assert_eq!(kind(run(junk, Some(100)).await), VideoError::CannotShow);
+        // A picture over the frame limit is refused, whatever the program says.
+        let huge = fake_poster_program(&fake, &png_of(481, 10));
+        assert_eq!(kind(run(huge, Some(100)).await), VideoError::CannotShow);
+        assert!(
+            !cache.exists() || std::fs::read_dir(&cache).unwrap().next().is_none(),
+            "nothing cached"
+        );
+        // The file is over the download limit: nothing is requested.
+        let quiet = MockServer::start().await;
+        let action = load_video_poster(
+            &client_for(&quiet),
+            Some(&cache),
+            Some(&cache_tmp("poster-big")),
+            VideoRef {
+                size: Some(crate::api::MAX_DOWNLOAD_BYTES as u64 + 1),
+                ..video_ref("ffmpeg")
+            },
+        )
+        .await;
+        assert_eq!(kind(action), VideoError::TooLarge);
+        assert!(quiet.received_requests().await.unwrap().is_empty());
+        // A media type that is not a video type is refused before any request.
+        let action = load_video_poster(
+            &client_for(&quiet),
+            Some(&cache),
+            Some(&cache_tmp("poster-pdf")),
+            VideoRef {
+                mime: "application/pdf".to_string(),
+                ..video_ref("ffmpeg")
+            },
+        )
+        .await;
+        assert_eq!(kind(action), VideoError::CannotShow);
+        assert!(quiet.received_requests().await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&downloads);
+    }
+
+    #[test]
+    fn video_effects_and_actions_print_no_path_name_or_program_output() {
+        let video = VideoRef {
+            path: "/file-upload/SENTINEL-ROOM/SECRET-NAME.mp4".to_string(),
+            mime: "video/mp4".to_string(),
+            size: Some(5),
+            ffmpeg: "/opt/SENTINEL-FFMPEG/bin/ffmpeg".to_string(),
+        };
+        let printed = [
+            format!("{video:?}"),
+            format!("{:?}", Effect::LoadVideoPoster(video.clone())),
+            format!(
+                "{:?}",
+                Action::VideoPosterFailed {
+                    video: video.clone(),
+                    error: crate::video::VideoError::CannotShow
+                }
+            ),
+            format!(
+                "{:?}",
+                Action::VideoPosterReady {
+                    video,
+                    decoded: crate::emoji_image::Rgba::default()
+                }
+            ),
+            format!(
+                "{:?}",
+                Action::VideoFrame {
+                    generation: 1,
+                    index: 2,
+                    pixels: vec![0xAB; 64].into()
+                }
+            ),
+            format!("{:?}", Action::VideoEnded { generation: 1 }),
+        ];
+        for text in &printed {
+            for secret in ["SENTINEL", "SECRET", "file-upload", "ffmpeg", "171"] {
+                assert!(!text.contains(secret), "{secret} in {text}");
+            }
+        }
+        assert!(printed[4].contains("<64> bytes"), "{}", printed[4]);
     }
 }

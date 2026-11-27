@@ -9,7 +9,7 @@ use crate::api::MAX_ATTACHMENT_BYTES;
 use crate::app::App;
 use crate::app::emoji::Graphics;
 use crate::data::{Attachment, AttachmentKind, MessageKind};
-use crate::effect::{AttachmentRef, Effect};
+use crate::effect::{AttachmentRef, Effect, VideoRef};
 use crate::emoji_image::Rgba;
 use crate::kitty::{IMAGE_ID_FIRST, IMAGE_ID_LAST};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -48,6 +48,19 @@ pub struct AttachmentImages {
     in_flight: usize,
     /// The outcome per path.
     state: HashMap<String, ImageState>,
+    /// Posters of videos waiting for a free slot (they share `in_flight` with the images).
+    video_queue: VecDeque<VideoRef>,
+    /// The videos whose poster a `play_video` press asked for, so a failure can say so.
+    video_explicit: HashSet<String>,
+    /// Videos whose download a `play_video_fullscreen` press asked for: the room and message to
+    /// open the overlay for once the poster is ready, by path.
+    video_fullscreen: HashMap<String, (crate::data::RoomId, String)>,
+    /// True once `ffmpeg` was not found: no poster is asked for by itself until one is made.
+    video_missing: bool,
+    /// The two terminal image ids the player alternates between, taken on first use and kept.
+    video_ids: Option<[u32; 2]>,
+    /// The number of the last playback run started: every run of every player has its own.
+    video_runs: u64,
     /// The last terminal image id handed out; ids start at `IMAGE_ID_FIRST`.
     last_id: u32,
     /// The id the full-size view uses, taken on first use and kept: one image at a time is shown.
@@ -66,6 +79,98 @@ impl AttachmentImages {
     #[cfg(test)]
     pub fn set_state(&mut self, path: &str, state: ImageState) {
         self.state.insert(path.to_string(), state);
+    }
+
+    /// True when `path` was already asked for this session.
+    pub fn is_requested(&self, path: &str) -> bool {
+        self.requested.contains(path)
+    }
+
+    /// True when `ffmpeg` was not found the last time it was needed.
+    pub fn video_missing(&self) -> bool {
+        self.video_missing
+    }
+
+    pub(crate) fn set_video_missing(&mut self, missing: bool) {
+        self.video_missing = missing;
+    }
+
+    /// Queue the poster of `video` unless its path was asked for already. `explicit` marks a
+    /// request that a key press made. True when it was queued.
+    pub(crate) fn queue_video(&mut self, video: VideoRef, explicit: bool) -> bool {
+        if !self.requested.insert(video.path.clone()) {
+            return false;
+        }
+        if explicit {
+            self.video_explicit.insert(video.path.clone());
+            self.video_queue.push_front(video);
+        } else {
+            self.video_queue.push_back(video);
+        }
+        true
+    }
+
+    /// A poster request ended: free its slot. True when a key press had asked for it.
+    pub(crate) fn video_poster_done(&mut self, path: &str) -> bool {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.video_explicit.remove(path)
+    }
+
+    /// Remember that the poster of `path` was asked for to play it fullscreen in `message_id`.
+    pub(crate) fn want_fullscreen(
+        &mut self,
+        path: &str,
+        room: crate::data::RoomId,
+        message_id: String,
+    ) {
+        self.video_fullscreen
+            .insert(path.to_string(), (room, message_id));
+    }
+
+    /// Take the fullscreen intent of `path`, if a press left one.
+    pub(crate) fn take_fullscreen(&mut self, path: &str) -> Option<(crate::data::RoomId, String)> {
+        self.video_fullscreen.remove(path)
+    }
+
+    /// Forget that `path` was asked for, so it can be asked for again.
+    pub(crate) fn forget_request(&mut self, path: &str) {
+        self.requested.remove(path);
+    }
+
+    /// Keep `decoded` as the ready image of `path` (a still: one terminal image id). Failed when
+    /// the id range is used up.
+    pub(crate) fn store_ready(&mut self, path: String, decoded: Rgba, dims: Option<(u32, u32)>) {
+        let state = match self.next_ids(decoded.frame_count()) {
+            Some(id) => ImageState::Ready {
+                image: decoded,
+                dims,
+                id,
+                uploaded: false,
+                placed: None,
+            },
+            None => ImageState::Failed,
+        };
+        self.state.insert(path, state);
+    }
+
+    pub(crate) fn store_failed(&mut self, path: String) {
+        self.state.insert(path, ImageState::Failed);
+    }
+
+    /// The player's two terminal image ids, taken the first time they are asked for. `None` when
+    /// the id range is used up.
+    pub(crate) fn take_video_ids(&mut self) -> Option<[u32; 2]> {
+        if self.video_ids.is_none() {
+            let first = self.next_ids(2)?;
+            self.video_ids = Some([first, first + 1]);
+        }
+        self.video_ids
+    }
+
+    /// A new run number, never used before.
+    pub(crate) fn next_video_run(&mut self) -> u64 {
+        self.video_runs += 1;
+        self.video_runs
     }
 
     /// The number of fetches running now.
@@ -179,6 +284,7 @@ fn animated_original(attachment: &Attachment, animate: bool) -> Option<String> {
 /// Nothing is asked for unless the terminal can show images and `inline_images` is on. Each path is
 /// asked for once per session, at most `MAX_IN_FLIGHT` run at a time, and the rest wait in order.
 pub fn request_images(app: &mut App) {
+    crate::app::video::request_posters(app);
     if app.graphics != Graphics::Supported || !app.settings.inline_images {
         pump(app);
         return;
@@ -208,14 +314,19 @@ pub fn request_images(app: &mut App) {
     pump(app);
 }
 
-/// Start as many queued fetches as there are free slots.
-fn pump(app: &mut App) {
+/// Start as many queued fetches as there are free slots: the images first, then the video posters
+/// (which a key press put in front of the other posters).
+pub(crate) fn pump(app: &mut App) {
     while app.attachment_images.in_flight < MAX_IN_FLIGHT {
-        let Some(next) = app.attachment_images.queue.pop_front() else {
+        if let Some(next) = app.attachment_images.queue.pop_front() {
+            app.attachment_images.in_flight += 1;
+            app.effects.push(Effect::FetchAttachmentImage(next));
+        } else if let Some(next) = app.attachment_images.video_queue.pop_front() {
+            app.attachment_images.in_flight += 1;
+            app.effects.push(Effect::LoadVideoPoster(next));
+        } else {
             break;
-        };
-        app.attachment_images.in_flight += 1;
-        app.effects.push(Effect::FetchAttachmentImage(next));
+        }
     }
 }
 
@@ -231,23 +342,27 @@ pub const MAX_UPLOADED: usize = 24;
 /// changed box (a resize) places again. Empty unless images are drawn at all. Nothing is drawn
 /// from here: the escape sequences are the caller's to write.
 pub fn prepare_frame(app: &mut App) -> Vec<String> {
-    if app.graphics != Graphics::Supported || !app.settings.inline_images {
-        return Vec::new();
+    // Images to delete go out first, whatever else is true: a stopped video frees its two.
+    let mut out: Vec<String> = std::mem::take(&mut app.attachment_images.pending_deletes)
+        .into_iter()
+        .map(crate::kitty::delete)
+        .collect();
+    if app.graphics != Graphics::Supported
+        || !(app.settings.inline_images || app.settings.inline_video)
+    {
+        return out;
     }
     let Some(room) = app.current_room.clone() else {
-        return Vec::new();
+        return out;
     };
     let wanted = wanted_placements(app, &room);
     let view_cells = app.image_view.as_ref().and_then(|view| {
         let pixels = view.pixels.as_ref()?;
         crate::ui::image_view::placement(app, (pixels.image.width, pixels.image.height))
     });
+    // The newest frame of a playing video goes up before the cells that show it.
+    crate::app::video::prepare_player(app, &mut out);
     let images = &mut app.attachment_images;
-    let mut out = Vec::new();
-    // The view's image goes first when it was closed: its pixels are freed in the terminal.
-    for id in std::mem::take(&mut images.pending_deletes) {
-        out.push(crate::kitty::delete(id));
-    }
     // The full-size view: its own id, transmitted once per image and placed in the overlay.
     if let (Some(view), Some(cells)) = (app.image_view.as_mut(), view_cells)
         && let Some(pixels) = view.pixels.as_mut()
@@ -398,7 +513,12 @@ fn wanted_placements(app: &App, room: &crate::data::RoomId) -> Vec<(String, (usi
             continue;
         }
         let body = crate::ui::wrap::body_width(msg, usize::from(width), &ctx);
-        for attachment in msg.attachments.iter().filter(|a| is_fetchable_image(a)) {
+        let images_on = app.settings.inline_images;
+        let video_on = app.settings.inline_video;
+        for attachment in msg.attachments.iter().filter(|a| {
+            (images_on && is_fetchable_image(a))
+                || (video_on && crate::app::video::is_fetchable_video(a))
+        }) {
             let Some(path) = attachment.path.as_ref() else {
                 continue;
             };
@@ -409,7 +529,7 @@ fn wanted_placements(app: &App, room: &crate::data::RoomId) -> Vec<(String, (usi
                 continue;
             }
             let boxed =
-                crate::ui::attachment::box_size(attachment.dims, body, app.settings.image_max_rows);
+                crate::ui::attachment::box_of(attachment, body, app.settings.image_max_rows);
             if boxed.0 == 0 {
                 continue;
             }

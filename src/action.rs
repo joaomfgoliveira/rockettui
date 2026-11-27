@@ -86,6 +86,25 @@ pub enum Action {
     /// attachment (`go`): download the first one to the cache and open it with the configured
     /// external program. A message with none gets a status notice.
     OpenAttachment,
+    /// Normal mode, messages pane focused, cursor on a message with a video (`gv`): step that
+    /// video's box (placeholder, poster, playing, back to the poster). Elsewhere a no-op.
+    PlayVideo,
+    /// Normal mode, messages pane focused, cursor on a message with a video (`gV`): play it in
+    /// the fullscreen overlay, or expand the inline run that is already going. Elsewhere a no-op.
+    PlayVideoFullscreen,
+    /// Video player keys (the `[video]` table, only while a video plays or is paused): pause or
+    /// resume.
+    VideoPause,
+    /// Player: seek 5 seconds back.
+    VideoSeekBack,
+    /// Player: seek 5 seconds forward.
+    VideoSeekForward,
+    /// Player: seek 30 seconds back.
+    VideoSeekBackFar,
+    /// Player: seek 30 seconds forward.
+    VideoSeekForwardFar,
+    /// Player: stop the video and give the keys back.
+    VideoStop,
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
@@ -323,6 +342,40 @@ pub enum Action {
         download: crate::effect::DownloadRef,
         error: crate::api::DownloadError,
     },
+    /// A video's poster is ready (`Effect::LoadVideoPoster`).
+    VideoPosterReady {
+        video: crate::effect::VideoRef,
+        decoded: crate::emoji_image::Rgba,
+    },
+    /// A video's poster could not be made; the kind is fixed text. Final for the session.
+    VideoPosterFailed {
+        video: crate::effect::VideoRef,
+        error: crate::video::VideoError,
+    },
+    /// A playback run was started (`Effect::StartVideo`): its token ends it, and `duration` is the
+    /// video's length when the probe could read it (always `None` for a run that did not probe).
+    VideoStarted {
+        generation: u64,
+        duration: Option<std::time::Duration>,
+        handle: crate::video::PlaybackToken,
+    },
+    /// A playback run could not be started; the kind is fixed text.
+    VideoStartFailed {
+        generation: u64,
+        error: crate::video::VideoError,
+    },
+    /// The player read a frame: `generation` names the run (a seek starts a new one), `index` is
+    /// its number in the run and `pixels` is one RGBA frame of the poster's size. Its `Debug`
+    /// never prints the pixels.
+    VideoFrame {
+        generation: u64,
+        index: u64,
+        pixels: std::sync::Arc<[u8]>,
+    },
+    /// The player's run ended: the stream is over (or its program died).
+    VideoEnded {
+        generation: u64,
+    },
     /// The external program was started (`Ok`), could not be, or failed at once
     /// (`Effect::OpenFile`).
     AttachmentOpened(Result<(), crate::effect::OpenError>),
@@ -415,6 +468,14 @@ impl std::fmt::Debug for Action {
             Action::OpenChannel => write!(f, "OpenChannel"),
             Action::ShowImage => write!(f, "ShowImage"),
             Action::OpenAttachment => write!(f, "OpenAttachment"),
+            Action::PlayVideo => write!(f, "PlayVideo"),
+            Action::PlayVideoFullscreen => write!(f, "PlayVideoFullscreen"),
+            Action::VideoPause => write!(f, "VideoPause"),
+            Action::VideoSeekBack => write!(f, "VideoSeekBack"),
+            Action::VideoSeekForward => write!(f, "VideoSeekForward"),
+            Action::VideoSeekBackFar => write!(f, "VideoSeekBackFar"),
+            Action::VideoSeekForwardFar => write!(f, "VideoSeekForwardFar"),
+            Action::VideoStop => write!(f, "VideoStop"),
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
@@ -589,6 +650,30 @@ impl std::fmt::Debug for Action {
                 write!(f, "AttachmentDownloadFailed({download:?}, {error:?})")
             }
             Action::AttachmentOpened(result) => write!(f, "AttachmentOpened({result:?})"),
+            Action::VideoPosterReady { video, decoded } => {
+                write!(f, "VideoPosterReady({video:?}, {decoded:?})")
+            }
+            Action::VideoPosterFailed { video, error } => {
+                write!(f, "VideoPosterFailed({video:?}, {error:?})")
+            }
+            Action::VideoFrame {
+                generation,
+                index,
+                pixels,
+            } => write!(
+                f,
+                "VideoFrame({generation}, {index}, <{}> bytes)",
+                pixels.len()
+            ),
+            Action::VideoEnded { generation } => write!(f, "VideoEnded({generation})"),
+            Action::VideoStarted {
+                generation,
+                duration,
+                handle,
+            } => write!(f, "VideoStarted({generation}, {duration:?}, {handle:?})"),
+            Action::VideoStartFailed { generation, error } => {
+                write!(f, "VideoStartFailed({generation}, {error:?})")
+            }
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),

@@ -12,6 +12,9 @@ pub struct Keymap {
     normal: Trie<Action>,
     insert: Trie<Action>,
     command: Trie<Action>,
+    /// The player's keys, used only while a video plays or is paused. Not a `Mode`: nothing that
+    /// matches on `Mode` changes, and the six player actions live only here.
+    video: Trie<Action>,
 }
 
 impl Keymap {
@@ -22,12 +25,47 @@ impl Keymap {
             normal: Trie::new(),
             insert: Trie::new(),
             command: Trie::new(),
+            video: Trie::new(),
         };
         for (mode, notation, action) in rows {
             let chords = parse_keys(notation)?;
             keymap.trie_mut(*mode).insert(&chords, action.clone());
         }
+        for (notation, action) in default_video_bindings() {
+            let chords = parse_keys(notation)?;
+            keymap.video.insert(&chords, action);
+        }
         Ok(keymap)
+    }
+
+    /// Bind `seq` in the player's table, replacing any earlier binding of the same keys.
+    pub fn bind_video(&mut self, seq: &[Chord], action: Action) {
+        self.video.insert(seq, action);
+    }
+
+    /// Remove the binding of `seq` in the player's table. False when it was not bound.
+    pub fn unbind_video(&mut self, seq: &[Chord]) -> bool {
+        self.video.remove(seq)
+    }
+
+    /// Every binding of the player's table, in no particular order.
+    pub fn video_bindings(&self) -> Vec<(Vec<Chord>, &Action)> {
+        self.video.entries()
+    }
+
+    /// Every `(short, long)` pair in the player's table where a binding is a prefix of another.
+    pub fn video_clashes(&self) -> Vec<(Vec<Chord>, Vec<Chord>)> {
+        self.video.clashes()
+    }
+
+    /// What `seq` resolves to in the player's table.
+    pub fn lookup_video(&self, seq: &[Chord]) -> Lookup<'_, Action> {
+        self.video.lookup(seq)
+    }
+
+    /// The whole trie of the player's table, as the matcher consumes it.
+    pub fn video_trie(&self) -> &Trie<Action> {
+        &self.video
     }
 
     fn trie_mut(&mut self, mode: Mode) -> &mut Trie<Action> {
@@ -116,6 +154,12 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // `go` (`open_attachment`) downloads the image, video or audio of the message under the
         // cursor and opens it with the user's own program.
         (Mode::Normal, "go", Action::OpenAttachment),
+        // `gv` (`play_video`) steps the video box of the message under the cursor: load the poster,
+        // play, stop. While one plays, the keys of the `[video]` table apply instead.
+        (Mode::Normal, "gv", Action::PlayVideo),
+        // `gV` (`play_video_fullscreen`) plays the video of the message under the cursor in an
+        // overlay over the whole screen, or expands the inline run.
+        (Mode::Normal, "gV", Action::PlayVideoFullscreen),
         // `gt` (`open_thread`) opens the thread of the message under the cursor in the thread pane.
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.
@@ -165,6 +209,21 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         (Mode::Command, "<Esc>", Action::Cancel),
         (Mode::Command, "<C-c>", Action::Cancel),
         (Mode::Command, "<BS>", Action::DeleteBack),
+    ]
+}
+
+/// The player's default keys: `Space` pauses, `h`/`l` seek 5 seconds, `H`/`L` seek 30 seconds and
+/// `Esc`, `q` and `Ctrl-c` stop. The same in every preset.
+pub fn default_video_bindings() -> Vec<(&'static str, Action)> {
+    vec![
+        ("<Space>", Action::VideoPause),
+        ("h", Action::VideoSeekBack),
+        ("l", Action::VideoSeekForward),
+        ("H", Action::VideoSeekBackFar),
+        ("L", Action::VideoSeekForwardFar),
+        ("<Esc>", Action::VideoStop),
+        ("q", Action::VideoStop),
+        ("<C-c>", Action::VideoStop),
     ]
 }
 

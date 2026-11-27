@@ -55,6 +55,8 @@ pub const ACTION_NAMES: &[&str] = &[
     "open_channel",
     "show_image",
     "open_attachment",
+    "play_video",
+    "play_video_fullscreen",
     "react_message",
     "open_thread",
     "list_threads",
@@ -71,6 +73,29 @@ pub const ACTION_NAMES: &[&str] = &[
     "execute_command",
     "quit",
 ];
+
+/// The names that only the `[video]` table accepts, the player's keys while a video plays.
+pub const VIDEO_ACTION_NAMES: &[&str] = &[
+    "video_pause",
+    "video_seek_back",
+    "video_seek_forward",
+    "video_seek_back_far",
+    "video_seek_forward_far",
+    "video_stop",
+];
+
+/// The player action a `[video]` name stands for. `None` for any other name.
+pub fn video_action_from_name(name: &str) -> Option<Action> {
+    Some(match name {
+        "video_pause" => Action::VideoPause,
+        "video_seek_back" => Action::VideoSeekBack,
+        "video_seek_forward" => Action::VideoSeekForward,
+        "video_seek_back_far" => Action::VideoSeekBackFar,
+        "video_seek_forward_far" => Action::VideoSeekForwardFar,
+        "video_stop" => Action::VideoStop,
+        _ => return None,
+    })
+}
 
 /// The action a name stands for. `none`, `cmd:<command>` and every unknown name give `None`.
 pub fn action_from_name(name: &str) -> Option<Action> {
@@ -112,6 +137,8 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "open_channel" => Action::OpenChannel,
         "show_image" => Action::ShowImage,
         "open_attachment" => Action::OpenAttachment,
+        "play_video" => Action::PlayVideo,
+        "play_video_fullscreen" => Action::PlayVideoFullscreen,
         "react_message" => Action::ReactMessage,
         "open_thread" => Action::OpenThread,
         "list_threads" => Action::ListThreads,
@@ -172,6 +199,14 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         Action::OpenChannel => Some("open_channel"),
         Action::ShowImage => Some("show_image"),
         Action::OpenAttachment => Some("open_attachment"),
+        Action::PlayVideo => Some("play_video"),
+        Action::PlayVideoFullscreen => Some("play_video_fullscreen"),
+        Action::VideoPause => Some("video_pause"),
+        Action::VideoSeekBack => Some("video_seek_back"),
+        Action::VideoSeekForward => Some("video_seek_forward"),
+        Action::VideoSeekBackFar => Some("video_seek_back_far"),
+        Action::VideoSeekForwardFar => Some("video_seek_forward_far"),
+        Action::VideoStop => Some("video_stop"),
         Action::ReactMessage => Some("react_message"),
         Action::OpenThread => Some("open_thread"),
         Action::ListThreads => Some("list_threads"),
@@ -237,6 +272,12 @@ pub fn name_of(action: &Action) -> Option<&'static str> {
         | Action::AttachmentDownloaded { .. }
         | Action::AttachmentDownloadFailed { .. }
         | Action::AttachmentOpened(_)
+        | Action::VideoPosterReady { .. }
+        | Action::VideoPosterFailed { .. }
+        | Action::VideoFrame { .. }
+        | Action::VideoEnded { .. }
+        | Action::VideoStarted { .. }
+        | Action::VideoStartFailed { .. }
         | Action::RtConnected
         | Action::RtDisconnected
         | Action::RtRejected
@@ -262,6 +303,21 @@ mod tests {
             let action = action_from_name(name).unwrap_or_else(|| panic!("{name} has no action"));
             assert_eq!(name_of(&action), Some(*name));
         }
+    }
+
+    #[test]
+    fn video_names_round_trip_and_stay_out_of_the_normal_vocabulary() {
+        let unique: HashSet<&&str> = VIDEO_ACTION_NAMES.iter().collect();
+        assert_eq!(unique.len(), VIDEO_ACTION_NAMES.len(), "duplicate name");
+        for name in VIDEO_ACTION_NAMES {
+            let action =
+                video_action_from_name(name).unwrap_or_else(|| panic!("{name} has no action"));
+            assert_eq!(name_of(&action), Some(*name));
+            assert!(action_from_name(name).is_none(), "{name} is a [video] name");
+            assert!(!ACTION_NAMES.contains(name));
+        }
+        assert!(video_action_from_name("move_down").is_none());
+        assert!(video_action_from_name("play_video").is_none());
     }
 
     #[test]

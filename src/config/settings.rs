@@ -124,6 +124,13 @@ pub struct Settings {
     pub animate_images: bool,
     /// config.toml key `image_max_rows`: the tallest an inline image may be, in rows.
     pub image_max_rows: u16,
+    /// config.toml key `inline_video`: draw video attachments in a box (and fetch small ones for
+    /// their poster) where the terminal can show images. On by default.
+    pub inline_video: bool,
+    /// config.toml key `ffmpeg`: the program that makes posters and decodes video frames.
+    pub ffmpeg: String,
+    /// config.toml key `ffprobe`: the program that reads a video's length.
+    pub ffprobe: String,
     /// config.toml table `[emoji_aliases]`: the text drawn for a reaction by shortcode name
     /// (without colons), so a custom server emoji can show as a lookalike. Empty by default. An
     /// alias wins over the unicode table and over the server's custom emojis, which are drawn as
@@ -163,6 +170,10 @@ impl OpenSettings {
     }
 }
 
+/// The program names used for video when `config.toml` names none.
+pub const DEFAULT_FFMPEG: &str = "ffmpeg";
+pub const DEFAULT_FFPROBE: &str = "ffprobe";
+
 /// The opener used when `[open]` names none: `open` on macOS, `xdg-open` elsewhere.
 pub const fn platform_opener() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -187,6 +198,9 @@ impl Default for Settings {
             inline_images: true,
             animate_images: true,
             image_max_rows: DEFAULT_IMAGE_MAX_ROWS,
+            inline_video: true,
+            ffmpeg: DEFAULT_FFMPEG.to_string(),
+            ffprobe: DEFAULT_FFPROBE.to_string(),
             emoji_aliases: HashMap::new(),
             open: OpenSettings::default(),
         }
@@ -206,6 +220,9 @@ const KNOWN_KEYS: &[&str] = &[
     "inline_images",
     "animate_images",
     "image_max_rows",
+    "inline_video",
+    "ffmpeg",
+    "ffprobe",
     "emoji_aliases",
     "open",
     // Read by `connection::parse_file`, not here; known so they are not reported as unknown (D-01).
@@ -321,6 +338,21 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
             settings.image_max_rows = u16::try_from(n).unwrap_or(settings.image_max_rows);
         }
     }
+    if let Some(value) = table.get("inline_video")
+        && let Some(on) = reader.boolean(value, "inline_video")
+    {
+        settings.inline_video = on;
+    }
+    if let Some(value) = table.get("ffmpeg")
+        && let Some(name) = program_name(&mut reader, value, "ffmpeg")
+    {
+        settings.ffmpeg = name;
+    }
+    if let Some(value) = table.get("ffprobe")
+        && let Some(name) = program_name(&mut reader, value, "ffprobe")
+    {
+        settings.ffprobe = name;
+    }
     if let Some(value) = table.get("emoji_aliases") {
         settings.emoji_aliases = parse_emoji_aliases(&mut reader, value);
     }
@@ -330,6 +362,29 @@ pub fn parse(src: Option<&str>, out: &mut Vec<Problem>) -> Settings {
     // D-03: unknown keys and tables only warn. The connection keys are known (Phase 3, D-01).
     reader.warn_unknown(table, KNOWN_KEYS, "");
     settings
+}
+
+/// A program name or path: a string that is not empty and holds no NUL character. An invalid one
+/// is reported and the default is kept.
+fn program_name(
+    reader: &mut Reader<'_>,
+    value: &Spanned<DeValue<'_>>,
+    key: &str,
+) -> Option<String> {
+    let text = reader.string(value, key)?;
+    if text.is_empty() {
+        reader.error(
+            value.span().start,
+            key,
+            "the program name must not be empty",
+        );
+        return None;
+    }
+    if text.contains('\0') {
+        reader.error(value.span().start, key, "must not contain a NUL character");
+        return None;
+    }
+    Some(text)
 }
 
 /// Read the `[open]` table. Each key is a non-empty array of strings whose first entry, the
@@ -827,6 +882,52 @@ mod tests {
         let (_, out) = errors_of("image_max_rows = 100\n");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].message, "must be between 3 and 40, got 100");
+    }
+
+    #[test]
+    fn inline_video_settings() {
+        let (settings, out) = errors_of("");
+        assert!(out.is_empty());
+        assert!(settings.inline_video);
+        assert_eq!(
+            (settings.ffmpeg.as_str(), settings.ffprobe.as_str()),
+            ("ffmpeg", "ffprobe")
+        );
+        let (settings, out) = errors_of("inline_video = false\n");
+        assert!(out.is_empty() && !settings.inline_video);
+        let (settings, out) = errors_of("ffmpeg = \"/opt/ffmpeg/bin/ffmpeg\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(settings.ffmpeg, "/opt/ffmpeg/bin/ffmpeg");
+        assert_eq!(settings.ffprobe, "ffprobe");
+        let (settings, out) = errors_of("ffprobe = \"/opt/ffprobe\"\n");
+        assert!(out.is_empty() && settings.ffprobe == "/opt/ffprobe");
+        assert_eq!(settings.ffmpeg, "ffmpeg");
+    }
+
+    #[test]
+    fn inline_video_settings_reject_invalid_values() {
+        let (settings, out) = errors_of("inline_video = \"yes\"\n");
+        assert!(settings.inline_video, "an invalid value keeps the default");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.as_deref(), Some("inline_video"));
+        for key in ["ffmpeg", "ffprobe"] {
+            let (settings, out) = errors_of(&format!("{key} = \"\"\n"));
+            assert_eq!(out.len(), 1, "{key}");
+            assert_eq!(out[0].key.as_deref(), Some(key));
+            assert_eq!(out[0].message, "the program name must not be empty");
+            assert_eq!(settings, Settings::default());
+            let (_, out) = errors_of(&format!("{key} = 3\n"));
+            assert_eq!(out.len(), 1, "{key}");
+            assert!(
+                out[0].message.starts_with("expected a string"),
+                "{}",
+                out[0].message
+            );
+            let (settings, out) = errors_of(&format!("{key} = \"a\\u0000b\"\n"));
+            assert_eq!(out.len(), 1, "{key}");
+            assert_eq!(out[0].message, "must not contain a NUL character");
+            assert_eq!(settings, Settings::default());
+        }
     }
 
     #[test]
