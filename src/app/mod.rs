@@ -3,6 +3,7 @@
 //! `App` holds no data of its own at construction: rooms, folders and messages arrive as
 //! `Action`s from a data source (the D-13 seam).
 
+pub mod channels;
 pub mod command;
 pub mod context;
 pub mod edit;
@@ -227,6 +228,9 @@ pub struct App {
     /// The reactions popup (`app::reactions`), when open: the message it was opened on. Like
     /// `context` it is a state, not a mode; its content is recomputed from the app on every draw.
     pub reactions_popup: Option<reactions::ReactionsPopup>,
+    /// The channel picker (`app::channels`), when open: the message it was opened on and the
+    /// selected row. A state, not a mode; it takes every key while open.
+    pub channel_picker: Option<channels::ChannelPicker>,
     /// The server's custom emojis (`app::emoji`): requested when the rooms have loaded and kept for
     /// the session. Read by the reaction picker, message text and the reaction row.
     pub custom_emojis: emoji::CustomEmojis,
@@ -338,6 +342,7 @@ impl App {
             help: None,
             context: false,
             reactions_popup: None,
+            channel_picker: None,
             custom_emojis: emoji::CustomEmojis::default(),
             graphics: emoji::Graphics::default(),
             images: emoji::Images::default(),
@@ -919,6 +924,7 @@ mod tests {
                     tcount: 0,
                     tlm: None,
                     followers: None,
+                    refs: None,
                     reactions: Vec::new(),
                     id: format!("u-{n}"),
                     room_id: rid(room),

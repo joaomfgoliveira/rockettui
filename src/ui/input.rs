@@ -77,6 +77,32 @@ fn reply_title(target: &InputTarget) -> String {
     }
 }
 
+/// One drawn draft row as spans: the draft style, with each mention or channel reference of
+/// `marks` (byte ranges of `row`, from `mention::strip`) in its kind's style over it.
+fn mention_spans(
+    row: String,
+    marks: &[(std::ops::Range<usize>, crate::ui::mention::Kind)],
+    theme: &crate::config::Theme,
+) -> Vec<Span<'static>> {
+    let base = theme.input_text;
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for (range, kind) in marks {
+        if range.start > at {
+            spans.push(Span::styled(row[at..range.start].to_string(), base));
+        }
+        spans.push(Span::styled(
+            row[range.start..range.end].to_string(),
+            base.patch(kind.style(theme)),
+        ));
+        at = range.end;
+    }
+    if at < row.len() || spans.is_empty() {
+        spans.push(Span::styled(row[at..].to_string(), base));
+    }
+    spans
+}
+
 /// Draw one bar. `live` is true when the bar shows the text being edited: only that one takes the
 /// focus border and the hardware cursor.
 fn bar(
@@ -102,13 +128,17 @@ fn bar(
             // cells of its image or stand-in, which `expand` turns into what is painted, as for
             // a message. The cursor math reads the same units, so it stays where the text ends.
             let mut inside = false;
+            // The mentions of the rows above the first drawn one still decide whether a token is
+            // open at its top, so every row goes through `strip` and only then is cut to the view.
+            let mut open = None;
             let rows: Vec<Line> = buffer
-                .drawn_rows(inner.width, &view)
+                .drawn_rows(inner.width, &view, app.own_username.as_deref())
                 .into_iter()
+                .map(|row| crate::ui::mention::strip(&row, &mut open))
                 .skip(top)
                 .take(usize::from(inner.height))
-                .map(|row| {
-                    let spans = vec![Span::styled(row, app.theme.input_text)];
+                .map(|(row, marks)| {
+                    let spans = mention_spans(row, &marks, &app.theme);
                     let spans = expand(spans, app.theme.messages_custom_emoji, &mut inside);
                     Line::from(spans).style(app.theme.input_text)
                 })
@@ -220,6 +250,80 @@ mod tests {
         for x in area.x + 1..area.x + 3 {
             assert_eq!(buffer[(x, area.y + 1)].fg, Color::Indexed(2), "cell {x}");
         }
+    }
+
+    // ---- mentions in the draft ----
+
+    /// The foreground of the draft cells at the first row of the bar, from its left edge.
+    fn draft_fgs(app: &App, width: u16) -> Vec<(String, Color, Color)> {
+        let buffer = render_buffer(app, width, 24);
+        let area = input_area(app);
+        (area.x + 1..area.right() - 1)
+            .map(|x| {
+                let cell = &buffer[(x, area.y + 1)];
+                (cell.symbol().to_string(), cell.fg, cell.bg)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_mention_in_the_draft_is_highlighted_and_the_text_is_unchanged() {
+        let mut app = app_80x24();
+        app.own_username = Some("me".to_string());
+        press(&mut app, "<C-w>jihi @bob and @me see #dev");
+        let t = app.theme.clone();
+        let cells = draft_fgs(&app, 80);
+        let at = |needle: &str| {
+            let text: String = cells.iter().map(|c| c.0.as_str()).collect();
+            text.find(needle).expect(needle)
+        };
+        let user = at("@bob");
+        assert_eq!(cells[user].1, t.messages_mention.fg.unwrap());
+        assert_eq!(cells[user + 3].1, t.messages_mention.fg.unwrap());
+        assert_ne!(
+            cells[user + 4].1,
+            t.messages_mention.fg.unwrap(),
+            "the space after"
+        );
+        let own = at("@me");
+        assert_eq!(cells[own].1, t.messages_mention_self.fg.unwrap());
+        assert_ne!(
+            cells[own].1, cells[user].1,
+            "own differs from another user's"
+        );
+        let chan = at("#dev");
+        assert_eq!(cells[chan].1, t.messages_channel.fg.unwrap());
+        // The plain words keep the draft style, and the buffer holds exactly what was typed.
+        assert_eq!(cells[0].1, Color::Reset);
+        assert_eq!(app.input.text(), "hi @bob and @me see #dev");
+    }
+
+    #[test]
+    fn an_email_address_and_a_code_span_in_the_draft_stay_plain() {
+        let mut app = app_80x24();
+        press(&mut app, "<C-w>jimail a@b.com `@bob`");
+        let t = app.theme.clone();
+        for (symbol, fg, bg) in draft_fgs(&app, 80) {
+            assert_ne!(Some(fg), t.messages_mention.fg, "{symbol:?}");
+            assert_eq!(bg, Color::Reset, "{symbol:?}");
+        }
+    }
+
+    #[test]
+    fn a_mention_wrapped_in_the_draft_is_highlighted_on_both_rows() {
+        let mut app = app_80x24();
+        let name = "x".repeat(90);
+        press(&mut app, &format!("<C-w>jihi @{name}"));
+        let t = app.theme.clone();
+        let buffer = render_buffer(&app, 80, 24);
+        let area = input_area(&app);
+        let mention = t.messages_mention.fg.unwrap();
+        // The bar has the room of its content, so the cut token is on at least two rows.
+        let rows_with_mention = (area.y + 1..area.bottom() - 1)
+            .filter(|&y| (area.x + 1..area.right() - 1).any(|x| buffer[(x, y)].fg == mention))
+            .count();
+        assert!(rows_with_mention >= 2, "{rows_with_mention}");
+        assert_eq!(app.input.text(), format!("hi @{name}"));
     }
 
     // ---- custom emojis in the draft (draft-emoji) ----

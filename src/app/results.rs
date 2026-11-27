@@ -264,6 +264,7 @@ mod tests {
                 tcount: 0,
                 tlm: None,
                 followers: None,
+                refs: None,
                 reactions: Vec::new(),
                 id: format!("s{i}"),
                 room_id: room.clone(),

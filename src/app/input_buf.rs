@@ -473,23 +473,35 @@ impl InputBuffer {
 
     /// The draft hard-wrapped to `width` columns, one string per visual row, as written.
     pub fn visual_rows(&self, width: u16, view: &EmojiView) -> Vec<String> {
-        self.rows(width, view, false)
+        self.rows(width, view, None)
     }
 
     /// The same rows as `visual_rows`, with each drawn custom emoji as the cells it is drawn as
     /// (`ui::emoji::expand` turns them into what is painted) and the rest cleaned for drawing.
-    pub fn drawn_rows(&self, width: u16, view: &EmojiView) -> Vec<String> {
-        self.rows(width, view, true)
+    ///
+    /// Each mention and channel reference of the draft (matched by shape, as the draft has no
+    /// server lists; `own` is the user's own username) is wrapped in the zero-width markers of
+    /// `ui::mention`, which `mention::strip` takes out of the rows again. Only drawing is affected:
+    /// the text of the buffer, and so what is sent, is never changed.
+    pub fn drawn_rows(&self, width: u16, view: &EmojiView, own: Option<&str>) -> Vec<String> {
+        self.rows(width, view, Some(own))
     }
 
-    fn rows(&self, width: u16, view: &EmojiView, drawn: bool) -> Vec<String> {
+    fn rows(&self, width: u16, view: &EmojiView, drawn: Option<Option<&str>>) -> Vec<String> {
         let width = usize::from(width).max(1);
         let mut rows = Vec::new();
+        let mut in_code = false;
         for (r, (line, units)) in self.lines.iter().zip(self.all_units(view)).enumerate() {
+            let tokens = drawn.map_or_else(Vec::new, |own| {
+                crate::ui::mention::tokens_in(line, None, own, &mut in_code)
+            });
+            // The token being written (an index into `tokens`), which may run over several rows.
+            let mut open = false;
+            let mut next = 0;
             let spans = wrap_spans(&units, line.len(), width);
             let full = spans.last().is_some_and(|s| s.width >= width);
             for s in &spans {
-                if !drawn {
+                if drawn.is_none() {
                     rows.push(line[s.start..s.end].to_string());
                     continue;
                 }
@@ -498,9 +510,18 @@ impl InputBuffer {
                     .iter()
                     .filter(|u| u.start >= s.start && u.end <= s.end)
                 {
+                    if !open && tokens.get(next).is_some_and(|(t, _)| t.start <= u.start) {
+                        row.push(crate::ui::mention::start_marker(tokens[next].1));
+                        open = true;
+                    }
                     match &u.cells {
                         Some(cells) => row.push_str(cells),
                         None => row.push_str(&sanitize_line(&line[u.start..u.end])),
+                    }
+                    if open && tokens[next].0.end <= u.end {
+                        row.push(crate::ui::mention::END);
+                        open = false;
+                        next += 1;
                     }
                 }
                 rows.push(row);
@@ -1002,7 +1023,7 @@ mod tests {
         let l = list();
         let v = view(&l, Graphics::Supported);
         let b = buf("ab :rtshipit:\nx");
-        let rows = b.drawn_rows(20, &v);
+        let rows = b.drawn_rows(20, &v, None);
         assert_eq!(rows.len(), b.visual_rows(20, &v).len());
         assert_eq!(
             rows[0],
@@ -1012,7 +1033,7 @@ mod tests {
             )
         );
         assert_eq!(rows[1], "x");
-        assert_eq!(b.drawn_rows(20, &nv()), b.visual_rows(20, &nv()));
+        assert_eq!(b.drawn_rows(20, &nv(), None), b.visual_rows(20, &nv()));
     }
 
     #[test]

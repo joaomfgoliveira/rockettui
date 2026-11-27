@@ -6,7 +6,7 @@
 use crate::api::wire::{ApiDate, WireMsg, WirePrefs, WireRoom, WireSub};
 use crate::api::{HistoryPage, SearchHits, THREAD_ROW_TEXT_CHARS, ThreadRow};
 use crate::data::{
-    CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Room, RoomId, RoomKind,
+    CustomEmoji, Folder, FolderId, Message, MessageKind, Reaction, Refs, Room, RoomId, RoomKind,
     SendState, ThreadUnread, Unread,
 };
 use std::collections::{HashMap, HashSet};
@@ -234,6 +234,7 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         ),
         _ => None,
     };
+    let refs = refs(msg.mentions.as_ref(), msg.channels.as_ref());
     Message {
         id: msg.id,
         room_id: room.clone(),
@@ -250,7 +251,40 @@ pub fn message(room: &RoomId, msg: WireMsg) -> Message {
         tcount,
         tlm,
         followers,
+        refs,
     }
+}
+
+/// The names in a `mentions` (`username`) or `channels` (`name`) list: entries that are not
+/// objects or have no usable string for `key` are skipped.
+fn ref_names(list: &serde_json::Value, key: &str) -> Vec<String> {
+    let serde_json::Value::Array(items) = list else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.get(key)?.as_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The references of a message. `None` when neither list is an array (absent, `null` or any other
+/// shape): the text is then matched by shape alone.
+fn refs(
+    mentions: Option<&serde_json::Value>,
+    channels: Option<&serde_json::Value>,
+) -> Option<Refs> {
+    let is_list = |v: Option<&serde_json::Value>| v.is_some_and(serde_json::Value::is_array);
+    if !is_list(mentions) && !is_list(channels) {
+        return None;
+    }
+    Some(Refs {
+        mentions: mentions
+            .map(|v| ref_names(v, "username"))
+            .unwrap_or_default(),
+        channels: channels.map(|v| ref_names(v, "name")).unwrap_or_default(),
+    })
 }
 
 /// The custom emojis of an `emoji-custom.list` answer, in server order. An entry without a usable
@@ -1340,6 +1374,29 @@ mod tests {
         assert_eq!(odd.followers, None);
         let mixed = parse(r#","replies":["u1",7,null]"#);
         assert_eq!(mixed.followers, Some(vec!["u1".to_string()]));
+    }
+
+    #[test]
+    fn mentions_and_channels_are_read_from_history() {
+        let all = mapped(include_str!("fixtures/history_mentions.json"));
+        let get = |id: &str| all.iter().find(|m| m.id == id).expect(id);
+        let refs = |id: &str| get(id).refs.clone();
+        let both = refs("mn-user").expect("both lists");
+        assert_eq!(both.mentions, ["bob", "alice"]);
+        assert_eq!(both.channels, ["dev-chat"]);
+        assert_eq!(refs("mn-self").expect("lists").mentions, ["dev"]);
+        // The group words are not listed by the server and stay in the text.
+        let here = refs("mn-here").expect("empty lists are still lists");
+        assert!(here.mentions.is_empty() && here.channels.is_empty());
+        assert_eq!(
+            refs("mn-two-channels").expect("lists").channels,
+            ["dev-chat", "ops"]
+        );
+        // Odd entries are skipped, and a list that is not an array reads as empty.
+        let odd = refs("mn-odd").expect("one list is an array");
+        assert_eq!(odd.mentions, ["eve"]);
+        assert!(odd.channels.is_empty());
+        assert_eq!(refs("mn-none"), None, "no arrays means unknown");
     }
 
     #[test]

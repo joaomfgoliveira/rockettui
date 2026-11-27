@@ -668,6 +668,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
         }
     }
 
@@ -676,6 +677,7 @@ mod tests {
             tcount: replies,
             tlm: Some(ts + 10),
             followers: None,
+            refs: None,
             ..msg(id, ts)
         }
     }
@@ -1108,6 +1110,7 @@ mod tests {
             Message {
                 tlm: Some(300),
                 followers: None,
+                refs: None,
                 ..parent("p", 110, 3)
             },
         );

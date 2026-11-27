@@ -220,6 +220,13 @@ pub struct WireMsg {
     /// of strings is read as absent.
     #[serde(default)]
     pub replies: Option<serde_json::Value>,
+    /// The users the text mentions: a list of objects with a `username`. Read leniently, like
+    /// `replies`: entries that do not fit are skipped. Never printed.
+    #[serde(default)]
+    pub mentions: Option<serde_json::Value>,
+    /// The channels the text references: a list of objects with a `name`. Read like `mentions`.
+    #[serde(default)]
+    pub channels: Option<serde_json::Value>,
 }
 
 /// One reaction of a message: the shortcode as the server writes it (`:+1:`, with the colons) and

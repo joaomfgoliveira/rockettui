@@ -62,11 +62,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .skip(view.top_row)
         .take(usize::from(inner.height))
         .collect();
-    frame.render_widget(Paragraph::new(window), inner);
     let first = selected_rows.start.max(view.top_row);
     let end = selected_rows
         .end
         .min(view.top_row + usize::from(inner.height));
+    frame.render_widget(Paragraph::new(window), inner);
     for row in first..end {
         let y = inner.y + u16::try_from(row - view.top_row).unwrap_or(u16::MAX);
         let row_area = Rect::new(inner.x, y, inner.width, 1);
@@ -108,6 +108,7 @@ mod tests {
                 tcount: 0,
                 tlm: None,
                 followers: None,
+                refs: None,
                 reactions: Vec::new(),
                 id: format!("s{i}"),
                 room_id: RoomId(room.0.clone()),
@@ -128,6 +129,31 @@ mod tests {
             },
         );
         assert!(!matches!(app.status_msg, Some(StatusMsg::Error(_))));
+    }
+
+    #[test]
+    fn a_mention_in_a_result_is_highlighted_selected_or_not() {
+        let mut app = app_80x24();
+        open(&mut app, 3);
+        {
+            let results = app.results.as_mut().expect("results");
+            results.messages[0].body = "hit @bob".to_string();
+            results.messages[1].body = "hit @bob".to_string();
+        }
+        let buffer = render_buffer(&app, 80, 24);
+        // The results pane is the right part of the screen; the sidebar has a room named @alice.
+        let signs: Vec<(u16, u16)> = (28..80)
+            .flat_map(|x| (0..24).map(move |y| (x, y)))
+            .filter(|&(x, y)| buffer[(x, y)].symbol() == "@")
+            .collect();
+        assert_eq!(signs.len(), 2, "{signs:?}");
+        for (x, y) in signs {
+            assert_eq!(
+                Some(buffer[(x, y)].fg),
+                app.theme.messages_mention.fg,
+                "{x},{y}"
+            );
+        }
     }
 
     #[test]
@@ -274,6 +300,7 @@ mod tests {
                     tcount: 0,
                     tlm: None,
                     followers: None,
+                    refs: None,
                     reactions: Vec::new(),
                     id: format!("c{i}"),
                     room_id: room.clone(),

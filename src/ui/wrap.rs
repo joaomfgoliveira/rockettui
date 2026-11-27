@@ -300,11 +300,19 @@ fn body_rows(
     } else {
         clean
     };
-    let mut inside = false;
+    // Mentions and channel references go through wrapping as zero-width markers (`ui::mention`),
+    // so a token cut by a wrap keeps its style on both rows. Only an ordinary message has any.
+    let drawn = if msg.kind == MessageKind::Normal {
+        crate::ui::mention::mark(&drawn, msg.refs.as_ref(), ctx.own_user)
+    } else {
+        drawn
+    };
+    let (mut inside, mut open) = (false, None);
     let mut rows: Vec<Vec<Span<'static>>> = wrap_clean(&drawn, width)
         .into_iter()
         .map(|row| {
-            let spans = highlight_row(row, body_style, query, ctx.theme.search_match);
+            let (row, marks) = crate::ui::mention::strip(&row, &mut open);
+            let spans = highlight_row(row, body_style, query, ctx.theme, &marks);
             crate::ui::emoji::expand(spans, ctx.theme.messages_custom_emoji, &mut inside)
         })
         .collect();
@@ -497,32 +505,46 @@ fn reaction_rows(msg: &Message, width: usize, ctx: &RowCtx) -> Vec<Vec<Span<'sta
 }
 
 /// One wrapped body row as spans: the text outside a search match in `body_style`, each match in
-/// `match_style`. Without a query, or without a match in this row, it is the one plain span. A
-/// match that crosses a wrap boundary is found in neither row and so is not highlighted (it still
-/// counts when jumping, which looks at the whole body).
+/// `theme.search_match`, and each of `marks` (the mentions of the row, from `mention::strip`) in
+/// its kind's style over `body_style`; a search match wins where the two meet. Without a query or
+/// a mention in this row it is the one plain span. A search match that crosses a wrap boundary is
+/// found in neither row and so is not highlighted (it still counts when jumping, which looks at
+/// the whole body).
 fn highlight_row(
     row: String,
     body_style: ratatui::style::Style,
     query: Option<&str>,
-    match_style: ratatui::style::Style,
+    theme: &crate::config::Theme,
+    marks: &[(std::ops::Range<usize>, crate::ui::mention::Kind)],
 ) -> Vec<Span<'static>> {
     let ranges = query.map_or_else(Vec::new, |q| crate::app::search::find(&row, q));
-    if ranges.is_empty() {
+    if ranges.is_empty() && marks.is_empty() {
         return vec![Span::styled(row, body_style)];
     }
-    let mut spans = Vec::new();
-    let mut at = 0;
-    for r in ranges {
-        if r.start > at {
-            spans.push(Span::styled(row[at..r.start].to_string(), body_style));
-        }
-        spans.push(Span::styled(row[r.start..r.end].to_string(), match_style));
-        at = r.end;
-    }
-    if at < row.len() {
-        spans.push(Span::styled(row[at..].to_string(), body_style));
-    }
-    spans
+    // Cut the row wherever a search match or a mention starts or ends, then style each piece: a
+    // search match wins, then the kind of mention laid over the body style, else the body style.
+    let mut cuts: Vec<usize> = ranges
+        .iter()
+        .map(|r| (r.start, r.end))
+        .chain(marks.iter().map(|(r, _)| (r.start, r.end)))
+        .flat_map(|(a, b)| [a, b])
+        .chain([0, row.len()])
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.windows(2)
+        .map(|w| (w[0], w[1]))
+        .map(|(a, b)| {
+            let style = if ranges.iter().any(|r| r.start <= a && b <= r.end) {
+                theme.search_match
+            } else if let Some((_, kind)) = marks.iter().find(|(r, _)| r.start <= a && b <= r.end) {
+                body_style.patch(kind.style(theme))
+            } else {
+                body_style
+            };
+            Span::styled(row[a..b].to_string(), style)
+        })
+        .collect()
 }
 
 /// What takes the time's place in a message's first row, and the style of the time cell, the
@@ -686,6 +708,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: "m-0".to_string(),
             room_id: RoomId("general".to_string()),
@@ -1409,6 +1432,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             ..msg(author, body)
         }
@@ -1516,6 +1540,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             ..deleted("alice")
         };
@@ -1570,6 +1595,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: format!("m{ts}"),
             room_id: RoomId("r".to_string()),
@@ -1974,6 +2000,250 @@ mod tests {
             .iter()
             .find(|sp| sp.content.contains(needle))
             .map(|sp| sp.style)
+    }
+
+    fn with_refs(body: &str, mentions: &[&str], channels: &[&str]) -> Message {
+        let mut m = msg("alice", body);
+        m.refs = Some(crate::data::Refs {
+            mentions: mentions.iter().map(|s| s.to_string()).collect(),
+            channels: channels.iter().map(|s| s.to_string()).collect(),
+        });
+        m
+    }
+
+    #[test]
+    fn a_listed_mention_is_drawn_in_the_mention_style_and_the_words_are_unchanged() {
+        let theme = Theme::default();
+        let m = with_refs("thanks @bob, see #dev-chat", &["bob"], &["dev-chat"]);
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            Some("me"),
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(text(&rows[0]).ends_with("thanks @bob, see #dev-chat"));
+        let body = theme.messages_body;
+        assert_eq!(
+            style_of(&rows[0], "@bob"),
+            Some(body.patch(theme.messages_mention))
+        );
+        assert_eq!(
+            style_of(&rows[0], "#dev-chat"),
+            Some(body.patch(theme.messages_channel))
+        );
+        assert_eq!(style_of(&rows[0], "thanks "), Some(body));
+        assert_clean(&texts(&rows));
+    }
+
+    #[test]
+    fn the_own_name_and_the_group_words_have_their_own_styles() {
+        let theme = Theme::default();
+        let m = with_refs("ping @Me and @bob, @here @all", &["me", "bob"], &[]);
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            Some("me"),
+        );
+        let body = theme.messages_body;
+        assert_eq!(
+            style_of(&rows[0], "@Me"),
+            Some(body.patch(theme.messages_mention_self))
+        );
+        assert_eq!(
+            style_of(&rows[0], "@bob"),
+            Some(body.patch(theme.messages_mention))
+        );
+        assert_eq!(
+            style_of(&rows[0], "@here"),
+            Some(body.patch(theme.messages_mention_group))
+        );
+        assert_eq!(
+            style_of(&rows[0], "@all"),
+            Some(body.patch(theme.messages_mention_group))
+        );
+    }
+
+    #[test]
+    fn an_email_address_and_a_code_span_stay_plain() {
+        let theme = Theme::default();
+        let m = with_refs("mail bob@example.com or `ping @bob`", &[], &[]);
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        for row in &rows {
+            for sp in &row.spans {
+                if sp.content.contains("example") || sp.content.contains("ping") {
+                    assert_eq!(sp.style, theme.messages_body, "{:?}", sp.content);
+                }
+            }
+        }
+        // Even by shape (no lists), the glued address is plain.
+        let mut m = m;
+        m.refs = None;
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        for sp in &rows[0].spans {
+            assert_eq!(sp.style.bg, None, "{:?}", sp.content);
+            assert_ne!(sp.style, theme.messages_mention, "{:?}", sp.content);
+        }
+    }
+
+    #[test]
+    fn a_message_without_lists_is_matched_by_shape() {
+        let theme = Theme::default();
+        let mut m = msg("alice", "cc @carol");
+        m.refs = None;
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        assert_eq!(
+            style_of(&rows[0], "@carol"),
+            Some(theme.messages_body.patch(theme.messages_mention))
+        );
+    }
+
+    #[test]
+    fn a_mention_split_by_wrapping_is_styled_on_both_rows_and_adds_no_rows() {
+        let theme = Theme::default();
+        let name = "averyveryverylongusernamethatcannotfit";
+        let body = format!("hi @{name}");
+        let m = with_refs(&body, &[name], &[]);
+        let plain = msg("alice", &body);
+        // A pane so narrow that the token must be cut.
+        let width = 22;
+        let rows = rows_with(
+            &m,
+            width,
+            MessageLayout::TwoLine,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        let base = rows_with(
+            &plain_without_lists(plain),
+            width,
+            MessageLayout::TwoLine,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        let styled: Vec<&Line> = rows
+            .iter()
+            .filter(|r| {
+                r.spans
+                    .iter()
+                    .any(|sp| sp.style == theme.messages_body.patch(theme.messages_mention))
+            })
+            .collect();
+        assert!(styled.len() >= 2, "{:?}", texts(&rows));
+        // Both are the same text, row for row, as when nothing is highlighted.
+        assert_eq!(rows.len(), base.len());
+        assert_eq!(texts(&rows), texts(&base));
+        assert_clean(&texts(&rows));
+    }
+
+    /// `m` with empty lists: the same text, nothing highlighted.
+    fn plain_without_lists(mut m: Message) -> Message {
+        m.refs = Some(crate::data::Refs::default());
+        m
+    }
+
+    #[test]
+    fn a_system_message_and_a_deleted_line_are_not_highlighted() {
+        let theme = Theme::default();
+        let mut m = with_refs("@bob joined", &["bob"], &[]);
+        m.kind = MessageKind::System;
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        for sp in &rows[0].spans {
+            assert_ne!(
+                sp.style,
+                theme.messages_notice.patch(theme.messages_mention)
+            );
+        }
+        assert!(text(&rows[0]).contains("@bob joined"));
+        let mut d = with_refs("@bob", &["bob"], &[]);
+        d.kind = MessageKind::Deleted;
+        let rows = rows_with(
+            &d,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        assert!(!text(&rows[0]).contains('@'));
+    }
+
+    #[test]
+    fn server_text_cannot_forge_a_mention_marker() {
+        let theme = Theme::default();
+        let forged = "hi \u{2067}x\u{202c}".to_string();
+        let m = with_refs(&forged, &[], &[]);
+        let rows = rows_with(
+            &m,
+            60,
+            MessageLayout::Compact,
+            &crate::ui::emoji::NO_ALIASES,
+            None,
+        );
+        assert!(text(&rows[0]).ends_with("hi x"));
+        for sp in &rows[0].spans {
+            assert_ne!(
+                sp.style,
+                theme.messages_body.patch(theme.messages_mention_self)
+            );
+        }
+    }
+
+    #[test]
+    fn a_search_match_wins_over_a_mention_where_they_meet() {
+        let theme = Theme::default();
+        let m = with_refs("hello @bobby there", &["bobby"], &[]);
+        let format = TimeFormat::default();
+        let ctx = RowCtx {
+            layout: MessageLayout::Compact,
+            author_col: 5,
+            time_col: 5,
+            time_format: &format,
+            zone: Zone::Utc,
+            theme: &theme,
+            search: Some("bob"),
+            aliases: &crate::ui::emoji::NO_ALIASES,
+            emoji: crate::app::emoji::EmojiView::none(),
+            own_user: None,
+            unread_before: None,
+            unread_threads: None,
+            in_thread: false,
+            grouping: None,
+            own_id: None,
+        };
+        let rows = render_rows(&m, 60, &ctx);
+        assert_eq!(style_of(&rows[0], "bob"), Some(theme.search_match));
+        assert_eq!(
+            style_of(&rows[0], "by"),
+            Some(theme.messages_body.patch(theme.messages_mention))
+        );
+        assert_eq!(text(&rows[0]).trim_end().rsplit(' ').nth(1), Some("@bobby"));
     }
 
     fn alias_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -2757,6 +3027,7 @@ mod grouping_tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
         }
     }
 

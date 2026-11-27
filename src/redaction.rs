@@ -107,6 +107,7 @@ fn message_in_state(send: SendState) -> Message {
         tcount: 0,
         tlm: None,
         followers: None,
+        refs: None,
         reactions: Vec::new(),
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),

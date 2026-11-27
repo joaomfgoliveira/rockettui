@@ -1,0 +1,63 @@
+{
+  "success": true,
+  "messages": [
+    {
+      "_id": "mn-user",
+      "rid": "r-general",
+      "msg": "thanks @bob and @alice, see #dev-chat",
+      "ts": "2026-11-16T10:00:01.000Z",
+      "u": { "_id": "u-carol", "username": "carol" },
+      "mentions": [
+        { "_id": "u-bob", "username": "bob", "name": "Bob", "type": "user" },
+        { "_id": "u-alice", "username": "alice", "name": "Alice", "type": "user" }
+      ],
+      "channels": [{ "_id": "r-dev", "name": "dev-chat" }]
+    },
+    {
+      "_id": "mn-self",
+      "rid": "r-general",
+      "msg": "ping @dev",
+      "ts": "2026-11-16T10:00:02.000Z",
+      "u": { "_id": "u-bob", "username": "bob" },
+      "mentions": [{ "_id": "u-dev", "username": "dev", "name": "Dev", "type": "user" }],
+      "channels": []
+    },
+    {
+      "_id": "mn-here",
+      "rid": "r-general",
+      "msg": "heads up @here and @all",
+      "ts": "2026-11-16T10:00:03.000Z",
+      "u": { "_id": "u-bob", "username": "bob" },
+      "mentions": [],
+      "channels": []
+    },
+    {
+      "_id": "mn-two-channels",
+      "rid": "r-general",
+      "msg": "#dev-chat or #ops?",
+      "ts": "2026-11-16T10:00:04.000Z",
+      "u": { "_id": "u-bob", "username": "bob" },
+      "mentions": [],
+      "channels": [
+        { "_id": "r-dev", "name": "dev-chat" },
+        { "_id": "r-ops", "name": "ops" }
+      ]
+    },
+    {
+      "_id": "mn-odd",
+      "rid": "r-general",
+      "msg": "odd lists",
+      "ts": "2026-11-16T10:00:05.000Z",
+      "u": { "_id": "u-bob", "username": "bob" },
+      "mentions": [7, null, { "_id": "x" }, { "username": "" }, { "username": "eve" }],
+      "channels": "dev-chat"
+    },
+    {
+      "_id": "mn-none",
+      "rid": "r-general",
+      "msg": "older history, cc @carol",
+      "ts": "2026-11-16T10:00:06.000Z",
+      "u": { "_id": "u-bob", "username": "bob" }
+    }
+  ]
+}

@@ -63,6 +63,10 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "show who reacted to the message under the cursor",
     ),
     (
+        "open_channel",
+        "open the channel the message under the cursor names",
+    ),
+    (
         "react_message",
         "add or remove your reaction on the message under the cursor",
     ),

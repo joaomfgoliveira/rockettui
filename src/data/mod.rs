@@ -262,6 +262,29 @@ pub struct Message {
     /// On a thread parent, the ids of the users who follow the thread (`replies`); `None` when the
     /// server did not say. Private: only compared with the own user id, never drawn or logged.
     pub followers: Option<Vec<String>>,
+    /// The users and channels the server says the text references (`mentions`, `channels`);
+    /// `None` when the message carried neither list (older history, other servers). Private:
+    /// drawn as highlights and used to open a channel, never logged.
+    pub refs: Option<Refs>,
+}
+
+/// The mentions and channel references of one message, as the server lists them.
+#[derive(Clone, PartialEq, Default)]
+pub struct Refs {
+    /// Usernames without the `@`. Untrusted text: sanitize before drawing.
+    pub mentions: Vec<String>,
+    /// Room names without the `#`. Untrusted text: sanitize before drawing.
+    pub channels: Vec<String>,
+}
+
+/// Redacting `Debug`: counts only. No username or room name is printed.
+impl std::fmt::Debug for Refs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Refs")
+            .field("mentions", &self.mentions.len())
+            .field("channels", &self.channels.len())
+            .finish()
+    }
 }
 
 impl Message {
@@ -332,6 +355,7 @@ impl std::fmt::Debug for Message {
             .field("edited", &self.edited)
             .field("plain_text", &self.plain_text)
             .field("reactions", &self.reactions.len())
+            .field("refs", &self.refs)
             .finish()
     }
 }
@@ -361,6 +385,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: vec![Reaction {
                 name: "SENTINEL-REACTION-5c1e".to_string(),
                 users: vec!["SENTINEL-USER-9a4d".to_string(), "other".to_string()],
@@ -383,6 +408,25 @@ mod tests {
     }
 
     #[test]
+    fn debug_shows_only_the_number_of_mentions_and_channels() {
+        let mut message = crate::test_util::app_80x24()
+            .messages
+            .values()
+            .next()
+            .unwrap()[0]
+            .clone();
+        message.refs = Some(Refs {
+            mentions: vec!["SENTINEL-MENTION-6d2f".to_string()],
+            channels: vec!["SENTINEL-CHANNEL-81ac".to_string(), "b".to_string()],
+        });
+        for shown in [format!("{message:?}"), format!("{message:#?}")] {
+            assert!(!shown.contains("SENTINEL"), "{shown}");
+            assert!(shown.contains("mentions: 1"), "{shown}");
+            assert!(shown.contains("channels: 2"), "{shown}");
+        }
+    }
+
+    #[test]
     fn debug_redacts() {
         let message = Message {
             edited: false,
@@ -392,6 +436,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
