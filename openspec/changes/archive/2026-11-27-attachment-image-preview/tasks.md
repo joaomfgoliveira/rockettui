@@ -52,5 +52,5 @@
 ## 9. Integration
 
 - [x] 9.1 Run `cargo fmt --check`, `cargo clippy` and `cargo test`; verify they pass
-- [ ] 9.2 Ask the user to check inline images, no row jumping while they load, `gp` (full quality), animated gifs and webps inline and in the view, and a room with a large photo by eye against their local Docker server (kitty terminal); the checks are theirs to run
-- [ ] 9.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
+- [x] 9.2 Ask the user to check inline images, no row jumping while they load, `gp` (full quality), animated gifs and webps inline and in the view, and a room with a large photo by eye against their local Docker server (kitty terminal); the checks are theirs to run
+- [x] 9.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
