@@ -29,4 +29,4 @@
 
 - [x] 6.1 Run `cargo fmt --check`, `cargo clippy` and `cargo test`; verify they pass
 - [x] 6.2 Ask the user to check `go` on a video, an audio message and an image on their local Docker server with their own player (kitty terminal); the checks are theirs to run
-- [ ] 6.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
+- [x] 6.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived

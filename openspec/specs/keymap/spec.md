@@ -40,7 +40,7 @@ Keys SHALL be written in Vim notation such as `<C-d>`, `<Esc>`, `<CR>` and `gg`.
 - **THEN** `Ctrl-d` does nothing
 
 ### Requirement: Action vocabulary
-Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_reactions`, `open_channel`, `show_image`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message`, `gr` to `show_reactions`, `gc` to `open_channel`, `gp` to `show_image` and `?` to `show_context` in Normal mode; `show_help` has no default key.
+Bindable actions SHALL be a fixed set of snake_case names (including `retry_send`, `discard_send`, `edit_message`, `delete_message`, `show_reactions`, `open_channel`, `show_image`, `open_attachment`, `show_help` and `show_context`), plus `none` and `cmd:<command>` to run a command-line command. An unknown action name SHALL be a config error. By default `e` is bound to `edit_message`, `dd` to `delete_message`, `gr` to `show_reactions`, `gc` to `open_channel`, `gp` to `show_image`, `go` to `open_attachment` and `?` to `show_context` in Normal mode; `show_help` has no default key.
 
 #### Scenario: Command binding
 - **WHEN** the user binds `"<C-q>" = "cmd:quit"`
@@ -93,6 +93,18 @@ Bindable actions SHALL be a fixed set of snake_case names (including `retry_send
 #### Scenario: Unbind show image
 - **WHEN** the user sets `"gp" = "none"` in `[normal]`
 - **THEN** `gp` does nothing
+
+#### Scenario: Default open-attachment key
+- **WHEN** no `keymap.toml` overrides it
+- **THEN** `go` runs `open_attachment` in Normal mode in every preset, and the other `g` bindings are unchanged
+
+#### Scenario: Rebind open attachment
+- **WHEN** the user binds `"O" = "open_attachment"` in `[normal]`
+- **THEN** `O` opens the attachment of the cursor message
+
+#### Scenario: Unbind open attachment
+- **WHEN** the user sets `"go" = "none"` in `[normal]`
+- **THEN** `go` does nothing
 
 ### Requirement: Safe overrides
 The app SHALL reject overrides that bind the same keys twice in one mode table of `keymap.toml`, make one binding a prefix of another, remove all ways to leave a mode or quit (lockout), or bind a multi-key sequence starting with a plain character (no Ctrl or Alt) in Insert or Command mode. A user binding replaces a preset binding of the same keys.
