@@ -130,6 +130,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -147,6 +148,7 @@ mod tests {
                     tlm: Some(660),
                     followers: None,
                     refs: None,
+                    attachments: Vec::new(),
                     ..msg("1", 60, "alice", "deploy plan: who takes the rollback?")
                 },
             ],

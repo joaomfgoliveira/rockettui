@@ -427,6 +427,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
         }
     }
@@ -498,6 +499,7 @@ mod reducer_tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
         }
     }

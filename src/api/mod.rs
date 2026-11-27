@@ -31,6 +31,10 @@ pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// Largest custom emoji image accepted. Real ones are a few kilobytes; the server's own limit for
 /// an upload is far above what a message-sized image needs.
 pub const MAX_EMOJI_BYTES: usize = 512 * 1024;
+/// Largest original image downloaded for the full-size view.
+pub const MAX_VIEW_BYTES: usize = 32 * 1024 * 1024;
+/// Largest attachment image downloaded. A reported size over it is skipped without a request.
+pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Why a request failed. A small `Copy` enum with no payload text, so it can sit in `App` and in
 /// an `Action` and can never carry a token, URL or message body.
@@ -987,6 +991,29 @@ impl Client {
         read_capped(request, ApiError::BadResponse, MAX_EMOJI_BYTES).await
     }
 
+    /// The image at the server's own `path` (`/file-upload/<id>/<name>`, as the message lists it),
+    /// with `GET <server><path>` and the same credentials as every other request. The URL is the
+    /// configured server address joined to `path`, never an address the server supplied, so a
+    /// message cannot send the credentials to another host; a `path` that is not a plain
+    /// `/file-upload/` path (`map::fetchable_path`) is `BadResponse` without a request. A redirect
+    /// is `Redirected` and never followed. The body is read under `MAX_ATTACHMENT_BYTES`. Nothing
+    /// but the path is sent, never message text, a room or a user.
+    pub async fn attachment_image(&self, path: &str) -> Result<Vec<u8>, ApiError> {
+        self.attachment_bytes(path, MAX_ATTACHMENT_BYTES).await
+    }
+
+    /// `attachment_image` with another cap: the full-size view reads originals, which are larger
+    /// than the inline thumbnails.
+    pub async fn attachment_bytes(&self, path: &str, limit: usize) -> Result<Vec<u8>, ApiError> {
+        if !map::fetchable_path(path) {
+            return Err(ApiError::BadResponse);
+        }
+        let mut url = self.base.clone();
+        let prefix = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{prefix}{path}"));
+        read_capped(self.http.get(url), ApiError::BadResponse, limit).await
+    }
+
     /// Add (`add`) or take back the user's reaction `emoji` to message `id` with `POST chat.react`.
     /// `emoji` is the shortcode without colons; the request carries it as `:name:`. The answer body
     /// is not read beyond being valid JSON. A name the server does not know (measured: HTTP 400) is
@@ -1875,6 +1902,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attachment_image_is_an_authenticated_get_of_the_file_upload_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/f1/photo.png"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let bytes = client_for(&server)
+            .attachment_image("/file-upload/f1/photo.png")
+            .await
+            .expect("the image loads");
+        assert_eq!(bytes, FAKE_IMAGE);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].url.query(),
+            None,
+            "no query: nothing but the path"
+        );
+        assert_eq!(requests[0].body.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn attachment_image_keeps_an_encoded_name_as_the_server_wrote_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/f1/my%20photo.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let got = client_for(&server)
+            .attachment_image("/file-upload/f1/my%20photo.png")
+            .await;
+        assert_eq!(got.map(|b| b.len()), Ok(FAKE_IMAGE.len()));
+    }
+
+    #[tokio::test]
+    async fn attachment_image_over_the_cap_is_refused_while_reading() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![0u8; MAX_ATTACHMENT_BYTES + 1]),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client_for(&server)
+                .attachment_image("/file-upload/f1/big.png")
+                .await,
+            Err(ApiError::TooLarge)
+        );
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![0u8; MAX_ATTACHMENT_BYTES]),
+            )
+            .mount(&server)
+            .await;
+        let ok = client_for(&server)
+            .attachment_image("/file-upload/f1/big.png")
+            .await;
+        assert_eq!(ok.map(|b| b.len()), Ok(MAX_ATTACHMENT_BYTES));
+    }
+
+    #[tokio::test]
+    async fn attachment_image_statuses_keep_their_kinds_and_a_redirect_is_not_followed() {
+        for (status, want) in [
+            (404, ApiError::NotFound),
+            (401, ApiError::Unauthorized),
+            (403, ApiError::Forbidden),
+            (503, ApiError::Server(503)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            assert_eq!(
+                client_for(&server)
+                    .attachment_image("/file-upload/a/b.png")
+                    .await,
+                Err(want),
+                "status {status}"
+            );
+        }
+        let server = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/img.png", elsewhere.uri())),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client_for(&server)
+                .attachment_image("/file-upload/a/b.png")
+                .await,
+            Err(ApiError::Redirected)
+        );
+        assert!(
+            elsewhere.received_requests().await.unwrap().is_empty(),
+            "the credentials never reach the redirect target"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_image_refuses_an_address_that_is_not_a_file_upload_path() {
+        let server = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        for any in [&server, &elsewhere] {
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+                .mount(any)
+                .await;
+        }
+        let client = client_for(&server);
+        let absolute = format!("{}/file-upload/a/b.png", elsewhere.uri());
+        for bad in [
+            absolute.as_str(),
+            "//evil.example/file-upload/a/b.png",
+            "/api/v1/me",
+            "/file-upload/",
+            "/file-upload/../api/v1/me",
+            "/file-upload/a/%2e%2e/%2e%2e/api/v1/me",
+            "/file-upload/a/b.png?x=1",
+            "file-upload/a/b.png",
+            "",
+        ] {
+            assert_eq!(
+                client.attachment_image(bad).await,
+                Err(ApiError::BadResponse),
+                "{bad:?}"
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(elsewhere.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn react_contract() {
         // The exact body, for both directions, with the colons added around the name.
         for (add, name) in [(true, "tada"), (false, "+1")] {
@@ -2521,6 +2692,7 @@ mod tests {
                 tlm: None,
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r".to_string()),
@@ -2920,6 +3092,7 @@ mod tests {
                 tlm: None,
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 reactions: Vec::new(),
                 id: "m".to_string(),
                 room_id: RoomId("r".to_string()),

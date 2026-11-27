@@ -641,6 +641,7 @@ mod tests {
                 tlm: None,
                 followers: None,
                 refs: None,
+                attachments: Vec::new(),
                 reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
@@ -681,6 +682,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: "hostile".to_string(),
             room_id: general(),
@@ -727,6 +729,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -852,6 +855,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -987,6 +991,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
         }
     }
@@ -1229,6 +1234,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions,
             id: id.to_string(),
             room_id: room.clone(),
@@ -1339,6 +1345,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -1356,6 +1363,7 @@ mod tests {
                     tlm: Some(660),
                     followers: None,
                     refs: None,
+                    attachments: Vec::new(),
                     ..msg("1", 60, "deploy plan")
                 },
                 Message {
@@ -1363,6 +1371,7 @@ mod tests {
                     tlm: Some(700),
                     followers: None,
                     refs: None,
+                    attachments: Vec::new(),
                     ..msg("2", 120, "who owns the rollback")
                 },
                 Message {
@@ -1629,6 +1638,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -1708,6 +1718,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
         }
     }
 

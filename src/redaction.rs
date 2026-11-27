@@ -108,6 +108,7 @@ fn message_in_state(send: SendState) -> Message {
         tlm: None,
         followers: None,
         refs: None,
+        attachments: Vec::new(),
         reactions: Vec::new(),
         id: "m1".to_string(),
         room_id: RoomId("r-general".to_string()),
@@ -346,6 +347,67 @@ fn sentinel_sweep() {
     no_sentinel(
         "Action::EmojiImageFailed",
         &format!("{:?}", Action::EmojiImageFailed(image)),
+    );
+    let attachment = crate::effect::AttachmentRef {
+        path: BODY.to_string(),
+        size: Some(4_242_424),
+        dims: Some((7_777, 8_888)),
+        animate: false,
+        source: None,
+    };
+    no_sentinel(
+        "Effect::FetchAttachmentImage",
+        &format!(
+            "{:?} {:#?}",
+            Effect::FetchAttachmentImage(attachment.clone()),
+            Effect::FetchAttachmentImage(attachment.clone())
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentImageReady",
+        &format!(
+            "{:?}",
+            Action::AttachmentImageReady {
+                image: attachment.clone(),
+                decoded: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 0].into(),
+                    ..Default::default()
+                },
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentImageFailed",
+        &format!("{:?}", Action::AttachmentImageFailed(attachment.clone())),
+    );
+    no_sentinel(
+        "Effect::LoadAttachmentView",
+        &format!(
+            "{:?} {:#?}",
+            Effect::LoadAttachmentView(attachment.clone()),
+            Effect::LoadAttachmentView(attachment.clone())
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentViewReady",
+        &format!(
+            "{:?}",
+            Action::AttachmentViewReady {
+                image: attachment.clone(),
+                decoded: crate::emoji_image::Rgba {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 0].into(),
+                    ..Default::default()
+                },
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentViewFailed",
+        &format!("{:?}", Action::AttachmentViewFailed(attachment)),
     );
     no_sentinel(
         "Action::CustomEmojisFailed",

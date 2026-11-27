@@ -1,0 +1,22 @@
+{"messages":[
+{"_id":"a-image","msg":"look","ts":"2026-11-16T10:00:00.000Z","u":{"_id":"u1","username":"bob"},
+ "file":{"_id":"f1","name":"photo.png","type":"image/png","size":2048,"format":"png"},
+ "files":[{"_id":"f1","name":"photo.png","type":"image/png","size":2048,"format":"png"}],
+ "attachments":[{"title":"photo.png","type":"file","title_link":"/file-upload/f1/photo.png","title_link_download":true,
+   "image_dimensions":{"width":800,"height":600},"image_preview":"AAAA","image_url":"/file-upload/f1/photo.png","image_type":"image/png","image_size":2048}]},
+{"_id":"a-title","msg":"","ts":"2026-11-16T10:00:01.000Z","u":{"username":"bob"},
+ "attachments":[{"title":"t.pdf"}]},
+{"_id":"a-file","msg":"","ts":"2026-11-16T10:00:02.000Z","u":{"username":"bob"},
+ "file":{"_id":"f2","name":"clip.mp4","type":"video/mp4"}},
+{"_id":"a-preview","msg":"https://example.com/x","ts":"2026-11-16T10:00:03.000Z","u":{"username":"bob"},
+ "attachments":[{"title":"Example","image_url":"https://example.com/cat.png","image_type":"image/png"}]},
+{"_id":"a-two","msg":"","ts":"2026-11-16T10:00:04.000Z","u":{"username":"bob"},
+ "files":[{"_id":"f3","name":"a.png","type":"image/png"},{"_id":"f4","name":"b.png","type":"image/png"}],
+ "attachments":[
+  {"title":"a.png","image_url":"/file-upload/f3/a.png","image_type":"image/png","image_size":10,"image_dimensions":{"width":10,"height":20}},
+  {"title":"b.png","image_url":"/file-upload/f4/../b.png","image_type":"image/png"}]},
+{"_id":"a-thumb","msg":"","ts":"2026-11-16T10:00:05.000Z","u":{"username":"bob"},
+ "file":{"_id":"o1","name":"big.png","type":"image/png","size":3670016},
+ "files":[{"_id":"o1","name":"big.png","type":"image/png","size":3670016},{"_id":"t1","name":"thumb-big.png","type":"image/png","size":9000}],
+ "attachments":[{"title":"big.png","title_link":"/file-upload/o1/big.png","image_url":"/file-upload/t1/thumb-big.png","image_type":"image/png","image_size":9000,"image_dimensions":{"width":1920,"height":1080}}]}
+]}

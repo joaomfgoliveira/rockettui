@@ -338,16 +338,36 @@ pub struct WireEmojis {
     pub update: Vec<serde_json::Value>,
 }
 
-/// An uploaded file of a message; only its name is used.
+/// An uploaded file of a message: its name, and the id and media type the server stores. Untrusted
+/// text, never printed.
 #[derive(Deserialize)]
 pub struct WireFile {
+    #[serde(rename = "_id")]
+    pub id: Option<String>,
     pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub mime: Option<String>,
+    pub size: Option<u64>,
 }
 
-/// An attachment of a message; only its title is used.
+/// An attachment of a message: its title and, for an image, where the server serves it and what it
+/// knows about it. Link previews of other sites use `image_url` with an absolute address.
 #[derive(Deserialize)]
 pub struct WireAttach {
     pub title: Option<String>,
+    /// Where the original file is served; `image_url` may be its thumbnail instead.
+    pub title_link: Option<String>,
+    pub image_url: Option<String>,
+    pub image_type: Option<String>,
+    pub image_size: Option<u64>,
+    pub image_dimensions: Option<WireDims>,
+}
+
+/// The pixel size the server reports for an image.
+#[derive(Deserialize)]
+pub struct WireDims {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// The part of a subscription document of a `subscriptions-changed` stream event that the live

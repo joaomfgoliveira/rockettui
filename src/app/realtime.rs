@@ -176,6 +176,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: rid(room),
@@ -418,6 +419,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             ..msg(room, id, ts)
         }

@@ -65,6 +65,27 @@ impl std::fmt::Debug for EmojiRef {
     }
 }
 
+/// Which attachment image to fetch: the server path of the file (`/file-upload/...`), the size the
+/// server reports for it and the pixel size it reports. All are server text or numbers about a
+/// user's file, so its `Debug` prints only the length of the path.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AttachmentRef {
+    pub path: String,
+    pub size: Option<u64>,
+    pub dims: Option<(u32, u32)>,
+    /// Whether to keep the frames of an animated image (the `animate_images` setting).
+    pub animate: bool,
+    /// A path to fetch instead of `path`, for an animated image whose `path` is a still thumbnail
+    /// the server made: the original file. `path` stays the key the answer is filed under.
+    pub source: Option<String>,
+}
+
+impl std::fmt::Debug for AttachmentRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AttachmentRef(<{}> bytes)", self.path.len())
+    }
+}
+
 /// One IO intent: a fetch, or one send attempt.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -197,6 +218,14 @@ pub enum Effect {
     /// `GET <server>/emoji-custom/<name>.<ext>`, then decode it. Answers
     /// `Action::EmojiImageReady` or `Action::EmojiImageFailed`.
     FetchEmojiImage(EmojiRef),
+    /// Get one attachment image: from the disk cache when it holds this path and size, else with
+    /// `GET <server><path>` (a `/file-upload/` path only), then decode it for its inline box.
+    /// Answers `Action::AttachmentImageReady` or `Action::AttachmentImageFailed`.
+    FetchAttachmentImage(AttachmentRef),
+    /// Read one attachment image from the disk cache and decode it for the full-size view (up to
+    /// `VIEW_SHRINK_TO` pixels). Makes no request and needs no server. Answers
+    /// `Action::AttachmentViewReady` or `Action::AttachmentViewFailed`.
+    LoadAttachmentView(AttachmentRef),
     /// Mark `room` read with `POST subscriptions.read`. Answers `Action::MarkReadDone`; a failure
     /// answers nothing, the room just stays unread.
     MarkRead { room: RoomId },
@@ -296,7 +325,9 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
                 Effect::FollowThread { follow, .. } => Action::FollowFailed { follow, error },
                 Effect::LoadCustomEmojis => Action::CustomEmojisFailed,
                 Effect::FetchEmojiImage(emoji) => Action::EmojiImageFailed(emoji),
+                Effect::FetchAttachmentImage(image) => Action::AttachmentImageFailed(image),
                 Effect::LoadRecents | Effect::SaveRecents(_) => return Vec::new(),
+                Effect::LoadAttachmentView(image) => Action::AttachmentViewFailed(image),
             }];
         }
     };
@@ -534,7 +565,16 @@ pub async fn run(client: Result<Client, ApiError>, effect: Effect) -> Vec<Action
         Effect::FetchEmojiImage(emoji) => {
             vec![fetch_emoji_image(&client, cache_dir_from_env().as_deref(), emoji).await]
         }
+        Effect::FetchAttachmentImage(image) => {
+            vec![
+                fetch_attachment_image(&client, attachment_cache_dir_from_env().as_deref(), image)
+                    .await,
+            ]
+        }
         // Handled before the client was looked at.
+        Effect::LoadAttachmentView(image) => vec![
+            load_attachment_view(&client, attachment_cache_dir_from_env().as_deref(), image).await,
+        ],
         Effect::LoadRecents | Effect::SaveRecents(_) => Vec::new(),
     }
 }
@@ -610,6 +650,105 @@ fn cache_dir_from_env() -> Option<std::path::PathBuf> {
     crate::emoji_image::cache_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
 }
 
+/// The attachment image cache directory from the environment, `None` when there is none.
+fn attachment_cache_dir_from_env() -> Option<std::path::PathBuf> {
+    crate::emoji_image::attachment_cache_dir(
+        std::env::var_os("XDG_CACHE_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// Get and decode the attachment image `image` names, for its inline box: from `cache` when it
+/// holds this path and size, else from the server (and then into the cache, if it can be written).
+/// A failure of any step, including a cached file that no longer decodes, is
+/// `AttachmentImageFailed`; the cause is not kept. A path the client may not request is a failure
+/// without a request, and so is a reported size over the cap.
+pub async fn fetch_attachment_image(
+    client: &Client,
+    cache: Option<&std::path::Path>,
+    image: AttachmentRef,
+) -> Action {
+    use crate::api::MAX_ATTACHMENT_BYTES;
+    use crate::emoji_image::{
+        INLINE_ANIM_SHRINK_TO, INLINE_SHRINK_TO, attachment, decode, read_attachment_cached,
+        write_attachment_cached,
+    };
+    let source = image.source.clone().unwrap_or_else(|| image.path.clone());
+    let cached = cache
+        .and_then(|dir| read_attachment_cached(dir, &source, image.size, MAX_ATTACHMENT_BYTES));
+    let (bytes, from_cache) = match cached {
+        Some(bytes) => (bytes, true),
+        None => {
+            if image.size.is_some_and(|n| n > MAX_ATTACHMENT_BYTES as u64) {
+                return Action::AttachmentImageFailed(image);
+            }
+            match client.attachment_image(&source).await {
+                Ok(bytes) => (bytes, false),
+                Err(_) => return Action::AttachmentImageFailed(image),
+            }
+        }
+    };
+    // Decoding is CPU work on bytes from the server: off the async threads.
+    let animated_side = image.animate.then_some(INLINE_ANIM_SHRINK_TO);
+    let decoded = tokio::task::spawn_blocking(move || {
+        decode(&bytes, &attachment(INLINE_SHRINK_TO, animated_side)).map(|decoded| (decoded, bytes))
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    match decoded {
+        Some((decoded, bytes)) => {
+            if !from_cache && let Some(dir) = cache {
+                // Only bytes that decoded are kept. A cache that cannot be written is not an error.
+                write_attachment_cached(dir, &source, image.size, &bytes);
+            }
+            Action::AttachmentImageReady { image, decoded }
+        }
+        None => Action::AttachmentImageFailed(image),
+    }
+}
+
+/// Get the original file of the attachment image `image` names and decode it for the full-size
+/// view (up to `VIEW_SHRINK_TO` pixels): from `cache` when it holds this path and size, else from
+/// the server under `MAX_VIEW_BYTES` (and then into the cache). A failure of any step is
+/// `AttachmentViewFailed`, and the view then keeps the smaller image it already holds.
+pub async fn load_attachment_view(
+    client: &Client,
+    cache: Option<&std::path::Path>,
+    image: AttachmentRef,
+) -> Action {
+    use crate::api::MAX_VIEW_BYTES;
+    use crate::emoji_image::{
+        VIEW_ANIM_SHRINK_TO, VIEW_SHRINK_TO, attachment, decode, read_attachment_cached,
+        write_attachment_cached,
+    };
+    let cached =
+        cache.and_then(|dir| read_attachment_cached(dir, &image.path, image.size, MAX_VIEW_BYTES));
+    let (bytes, from_cache) = match cached {
+        Some(bytes) => (bytes, true),
+        None => match client.attachment_bytes(&image.path, MAX_VIEW_BYTES).await {
+            Ok(bytes) => (bytes, false),
+            Err(_) => return Action::AttachmentViewFailed(image),
+        },
+    };
+    let animated_side = image.animate.then_some(VIEW_ANIM_SHRINK_TO);
+    let decoded = tokio::task::spawn_blocking(move || {
+        decode(&bytes, &attachment(VIEW_SHRINK_TO, animated_side)).map(|decoded| (decoded, bytes))
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    match decoded {
+        Some((decoded, bytes)) => {
+            if !from_cache && let Some(dir) = cache {
+                write_attachment_cached(dir, &image.path, image.size, &bytes);
+            }
+            Action::AttachmentViewReady { image, decoded }
+        }
+        None => Action::AttachmentViewFailed(image),
+    }
+}
+
 /// Get and decode the image `emoji` names: from `cache` when it holds this etag, else from the
 /// server (and then into the cache, if it can be written). A failure of any step, including a
 /// cached file that no longer decodes, is `EmojiImageFailed`; the cause is not kept.
@@ -633,10 +772,12 @@ pub async fn fetch_emoji_image(
         },
     };
     // Decoding is CPU work on bytes from the server: off the async threads.
-    let decoded = tokio::task::spawn_blocking(move || decode(&bytes).map(|image| (image, bytes)))
-        .await
-        .ok()
-        .and_then(Result::ok);
+    let decoded = tokio::task::spawn_blocking(move || {
+        decode(&bytes, &crate::emoji_image::EMOJI).map(|image| (image, bytes))
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
     match decoded {
         Some((image, bytes)) => {
             if !from_cache && let Some(dir) = cache {
@@ -1393,6 +1534,7 @@ mod tests {
             tlm: None,
             followers: None,
             refs: None,
+            attachments: Vec::new(),
             reactions: Vec::new(),
             id: "rt-test-1".to_string(),
             room_id: general(),
@@ -1562,5 +1704,252 @@ mod tests {
             [Action::EmojiImageFailed(emoji_ref())]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn attachment_ref() -> AttachmentRef {
+        AttachmentRef {
+            path: "/file-upload/f1/photo.png".to_string(),
+            size: Some(100),
+            dims: Some((1, 1)),
+            animate: false,
+            source: None,
+        }
+    }
+
+    async fn serve_attachment(server: &MockServer, bytes: Vec<u8>) {
+        Mock::given(method("GET"))
+            .and(path("/file-upload/f1/photo.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_animated_image_is_fetched_from_its_source_not_its_thumbnail() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/id/orig.gif"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(png_bytes()))
+            .mount(&server)
+            .await;
+        let mut r = attachment_ref();
+        r.path = "/file-upload/id/thumb-orig.gif".to_string();
+        r.source = Some("/file-upload/id/orig.gif".to_string());
+        let action = fetch_attachment_image(&client_for(&server), None, r.clone()).await;
+        // The answer is filed under the thumbnail path the box looks up.
+        assert!(
+            matches!(&action, Action::AttachmentImageReady { image, .. } if *image == r),
+            "{action:?}"
+        );
+        let seen = server.received_requests().await.unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].url.path(), "/file-upload/id/orig.gif");
+    }
+
+    #[tokio::test]
+    async fn an_attachment_image_is_fetched_decoded_and_then_cached() {
+        let server = MockServer::start().await;
+        serve_attachment(&server, png_bytes()).await;
+        let dir = cache_tmp("attach-fetch");
+        let action =
+            fetch_attachment_image(&client_for(&server), Some(&dir), attachment_ref()).await;
+        match action {
+            Action::AttachmentImageReady { image, decoded } => {
+                assert_eq!(image, attachment_ref());
+                assert_eq!((decoded.width, decoded.height), (1, 1));
+                assert_eq!(&decoded.pixels[..], &[9, 8, 7, 255]);
+            }
+            other => panic!("expected the image, got {other:?}"),
+        }
+        // A later session reads it from disk and the server is not asked.
+        let second = MockServer::start().await;
+        let action =
+            fetch_attachment_image(&client_for(&second), Some(&dir), attachment_ref()).await;
+        assert!(
+            matches!(action, Action::AttachmentImageReady { .. }),
+            "{action:?}"
+        );
+        assert!(second.received_requests().await.unwrap().is_empty());
+        // A different size is a different file: the server is asked.
+        serve_attachment(&second, png_bytes()).await;
+        let mut changed = attachment_ref();
+        changed.size = Some(101);
+        let action = fetch_attachment_image(&client_for(&second), Some(&dir), changed).await;
+        assert!(matches!(action, Action::AttachmentImageReady { .. }));
+        assert_eq!(second.received_requests().await.unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn without_a_usable_cache_the_attachment_image_still_loads() {
+        let server = MockServer::start().await;
+        serve_attachment(&server, png_bytes()).await;
+        let action = fetch_attachment_image(&client_for(&server), None, attachment_ref()).await;
+        assert!(matches!(action, Action::AttachmentImageReady { .. }));
+        let dir = cache_tmp("attach-blocked");
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("attachments");
+        std::fs::write(&blocker, b"x").unwrap();
+        let action =
+            fetch_attachment_image(&client_for(&server), Some(&blocker), attachment_ref()).await;
+        assert!(matches!(action, Action::AttachmentImageReady { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_failing_attachment_image_reports_the_failure_and_caches_nothing() {
+        let dir = cache_tmp("attach-fail");
+        // Not an image, whatever the type said: nothing is cached.
+        let server = MockServer::start().await;
+        serve_attachment(&server, b"<html>login</html>".to_vec()).await;
+        let action =
+            fetch_attachment_image(&client_for(&server), Some(&dir), attachment_ref()).await;
+        assert_eq!(action, Action::AttachmentImageFailed(attachment_ref()));
+        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none());
+        // An image whose header reports too many pixels.
+        let server = MockServer::start().await;
+        let mut huge = Vec::new();
+        {
+            use image::ImageEncoder;
+            let pixels = vec![0u8; 5000 * 4];
+            image::codecs::png::PngEncoder::new(&mut huge)
+                .write_image(&pixels, 5000, 1, image::ExtendedColorType::Rgba8)
+                .unwrap();
+        }
+        serve_attachment(&server, huge).await;
+        assert_eq!(
+            fetch_attachment_image(&client_for(&server), Some(&dir), attachment_ref()).await,
+            Action::AttachmentImageFailed(attachment_ref())
+        );
+        // Not found.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            fetch_attachment_image(&client_for(&server), Some(&dir), attachment_ref()).await,
+            Action::AttachmentImageFailed(attachment_ref())
+        );
+        // Over the cap while reading.
+        let server = MockServer::start().await;
+        serve_attachment(&server, vec![0u8; crate::api::MAX_ATTACHMENT_BYTES + 1]).await;
+        assert_eq!(
+            fetch_attachment_image(&client_for(&server), Some(&dir), attachment_ref()).await,
+            Action::AttachmentImageFailed(attachment_ref())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_reported_size_over_the_cap_or_a_foreign_path_makes_no_request() {
+        let server = MockServer::start().await;
+        serve_attachment(&server, png_bytes()).await;
+        let mut big = attachment_ref();
+        big.size = Some(crate::api::MAX_ATTACHMENT_BYTES as u64 + 1);
+        assert_eq!(
+            fetch_attachment_image(&client_for(&server), None, big.clone()).await,
+            Action::AttachmentImageFailed(big)
+        );
+        let mut foreign = attachment_ref();
+        foreign.path = "https://elsewhere.example/file-upload/f1/photo.png".to_string();
+        assert_eq!(
+            fetch_attachment_image(&client_for(&server), None, foreign.clone()).await,
+            Action::AttachmentImageFailed(foreign)
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_attachment_effect_with_no_client_fails_the_image() {
+        assert_eq!(
+            run(
+                Err(ApiError::Client),
+                Effect::FetchAttachmentImage(attachment_ref())
+            )
+            .await,
+            [Action::AttachmentImageFailed(attachment_ref())]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_full_size_view_loads_the_original_and_caches_it() {
+        use image::ImageEncoder;
+        let mut big = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut big)
+            .write_image(
+                &vec![7u8; 2000 * 1000 * 4],
+                2000,
+                1000,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let dir = cache_tmp("view");
+        let r = AttachmentRef {
+            path: "/file-upload/orig/photo.png".to_string(),
+            size: None,
+            dims: None,
+            animate: false,
+            source: None,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/orig/photo.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
+            .expect(1)
+            .mount(&server)
+            .await;
+        match load_attachment_view(&client_for(&server), Some(&dir), r.clone()).await {
+            Action::AttachmentViewReady { image, decoded } => {
+                assert_eq!(image, r);
+                // Larger than the inline decode, within the view's limit.
+                assert_eq!(decoded.width, crate::emoji_image::VIEW_SHRINK_TO);
+                assert!(decoded.width > crate::emoji_image::INLINE_SHRINK_TO);
+            }
+            other => panic!("expected the image, got {other:?}"),
+        }
+        // The next time it comes from the cache: the server is not asked again.
+        let again = load_attachment_view(&client_for(&server), Some(&dir), r.clone()).await;
+        assert!(matches!(again, Action::AttachmentViewReady { .. }));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_full_size_load_that_fails_reports_it() {
+        let r = AttachmentRef {
+            path: "/file-upload/orig/photo.png".to_string(),
+            size: None,
+            dims: None,
+            animate: false,
+            source: None,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"<html>".to_vec()))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            load_attachment_view(&client_for(&server), None, r.clone()).await,
+            Action::AttachmentViewFailed(r.clone())
+        );
+        let foreign = AttachmentRef {
+            path: "https://elsewhere.example/file-upload/a/b.png".to_string(),
+            size: None,
+            dims: None,
+            animate: false,
+            source: None,
+        };
+        assert_eq!(
+            load_attachment_view(&client_for(&server), None, foreign.clone()).await,
+            Action::AttachmentViewFailed(foreign)
+        );
+        // With no client at all the effect still answers.
+        assert!(matches!(
+            run(Err(ApiError::Client), Effect::LoadAttachmentView(r))
+                .await
+                .as_slice(),
+            [Action::AttachmentViewFailed(_)]
+        ));
     }
 }

@@ -111,6 +111,8 @@ pub fn default_bindings() -> Vec<(Mode, &'static str, Action)> {
         // `gc` (`open_channel`) opens the room a `#channel` in the message under the cursor names,
         // or a picker when it names several. Another continuation of the `g` prefix.
         (Mode::Normal, "gc", Action::OpenChannel),
+        // `gp` (`show_image`) opens the image of the message under the cursor at full size.
+        (Mode::Normal, "gp", Action::ShowImage),
         // `gt` (`open_thread`) opens the thread of the message under the cursor in the thread pane.
         // It is a third continuation of the `g` prefix. `close_thread` has no default key: `Esc`
         // closes the pane while it is focused.

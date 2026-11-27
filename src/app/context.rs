@@ -4,7 +4,9 @@
 //! the actions themselves use, so the popup does not promise an action that would be a silent
 //! no-op. Only built-in text is shown, never a message, an author or a room name.
 
-use crate::app::{App, Focus, Mode, channels, edit, react, reactions, send, sidebar, thread};
+use crate::app::{
+    App, Focus, Mode, channels, edit, image_view, react, reactions, send, sidebar, thread,
+};
 use crate::input::actions::name_of;
 use crate::input::key::format_keys;
 
@@ -176,6 +178,10 @@ const REACTIONS_ACTION: (&str, &str) = ("show_reactions", "show who reacted");
 /// action and before the jumps (`lines` places it). A test checks the name is a real action.
 const CHANNEL_ACTION: (&str, &str) = ("open_channel", "open the channel it names");
 
+/// The show-image action: listed on a message that has an image attachment, after the open-channel
+/// action and before the jumps (`lines` places it). A test checks the name is a real action.
+const IMAGE_ACTION: (&str, &str) = ("show_image", "show its image full size");
+
 /// The thread list action: listed with the thread actions, on a message that has a thread and in
 /// the thread pane. It is about the room, not the message, but the popup has no room for it on
 /// every message. A test checks the name is a real action.
@@ -284,6 +290,9 @@ pub fn lines(app: &App) -> Context {
     }
     if is_message && channels::under_cursor(app).is_some() {
         message_actions.push(CHANNEL_ACTION);
+    }
+    if is_message && image_view::has_image_under_cursor(app) {
+        message_actions.push(IMAGE_ACTION);
     }
     let mut message_actions_pending = !message_actions.is_empty();
     for (name, desc) in kind.actions() {
@@ -643,6 +652,109 @@ mod tests {
     #[test]
     fn the_open_channel_action_is_a_real_described_action() {
         let (name, desc) = CHANNEL_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        assert!(
+            crate::app::help::DESCRIPTIONS
+                .iter()
+                .any(|(n, _)| *n == name),
+            "{name} has no help description"
+        );
+    }
+
+    fn with_image(app: &mut App) {
+        let room = app.current_room.clone().expect("a room");
+        app.messages.get_mut(&room).unwrap()[0]
+            .attachments
+            .push(crate::data::Attachment {
+                kind: crate::data::AttachmentKind::Image,
+                name: "photo.png".to_string(),
+                path: Some("/file-upload/a/photo.png".to_string()),
+                full_path: None,
+                mime: Some("image/png".to_string()),
+                size: Some(10),
+                dims: None,
+            });
+    }
+
+    #[test]
+    fn show_image_row_on_a_message_with_an_image() {
+        let mut app = messages_app("someone-else", SendState::Sent);
+        with_image(&mut app);
+        let ctx = lines(&app);
+        let at = descs(&ctx)
+            .iter()
+            .position(|d| *d == "show its image full size")
+            .expect("a row for the image");
+        assert_eq!(ctx.rows[at].keys, "gp");
+        // Before the jumps, after the message's own actions.
+        let jump = descs(&ctx)
+            .iter()
+            .position(|d| *d == "jump to the oldest message")
+            .unwrap();
+        assert_eq!(at + 1, jump);
+        // The same for the user's own message.
+        let mut own = messages_app("me", SendState::Sent);
+        with_image(&mut own);
+        assert!(descs(&lines(&own)).contains(&"show its image full size"));
+    }
+
+    #[test]
+    fn no_show_image_row_without_an_image_or_off_a_message() {
+        let has = |app: &App| descs(&lines(app)).contains(&"show its image full size");
+        let mut app = messages_app("someone-else", SendState::Sent);
+        assert!(!has(&app), "no attachment at all");
+        // A file that is not an image, and an image that cannot be fetched, are not images.
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0]
+            .attachments
+            .push(crate::data::Attachment {
+                kind: crate::data::AttachmentKind::Other,
+                name: "a.pdf".to_string(),
+                path: Some("/file-upload/a/a.pdf".to_string()),
+                full_path: None,
+                mime: None,
+                size: None,
+                dims: None,
+            });
+        assert!(!has(&app));
+        with_image(&mut app);
+        assert!(has(&app));
+        app.focus = Focus::Input;
+        assert!(!has(&app));
+        app.focus = Focus::Sidebar;
+        assert!(!has(&app));
+    }
+
+    #[test]
+    fn show_image_row_follows_the_live_keymap() {
+        let rebound = app_with_config(
+            config_from_keymap("[normal]\n\"P\" = \"show_image\"\n"),
+            80,
+            24,
+        );
+        let mut app = messages_app_in(rebound, "someone-else", SendState::Sent);
+        with_image(&mut app);
+        let ctx = lines(&app);
+        let row = ctx
+            .rows
+            .iter()
+            .find(|r| r.desc == "show its image full size")
+            .expect("row");
+        assert_eq!(row.keys, "P gp", "every key, sorted");
+
+        let unbound = app_with_config(config_from_keymap("[normal]\n\"gp\" = \"none\"\n"), 80, 24);
+        let mut app = messages_app_in(unbound, "someone-else", SendState::Sent);
+        with_image(&mut app);
+        assert!(
+            !descs(&lines(&app)).contains(&"show its image full size"),
+            "an action with no key bound is left out"
+        );
+    }
+
+    #[test]
+    fn the_show_image_action_is_a_real_described_action() {
+        let (name, desc) = IMAGE_ACTION;
         assert!(ACTION_NAMES.contains(&name));
         assert!(!desc.is_empty());
         assert!(

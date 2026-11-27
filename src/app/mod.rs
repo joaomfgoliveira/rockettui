@@ -3,6 +3,7 @@
 //! `App` holds no data of its own at construction: rooms, folders and messages arrive as
 //! `Action`s from a data source (the D-13 seam).
 
+pub mod attachments;
 pub mod channels;
 pub mod command;
 pub mod context;
@@ -12,6 +13,7 @@ pub mod emoji_recents;
 pub mod follow;
 pub mod help;
 pub mod history;
+pub mod image_view;
 pub mod input_buf;
 pub mod jump;
 pub mod messages;
@@ -228,6 +230,9 @@ pub struct App {
     /// The reactions popup (`app::reactions`), when open: the message it was opened on. Like
     /// `context` it is a state, not a mode; its content is recomputed from the app on every draw.
     pub reactions_popup: Option<reactions::ReactionsPopup>,
+    /// The full-size image view (`app::image_view`), when open. Like the popups it is a state, not
+    /// a mode: closing it returns to the message flow exactly as it was.
+    pub image_view: Option<image_view::ImageView>,
     /// The channel picker (`app::channels`), when open: the message it was opened on and the
     /// selected row. A state, not a mode; it takes every key while open.
     pub channel_picker: Option<channels::ChannelPicker>,
@@ -241,6 +246,8 @@ pub struct App {
     pub anim_ms: u64,
     /// The custom emoji images of the session: fetched, failed and in flight (`app::emoji`).
     pub images: emoji::Images,
+    /// The attachment images of the session: fetched, failed and in flight (`app::attachments`).
+    pub attachment_images: attachments::AttachmentImages,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub emoji_box: Option<react::EmojiBox>,
     /// What the emoji box remembers: "Frequently used" and the skin tone. Loaded once at start from
@@ -342,10 +349,12 @@ impl App {
             help: None,
             context: false,
             reactions_popup: None,
+            image_view: None,
             channel_picker: None,
             custom_emojis: emoji::CustomEmojis::default(),
             graphics: emoji::Graphics::default(),
             images: emoji::Images::default(),
+            attachment_images: attachments::AttachmentImages::default(),
             anim_ms: 0,
             emoji_box: None,
             emoji_recents: emoji_recents::Recents::default(),
@@ -493,6 +502,15 @@ impl App {
             search: self.search.as_ref().map(|s| s.query.as_str()),
             aliases: &self.settings.emoji_aliases,
             emoji: self.emoji_view(),
+            attach: crate::ui::attachment::AttachView {
+                images: &self.attachment_images,
+                graphics: self.graphics,
+                // Off here: only the open room's own pane draws attachment images
+                // (`pane_row_ctx`), not the thread pane, the results or the draft.
+                enabled: false,
+                max_rows: self.settings.image_max_rows,
+                now_ms: self.anim_ms,
+            },
             own_user: self.own_username.as_deref(),
             own_id: self.own_user_id.as_deref(),
             unread_before: None,
@@ -532,6 +550,7 @@ impl App {
     /// context here, so the renderer and the row model agree on the divider's row.
     pub fn pane_row_ctx(&self, room: &RoomId, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
+        ctx.attach.enabled = self.settings.inline_images;
         ctx.unread_before = read::divider_before(self, room);
         if self.message_layout == crate::ui::wrap::MessageLayout::TwoLine {
             ctx.grouping = self.grouping();
@@ -925,6 +944,7 @@ mod tests {
                     tlm: None,
                     followers: None,
                     refs: None,
+                    attachments: Vec::new(),
                     reactions: Vec::new(),
                     id: format!("u-{n}"),
                     room_id: rid(room),

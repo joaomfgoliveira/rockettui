@@ -44,22 +44,32 @@ fn delete_images() {
     }
 }
 
-/// Transmit to the terminal the emoji images that arrived since the last call, once each, before
-/// the next frame draws the cells that show them. Nothing is written unless the terminal answered
+/// Transmit to the terminal the emoji images that arrived since the last call, once each, and the
+/// attachment images near the viewport, before the next frame draws the cells that show them. Nothing is written unless the terminal answered
 /// the startup query with yes.
 pub fn upload_images(app: &mut crate::app::App) {
     use std::io::Write;
     if app.graphics != Graphics::Supported {
         return;
     }
+    // Boxes are sized in cells from the real cell shape, which a font change can alter.
+    if let Ok(size) = crossterm::terminal::window_size() {
+        crate::ui::attachment::set_cell_size((size.width, size.height), size.columns, size.rows);
+    }
     let uploads = app.images.take_uploads();
-    if uploads.is_empty() {
+    // The attachment images near the viewport, placed in the cells their boxes draw.
+    let commands = crate::app::attachments::prepare_frame(app);
+    if uploads.is_empty() && commands.is_empty() {
         return;
     }
     let mut out = stdout().lock();
     for frame in uploads {
         IMAGES_SENT.store(true, Ordering::SeqCst);
         let command = crate::kitty::upload(frame.id, frame.width, frame.height, &frame.pixels);
+        let _ = out.write_all(command.as_bytes());
+    }
+    for command in commands {
+        IMAGES_SENT.store(true, Ordering::SeqCst);
         let _ = out.write_all(command.as_bytes());
     }
     let _ = out.flush();
