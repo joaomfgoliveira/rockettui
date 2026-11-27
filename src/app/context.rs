@@ -4,7 +4,7 @@
 //! the actions themselves use, so the popup does not promise an action that would be a silent
 //! no-op. Only built-in text is shown, never a message, an author or a room name.
 
-use crate::app::{App, Focus, Mode, edit, react, reactions, send, sidebar, thread};
+use crate::app::{App, Focus, Mode, channels, edit, react, reactions, send, sidebar, thread};
 use crate::input::actions::name_of;
 use crate::input::key::format_keys;
 
@@ -172,6 +172,10 @@ const REACT_ACTION: (&str, &str) = ("react_message", "add or remove your reactio
 /// not on its kind. A test checks the name is a real action.
 const REACTIONS_ACTION: (&str, &str) = ("show_reactions", "show who reacted");
 
+/// The open-channel action: listed on a message that references a channel, after the reactions
+/// action and before the jumps (`lines` places it). A test checks the name is a real action.
+const CHANNEL_ACTION: (&str, &str) = ("open_channel", "open the channel it names");
+
 /// The thread list action: listed with the thread actions, on a message that has a thread and in
 /// the thread pane. It is about the room, not the message, but the popup has no room for it on
 /// every message. A test checks the name is a real action.
@@ -277,6 +281,9 @@ pub fn lines(app: &App) -> Context {
     }
     if is_message && reactions::under_cursor(app).is_some() {
         message_actions.push(REACTIONS_ACTION);
+    }
+    if is_message && channels::under_cursor(app).is_some() {
+        message_actions.push(CHANNEL_ACTION);
     }
     let mut message_actions_pending = !message_actions.is_empty();
     for (name, desc) in kind.actions() {
@@ -553,6 +560,96 @@ mod tests {
         assert!(
             !descs(&lines(&app)).contains(&"show who reacted"),
             "an action with no key bound is left out"
+        );
+    }
+
+    /// Make the only message of `app` reference `names` as channels.
+    fn reference(app: &mut App, names: &[&str]) {
+        let room = app.current_room.clone().expect("a room");
+        app.messages.get_mut(&room).unwrap()[0].refs = Some(crate::data::Refs {
+            mentions: Vec::new(),
+            channels: names.iter().map(|s| s.to_string()).collect(),
+        });
+    }
+
+    #[test]
+    fn open_channel_row_on_a_message_that_references_a_channel() {
+        let mut app = messages_app("someone-else", SendState::Sent);
+        reference(&mut app, &["dev-chat"]);
+        let ctx = lines(&app);
+        let at = descs(&ctx)
+            .iter()
+            .position(|d| *d == "open the channel it names")
+            .expect("a row for the channel");
+        assert_eq!(ctx.rows[at].keys, "gc");
+        // Before the jumps, after the message's own actions.
+        let jump = descs(&ctx)
+            .iter()
+            .position(|d| *d == "jump to the oldest message")
+            .unwrap();
+        assert_eq!(at + 1, jump);
+    }
+
+    #[test]
+    fn no_open_channel_row_without_a_channel_or_off_a_message() {
+        let has = |app: &App| descs(&lines(app)).contains(&"open the channel it names");
+        let mut app = messages_app("someone-else", SendState::Sent);
+        assert!(!has(&app), "no lists at all");
+        reference(&mut app, &[]);
+        assert!(!has(&app), "empty lists");
+        // Mentions alone are not a channel.
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0]
+            .refs
+            .as_mut()
+            .unwrap()
+            .mentions
+            .push("bob".to_string());
+        assert!(!has(&app), "a mention is not a channel");
+        reference(&mut app, &["dev-chat"]);
+        assert!(has(&app));
+        app.focus = Focus::Input;
+        assert!(!has(&app));
+        app.focus = Focus::Sidebar;
+        assert!(!has(&app));
+    }
+
+    #[test]
+    fn open_channel_row_follows_the_live_keymap() {
+        let rebound = app_with_config(
+            config_from_keymap("[normal]\n\"C\" = \"open_channel\"\n"),
+            80,
+            24,
+        );
+        let mut app = messages_app_in(rebound, "someone-else", SendState::Sent);
+        reference(&mut app, &["dev-chat"]);
+        let ctx = lines(&app);
+        let row = ctx
+            .rows
+            .iter()
+            .find(|r| r.desc == "open the channel it names")
+            .expect("row");
+        assert_eq!(row.keys, "C gc", "every key, sorted");
+
+        let unbound = app_with_config(config_from_keymap("[normal]\n\"gc\" = \"none\"\n"), 80, 24);
+        let mut app = messages_app_in(unbound, "someone-else", SendState::Sent);
+        reference(&mut app, &["dev-chat"]);
+        assert!(
+            !descs(&lines(&app)).contains(&"open the channel it names"),
+            "an action with no key bound is left out"
+        );
+    }
+
+    #[test]
+    fn the_open_channel_action_is_a_real_described_action() {
+        let (name, desc) = CHANNEL_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        assert!(
+            crate::app::help::DESCRIPTIONS
+                .iter()
+                .any(|(n, _)| *n == name),
+            "{name} has no help description"
         );
     }
 

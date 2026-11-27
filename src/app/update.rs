@@ -6,9 +6,9 @@ use crate::action::Action;
 use crate::app::emoji::EmojiView;
 use crate::app::input_buf::InputBuffer;
 use crate::app::{
-    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, command, edit, emoji, follow, help,
-    history, jump, react, reactions, read, realtime, results, search, send, sidebar, switcher,
-    thread, thread_list,
+    App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, channels, command, edit, emoji, follow,
+    help, history, jump, react, reactions, read, realtime, results, search, send, sidebar,
+    switcher, thread, thread_list,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -19,6 +19,7 @@ pub fn update(app: &mut App, action: Action) {
     reduce(app, action);
     // A live change can leave the reactions popup with nothing to show; it closes at once.
     reactions::close_if_stale(app);
+    channels::close_if_stale(app);
     react::close_if_stale(app);
     switcher::refresh(app);
     // Whatever the action changed, the room on screen may now name a custom emoji not seen yet.
@@ -38,6 +39,11 @@ fn reduce(app: &mut App, action: Action) {
             // An open reaction picker takes every key, so letters are the search (see `app::react`).
             if app.emoji_box.is_some() {
                 react::key(app, chord);
+                return;
+            }
+            // An open channel picker takes every key (see `app::channels`).
+            if app.channel_picker.is_some() {
+                channels::key(app, chord);
                 return;
             }
             // An open room switcher takes every key, so letters are the search (see
@@ -91,6 +97,7 @@ fn reduce(app: &mut App, action: Action) {
                 || app.reactions_popup.is_some()
                 || app.emoji_box.is_some()
                 || app.switcher.is_some()
+                || app.channel_picker.is_some()
                 || app.thread_list.as_ref().is_some_and(|l| l.searching)
             {
                 return;
@@ -352,6 +359,7 @@ fn reduce(app: &mut App, action: Action) {
         Action::ShowHelp => app.help = Some(0),
         Action::ShowContext => app.context = true,
         Action::ShowReactions => reactions::open(app),
+        Action::OpenChannel => channels::open(app),
         Action::OpenThread => thread::open(app),
         Action::ListThreads => thread_list::open(app),
         Action::ThreadListSearchDue => thread_list::on_search_due(app),
@@ -1155,6 +1163,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: RoomId(room.to_string()),

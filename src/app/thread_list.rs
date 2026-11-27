@@ -561,6 +561,7 @@ mod tests {
             tcount: 2,
             tlm: Some(110),
             followers: None,
+            refs: None,
         }
     }
 

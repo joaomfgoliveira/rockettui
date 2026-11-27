@@ -120,11 +120,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         Vec::new()
     };
+    let first = cursor_rows.start.max(v.top_row);
+    let end = cursor_rows.end.min(v.top_row + usize::from(inner.height));
     frame.render_widget(Paragraph::new(window), inner);
     // Highlight the whole width of every visible row of the cursor message, trailing blanks
     // included.
-    let first = cursor_rows.start.max(v.top_row);
-    let end = cursor_rows.end.min(v.top_row + usize::from(inner.height));
     for row in first..end {
         let y = inner.y + u16::try_from(row - v.top_row).unwrap_or(u16::MAX);
         frame
@@ -640,6 +640,7 @@ mod tests {
                 tcount: 0,
                 tlm: None,
                 followers: None,
+                refs: None,
                 reactions: Vec::new(),
                 id: "long-author".to_string(),
                 room_id: general(),
@@ -679,6 +680,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: "hostile".to_string(),
             room_id: general(),
@@ -724,6 +726,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -848,6 +851,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -982,6 +986,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
         }
     }
@@ -1095,6 +1100,71 @@ mod tests {
         assert!(buffer[(2, y)].modifier.contains(Modifier::REVERSED));
     }
 
+    /// The cells of the pane whose symbol is `@`: where a mention starts.
+    fn at_signs(terminal: &Terminal<TestBackend>) -> Vec<(u16, u16)> {
+        let buffer = terminal.backend().buffer();
+        let mut out = Vec::new();
+        for y in 1..buffer.area.height - 1 {
+            for x in 1..buffer.area.width - 1 {
+                if buffer[(x, y)].symbol() == "@" {
+                    out.push((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_mention_on_the_cursor_row_stays_distinguishable_from_the_text_around_it() {
+        let mut app = search_app(
+            crate::config::Config::default(),
+            &[("older @bob here", N), ("say @bob now", N)],
+        );
+        // The cursor starts on the newest message; the older one is a control without the cursor.
+        assert_eq!(view(&app, &general()).cursor, 1);
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        let cyan = app.theme.messages_mention.fg;
+        let signs = at_signs(&terminal);
+        assert_eq!(signs.len(), 2, "{signs:?}");
+        for (x, y) in signs {
+            let cursor_row = buffer[(2, y)].modifier.contains(Modifier::REVERSED);
+            // The mention keeps its colour whether or not the cursor row reverses it, and the
+            // text next to it does not have that colour.
+            assert_eq!(
+                Some(buffer[(x, y)].fg),
+                cyan,
+                "{x},{y} (cursor row: {cursor_row})"
+            );
+            assert_ne!(Some(buffer[(2, y)].fg), cyan, "{x},{y}");
+        }
+        // Unfocused, the cursor sets a background over the row: the mention is still its colour.
+        app.focus = crate::app::Focus::Sidebar;
+        let terminal = render_pane(&app);
+        let buffer = terminal.backend().buffer();
+        for (x, y) in at_signs(&terminal) {
+            assert_eq!(Some(buffer[(x, y)].fg), cyan, "{x},{y} unfocused");
+        }
+    }
+
+    #[test]
+    fn an_own_mention_stays_prominent_on_the_cursor_row() {
+        let mut app = search_app(crate::config::Config::default(), &[("say @me now", N)]);
+        app.own_username = Some("me".to_string());
+        let own = app.theme.messages_mention_self;
+        for focus in [crate::app::Focus::Messages, crate::app::Focus::Sidebar] {
+            app.focus = focus;
+            let terminal = render_pane(&app);
+            let buffer = terminal.backend().buffer();
+            let (x, y) = at_signs(&terminal)[0];
+            assert_eq!(Some(buffer[(x, y)].fg), own.fg, "{focus:?}");
+            assert!(
+                buffer[(x, y)].modifier.contains(own.add_modifier),
+                "{focus:?}: bold and underlined survive the cursor"
+            );
+        }
+    }
+
     #[test]
     fn deleted_lines_and_encrypted_text_are_not_highlighted() {
         let mut app = search_app(
@@ -1158,6 +1228,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions,
             id: id.to_string(),
             room_id: room.clone(),
@@ -1267,6 +1338,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -1283,12 +1355,14 @@ mod tests {
                     tcount: 3,
                     tlm: Some(660),
                     followers: None,
+                    refs: None,
                     ..msg("1", 60, "deploy plan")
                 },
                 Message {
                     tcount: 1,
                     tlm: Some(700),
                     followers: None,
+                    refs: None,
                     ..msg("2", 120, "who owns the rollback")
                 },
                 Message {
@@ -1554,6 +1628,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: id.to_string(),
             room_id: room.clone(),
@@ -1632,6 +1707,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
         }
     }
 

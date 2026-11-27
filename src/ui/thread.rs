@@ -89,9 +89,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .skip(v.top_row)
         .take(usize::from(inner.height))
         .collect();
-    frame.render_widget(Paragraph::new(window), inner);
     let first = cursor_rows.start.max(v.top_row);
     let end = cursor_rows.end.min(v.top_row + usize::from(inner.height));
+    frame.render_widget(Paragraph::new(window), inner);
     for row in first..end {
         let y = inner.y + u16::try_from(row - v.top_row).unwrap_or(u16::MAX);
         frame
@@ -129,6 +129,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
         }
     }
 
@@ -145,6 +146,7 @@ mod tests {
                     tcount: 2,
                     tlm: Some(660),
                     followers: None,
+                    refs: None,
                     ..msg("1", 60, "alice", "deploy plan: who takes the rollback?")
                 },
             ],
@@ -176,6 +178,52 @@ mod tests {
             },
         );
         app
+    }
+
+    #[test]
+    fn a_mention_in_a_thread_reply_is_highlighted_in_the_thread_pane() {
+        let mut app = app_with_thread(160, 24);
+        let thread = app.thread.as_mut().expect("thread");
+        let reply = thread
+            .messages
+            .iter_mut()
+            .find(|m| m.id == "2")
+            .expect("reply");
+        reply.body = "I can take it @alice".to_string();
+        reply.refs = Some(crate::data::Refs {
+            mentions: vec!["alice".to_string()],
+            channels: Vec::new(),
+        });
+        let buffer = render_buffer(&app, 160, 24);
+        // The thread pane is the right part of the screen: find the `@` there.
+        let found: Vec<_> = (80..160)
+            .flat_map(|x| (0..24).map(move |y| (x, y)))
+            .filter(|&(x, y)| buffer[(x, y)].symbol() == "@")
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let (x, y) = found[0];
+        let want = app.theme.messages_mention.fg;
+        for dx in 0..6 {
+            assert_eq!(Some(buffer[(x + dx, y)].fg), want, "cell {dx} of @alice");
+        }
+    }
+
+    #[test]
+    fn the_thread_pane_mention_stays_styled_on_the_cursor_row() {
+        let mut app = app_with_thread(160, 24);
+        app.focus = Focus::Thread;
+        let thread = app.thread.as_mut().expect("thread");
+        let last = thread.messages.len() - 1;
+        thread.messages[last].body = "ok @bob".to_string();
+        press(&mut app, "G");
+        let buffer = render_buffer(&app, 160, 24);
+        let found: Vec<_> = (80..160)
+            .flat_map(|x| (0..24).map(move |y| (x, y)))
+            .filter(|&(x, y)| buffer[(x, y)].symbol() == "@")
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let (x, y) = found[0];
+        assert_eq!(Some(buffer[(x, y)].fg), app.theme.messages_mention.fg);
     }
 
     #[test]

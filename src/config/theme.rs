@@ -52,6 +52,10 @@ pub const ELEMENT_PATHS: &[&str] = &[
     "messages.reactions",
     "messages.reactions_own",
     "messages.custom_emoji",
+    "messages.mention",
+    "messages.mention_self",
+    "messages.mention_group",
+    "messages.channel",
     "messages.thread",
     "messages.thread_reply_hint",
     "messages.thread_unread",
@@ -270,6 +274,14 @@ pub struct Theme {
     /// terminal that cannot show images or when the image failed, and the blank it takes while the
     /// image is on its way.
     pub messages_custom_emoji: Style,
+    /// Another user's `@name` in message text (and in the draft).
+    pub messages_mention: Style,
+    /// The user's own `@name`: the most prominent of the four.
+    pub messages_mention_self: Style,
+    /// `@here` and `@all`.
+    pub messages_mention_group: Style,
+    /// A `#channel` reference.
+    pub messages_channel: Style,
     /// The marker row under a thread's first message: the reply count and the last reply time.
     pub messages_thread: Style,
     /// The `[thread]` tag at the start of a reply that is also shown in the channel (the reply's text is italic).
@@ -366,6 +378,12 @@ impl Default for Theme {
             messages_reactions: plain.add_modifier(Modifier::DIM),
             messages_reactions_own: plain.add_modifier(Modifier::BOLD),
             messages_custom_emoji: plain.add_modifier(Modifier::ITALIC),
+            messages_mention: plain.fg(Color::Cyan),
+            messages_mention_self: plain
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            messages_mention_group: plain.fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            messages_channel: plain.fg(Color::Green),
             messages_thread: plain.fg(Color::Cyan),
             messages_thread_reply_hint: plain.fg(Color::Cyan).add_modifier(Modifier::BOLD),
             messages_thread_unread: plain.fg(Color::Red),
@@ -446,6 +464,10 @@ impl Theme {
             ("messages", "reactions") => Some(&mut self.messages_reactions),
             ("messages", "reactions_own") => Some(&mut self.messages_reactions_own),
             ("messages", "custom_emoji") => Some(&mut self.messages_custom_emoji),
+            ("messages", "mention") => Some(&mut self.messages_mention),
+            ("messages", "mention_self") => Some(&mut self.messages_mention_self),
+            ("messages", "mention_group") => Some(&mut self.messages_mention_group),
+            ("messages", "channel") => Some(&mut self.messages_channel),
             ("messages", "thread") => Some(&mut self.messages_thread),
             ("messages", "thread_reply_hint") => Some(&mut self.messages_thread_reply_hint),
             ("messages", "thread_unread") => Some(&mut self.messages_thread_unread),
@@ -1010,8 +1032,8 @@ mod tests {
     fn every_element_is_themeable() {
         assert_eq!(
             ELEMENT_PATHS.len(),
-            66,
-            "17 chrome and border paths, the seventeen messages and thread elements, the two thread badge elements and the thread unread mark, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the eleven picker elements"
+            70,
+            "17 chrome and border paths, the seventeen messages and thread elements, the two thread badge elements and the thread unread mark, the five help elements, the four context elements, the search match, the three results elements, the five reactions popup elements and the eleven picker elements and the four mention and channel elements"
         );
         let mut toml = String::new();
         for (i, path) in ELEMENT_PATHS.iter().enumerate() {
@@ -1177,6 +1199,48 @@ mod tests {
         assert!(out.is_empty(), "{out:?}");
         assert_eq!(theme.messages_custom_emoji.fg, Some(Color::Magenta));
         assert_eq!(theme.messages_custom_emoji.add_modifier, Modifier::ITALIC);
+    }
+
+    #[test]
+    fn the_mention_and_channel_elements_have_distinct_defaults_and_are_themeable() {
+        let t = Theme::default();
+        let styles = [
+            t.messages_mention,
+            t.messages_mention_self,
+            t.messages_mention_group,
+            t.messages_channel,
+        ];
+        for (i, a) in styles.iter().enumerate() {
+            assert_ne!(*a, t.messages_body, "kind {i} differs from the body");
+            for b in &styles[i + 1..] {
+                assert_ne!(a, b, "the four kinds differ from each other");
+            }
+        }
+        // Own mention is the most prominent: it has the most modifiers, and a colour.
+        let weight = |s: &Style| s.add_modifier.bits().count_ones();
+        assert!(styles[1..].iter().all(|s| weight(&styles[1]) >= weight(s)));
+        assert!(weight(&styles[1]) > weight(&styles[0]));
+        assert!(t.messages_mention_self.fg.is_some());
+        // A theme that never heard of them keeps the defaults.
+        let (theme, out) = parse_str("[messages.body]\nfg = \"green\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_mention, t.messages_mention);
+        assert_eq!(theme.messages_channel, t.messages_channel);
+        let (theme, out) = parse_str("[messages.mention]\nfg = \"yellow\"\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(theme.messages_mention.fg, Some(Color::Yellow));
+        assert_eq!(theme.messages_mention_self, t.messages_mention_self);
+        let (theme, out) = parse_str("[messages.channel]\nmodifiers = [\"underlined\"]\n");
+        assert!(out.is_empty(), "{out:?}");
+        assert!(
+            theme
+                .messages_channel
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
+        // An unknown key in one is reported, like everywhere else in the file.
+        let (_, out) = parse_str("[messages.mention]\nfgg = \"red\"\n");
+        assert!(!out.is_empty());
     }
 
     #[test]

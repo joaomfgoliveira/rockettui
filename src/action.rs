@@ -73,6 +73,11 @@ pub enum Action {
     /// Normal mode, messages pane focused, cursor on a message that has reactions (`gr`): open the
     /// popup that lists who gave each one. Anything else is a silent no-op.
     ShowReactions,
+    /// Normal mode, messages pane focused, cursor on a message that references a channel (`gc`):
+    /// open the room it names, or a small picker when it names several. A room the user is not
+    /// subscribed to gets a status notice and nothing else: the client never joins a room. Anything
+    /// else is a silent no-op.
+    OpenChannel,
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
@@ -369,6 +374,7 @@ impl std::fmt::Debug for Action {
             Action::EditMessage => write!(f, "EditMessage"),
             Action::DeleteMessage => write!(f, "DeleteMessage"),
             Action::ShowReactions => write!(f, "ShowReactions"),
+            Action::OpenChannel => write!(f, "OpenChannel"),
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
@@ -563,6 +569,7 @@ mod tests {
             tcount: 0,
             tlm: None,
             followers: None,
+            refs: None,
             reactions: Vec::new(),
             id: "general-000".to_string(),
             room_id: RoomId("general".to_string()),
@@ -606,6 +613,7 @@ mod tests {
                 tcount: 0,
                 tlm: None,
                 followers: None,
+                refs: None,
                 reactions: Vec::new(),
                 id: "m1".to_string(),
                 room_id: RoomId("r-general".to_string()),
@@ -649,6 +657,7 @@ mod tests {
                 tcount: 0,
                 tlm: None,
                 followers: None,
+                refs: None,
                 reactions: Vec::new(),
                 id: "rt-test-1".to_string(),
                 room_id: RoomId("r-general".to_string()),
