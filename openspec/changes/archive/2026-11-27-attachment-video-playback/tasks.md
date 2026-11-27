@@ -40,8 +40,8 @@
 ## 8. Integration
 
 - [x] 8.1 Add redaction tests for the new effects and actions (no path, name or program output in `Debug`) and run `cargo fmt --check`, `cargo clippy` and `cargo test`; verify they pass
-- [ ] 8.2 Ask the user to check against their local Docker server in kitty: a small video's poster appears by itself, a large one shows the placeholder, `gv` loads and plays it in the box without rows moving or flicker (this also confirms the two-id swap works in kitty), `Space`, `h`, `l`, `H`, `L`, `Esc` and `q`, leaving the room while it plays, and that `ffmpeg` is gone afterwards; the checks are theirs to run
-- [ ] 8.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
+- [x] 8.2 Ask the user to check against their local Docker server in kitty: a small video's poster appears by itself, a large one shows the placeholder, `gv` loads and plays it in the box without rows moving or flicker (this also confirms the two-id swap works in kitty), `Space`, `h`, `l`, `H`, `L`, `Esc` and `q`, leaving the room while it plays, and that `ffmpeg` is gone afterwards; the checks are theirs to run
+- [x] 8.3 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
 
 ## Workflow follow-up
 

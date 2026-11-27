@@ -26,8 +26,8 @@
 
 - [x] 6.1 List `play_video_fullscreen` in the context popup on a message with a fetchable video (not one whose poster failed), with the live keys; verify tests for listed, no video, rebound and unbound
 - [x] 6.2 Add redaction tests for the new paths (no path, name or program output in notices, rows or `Debug`) and run `cargo fmt --check`, `cargo clippy` and `cargo test`; verify they pass
-- [ ] 6.3 Ask the user to check against their local Docker server in kitty: `gV` from a poster and from a placeholder, expanding an inline run, sharpness and smoothness at the overlay's pixel size (up to 1280) and 15 fps, `Space`, `h`, `l`, `H`, `L`, `Esc`, `q` and `gV` to close, a resize while playing and while paused, and that `ffmpeg` is gone afterwards; the checks are theirs to run
-- [ ] 6.4 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
+- [x] 6.3 Ask the user to check against their local Docker server in kitty: `gV` from a poster and from a placeholder, expanding an inline run, sharpness and smoothness at the overlay's pixel size (up to 1280) and 15 fps, `Space`, `h`, `l`, `H`, `L`, `Esc`, `q` and `gV` to close, a resize while playing and while paused, and that `ffmpeg` is gone afterwards; the checks are theirs to run
+- [x] 6.4 Update the Features list in the Obsidian vault (tick or add the line, refresh `Progress` and `Last updated`) when the change is archived
 
 ## Workflow follow-up
 
