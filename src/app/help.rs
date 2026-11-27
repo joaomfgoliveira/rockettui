@@ -75,6 +75,14 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "open the attachment of the message under the cursor in your own program",
     ),
     (
+        "play_video",
+        "load, play or stop the video of the message under the cursor",
+    ),
+    (
+        "play_video_fullscreen",
+        "watch the video of the message under the cursor fullscreen",
+    ),
+    (
         "react_message",
         "add or remove your reaction on the message under the cursor",
     ),
@@ -104,6 +112,17 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
     ("search_prev", "previous match, toward newer messages"),
     ("execute_command", "run the command line"),
     ("quit", "quit"),
+];
+
+/// The description of each key of the video player's table (`[video]`). Kept apart from
+/// `DESCRIPTIONS`: these names are accepted only there. A test keeps it complete.
+pub const VIDEO_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("video_pause", "pause or resume the video"),
+    ("video_seek_back", "5 seconds back"),
+    ("video_seek_forward", "5 seconds forward"),
+    ("video_seek_back_far", "30 seconds back"),
+    ("video_seek_forward_far", "30 seconds forward"),
+    ("video_stop", "stop the video"),
 ];
 
 fn describe(name: &str) -> &'static str {
@@ -144,6 +163,33 @@ pub fn build(keymap: &Keymap) -> Vec<HelpLine> {
             rows.into_iter()
                 .map(|(desc, keys)| HelpLine::Row { keys, desc }),
         );
+        lines.push(HelpLine::Blank);
+    }
+    // The player's keys, which apply while a video plays or is paused, and what it cannot do.
+    let mut video_rows: Vec<(String, String)> = keymap
+        .video_bindings()
+        .into_iter()
+        .map(|(chords, action)| {
+            let desc = name_of(action)
+                .and_then(|name| VIDEO_DESCRIPTIONS.iter().find(|(n, _)| *n == name))
+                .map_or("", |(_, d)| d);
+            (desc.to_string(), format_keys(&chords))
+        })
+        .collect();
+    if !video_rows.is_empty() {
+        video_rows.sort();
+        lines.push(HelpLine::Heading(
+            "Video player (while a video plays)".to_string(),
+        ));
+        lines.extend(
+            video_rows
+                .into_iter()
+                .map(|(desc, keys)| HelpLine::Row { keys, desc }),
+        );
+        lines.push(HelpLine::Row {
+            keys: String::new(),
+            desc: "no sound: video plays without audio".to_string(),
+        });
         lines.push(HelpLine::Blank);
     }
     // The thread list's motions, `select` and `/` are the Normal-mode rows above, applied to the
@@ -242,6 +288,49 @@ mod tests {
         for (name, _) in DESCRIPTIONS {
             assert!(ACTION_NAMES.contains(name), "{name} is not an action");
         }
+    }
+
+    #[test]
+    fn every_video_action_name_has_a_description() {
+        use crate::input::actions::VIDEO_ACTION_NAMES;
+        for name in VIDEO_ACTION_NAMES {
+            assert!(
+                VIDEO_DESCRIPTIONS
+                    .iter()
+                    .any(|(n, d)| n == name && !d.is_empty()),
+                "{name} has no description"
+            );
+        }
+        for (name, _) in VIDEO_DESCRIPTIONS {
+            assert!(
+                VIDEO_ACTION_NAMES.contains(name),
+                "{name} is not a video action"
+            );
+        }
+    }
+
+    #[test]
+    fn the_player_keys_and_the_missing_sound_are_in_the_help() {
+        let lines = build(&default_keymap());
+        assert!(lines.contains(&HelpLine::Heading(
+            "Video player (while a video plays)".to_string()
+        )));
+        assert!(has(&lines, "<Space>", "pause or resume the video"));
+        assert!(has(&lines, "h", "5 seconds back"));
+        assert!(has(&lines, "L", "30 seconds forward"));
+        assert!(has(&lines, "q", "stop the video"));
+        assert!(has(&lines, "", "no sound: video plays without audio"));
+        assert!(has(
+            &lines,
+            "gv",
+            "load, play or stop the video of the message under the cursor"
+        ));
+        // A rebound key is the one listed.
+        let config =
+            config_from_keymap("[video]\n\"s\" = \"video_pause\"\n\"<Space>\" = \"none\"\n");
+        let lines = build(&config.keymap);
+        assert!(has(&lines, "s", "pause or resume the video"));
+        assert!(!has(&lines, "<Space>", "pause or resume the video"));
     }
 
     #[test]

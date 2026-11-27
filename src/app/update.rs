@@ -8,7 +8,7 @@ use crate::app::input_buf::InputBuffer;
 use crate::app::{
     App, ConnState, Focus, LOCAL_AUTHOR, MAX_CMDLINE, Mode, attachments, channels, command, edit,
     emoji, follow, help, history, image_view, jump, open, react, reactions, read, realtime,
-    results, search, send, sidebar, switcher, thread, thread_list,
+    results, search, send, sidebar, switcher, thread, thread_list, video,
 };
 use crate::input::key::normalize;
 use crate::input::matcher::{MAX_COUNT, Outcome};
@@ -16,6 +16,8 @@ use crate::ui::sanitize::sanitize_line;
 use ratatui::layout::Size;
 
 pub fn update(app: &mut App, action: Action) {
+    // A frame changes only the player; measuring rows for every frame would be wasted work.
+    let is_frame = matches!(action, Action::VideoFrame { .. });
     reduce(app, action);
     // A live change can leave the reactions popup with nothing to show; it closes at once.
     reactions::close_if_stale(app);
@@ -27,6 +29,13 @@ pub fn update(app: &mut App, action: Action) {
     emoji::request_images(app);
     attachments::request_images(app);
     image_view::sync(app);
+    if !is_frame {
+        video::sync(app);
+    }
+    // Quitting ends the video too, so nothing keeps running while the program exits.
+    if app.should_quit {
+        video::stop(app);
+    }
 }
 
 fn reduce(app: &mut App, action: Action) {
@@ -34,6 +43,11 @@ fn reduce(app: &mut App, action: Action) {
         Action::Key(ev) => {
             app.status_msg = None;
             let chord = normalize(ev);
+            // A video that plays or is paused takes every key (see `app::video`).
+            if app.video.is_some() {
+                video::key(app, chord);
+                return;
+            }
             // An open search prompt takes every key before anything else (see `app::search`).
             if app.search_prompt.is_some() {
                 search::prompt_key(app, chord);
@@ -249,6 +263,24 @@ fn reduce(app: &mut App, action: Action) {
             open::on_download_failed(app, download, error)
         }
         Action::AttachmentOpened(result) => open::on_opened(app, result),
+        Action::VideoPosterReady { video, decoded } => {
+            video::on_poster_ready(app, video, decoded);
+        }
+        Action::VideoPosterFailed { video, error } => video::on_poster_failed(app, video, error),
+        Action::VideoStarted {
+            generation,
+            duration,
+            handle,
+        } => video::on_started(app, generation, duration, handle),
+        Action::VideoStartFailed { generation, error } => {
+            video::on_start_failed(app, generation, error);
+        }
+        Action::VideoFrame {
+            generation,
+            index,
+            pixels,
+        } => video::on_frame(app, generation, index, pixels),
+        Action::VideoEnded { generation } => video::on_ended(app, generation),
         Action::RtConnected => realtime::on_connected(app),
         Action::RtDisconnected => realtime::on_disconnected(app),
         Action::RtRejected => realtime::on_rejected(app),
@@ -384,6 +416,14 @@ fn reduce(app: &mut App, action: Action) {
         Action::OpenChannel => channels::open(app),
         Action::ShowImage => image_view::open(app),
         Action::OpenAttachment => open::open(app),
+        Action::PlayVideo => video::play(app),
+        Action::PlayVideoFullscreen => video::play_fullscreen(app),
+        Action::VideoPause
+        | Action::VideoSeekBack
+        | Action::VideoSeekForward
+        | Action::VideoSeekBackFar
+        | Action::VideoSeekForwardFar
+        | Action::VideoStop => video::apply(app, action),
         Action::OpenThread => thread::open(app),
         Action::ListThreads => thread_list::open(app),
         Action::ThreadListSearchDue => thread_list::on_search_due(app),

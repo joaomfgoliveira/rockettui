@@ -365,6 +365,12 @@ fn body_rows(
         &ctx.attach,
         ctx.theme.messages_notice,
     ));
+    rows.extend(crate::ui::attachment::video_rows(
+        msg,
+        width,
+        &ctx.attach,
+        ctx.theme.messages_notice,
+    ));
     rows.extend(reaction_rows(msg, width, ctx));
     rows.extend(thread_rows(msg, width, ctx));
     rows

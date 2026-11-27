@@ -1034,7 +1034,10 @@ impl Client {
     }
 
     /// Download the file at the `/file-upload/` path `path` into `dir` as `file_name` (a name the
-    /// caller built, never the server's): a `GET` of the base URL plus the path with the user's
+    /// caller built, never the server's). It runs only when the user asked (`open_attachment`,
+    /// `play_video`), or for the poster of a video within the inline image limit
+    /// (`app::video::request_posters`): never for audio, a larger video or any other file. It is
+    /// a `GET` of the base URL plus the path with the user's headers: a `GET` of the base URL plus the path with the user's
     /// headers, streamed to a temporary file in `dir` and renamed on success, so a partial file is
     /// never left under the final name. A path that is not a plain `/file-upload/` path is
     /// `Refused` without a request, a body over `limit` bytes (announced or received) is

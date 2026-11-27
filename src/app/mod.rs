@@ -30,6 +30,7 @@ pub mod switcher;
 pub mod thread;
 pub mod thread_list;
 pub mod update;
+pub mod video;
 
 use crate::data::{Folder, Message, Room, RoomId, SendState};
 use crate::input::keymap::Keymap;
@@ -251,6 +252,9 @@ pub struct App {
     pub attachment_images: attachments::AttachmentImages,
     /// The attachments being downloaded to be opened (`app::open`).
     pub opening: open::Opening,
+    /// The video that plays or is paused, when there is one (`app::video`). While it is `Some` it
+    /// takes every key: a state, not a mode.
+    pub video: Option<video::Player>,
     /// The reaction picker (`app::react`), when open. Like `context` it is a state, not a mode.
     pub emoji_box: Option<react::EmojiBox>,
     /// What the emoji box remembers: "Frequently used" and the skin tone. Loaded once at start from
@@ -359,6 +363,7 @@ impl App {
             images: emoji::Images::default(),
             attachment_images: attachments::AttachmentImages::default(),
             opening: open::Opening::default(),
+            video: None,
             anim_ms: 0,
             emoji_box: None,
             emoji_recents: emoji_recents::Recents::default(),
@@ -514,6 +519,10 @@ impl App {
                 enabled: false,
                 max_rows: self.settings.image_max_rows,
                 now_ms: self.anim_ms,
+                // Off here too: only the open room's own pane draws video boxes.
+                video_enabled: false,
+                keymap: Some(&self.keymap),
+                player: self.video.as_ref(),
             },
             own_user: self.own_username.as_deref(),
             own_id: self.own_user_id.as_deref(),
@@ -555,6 +564,7 @@ impl App {
     pub fn pane_row_ctx(&self, room: &RoomId, msgs: &[Message]) -> crate::ui::wrap::RowCtx<'_> {
         let mut ctx = self.row_ctx(msgs);
         ctx.attach.enabled = self.settings.inline_images;
+        ctx.attach.video_enabled = self.settings.inline_video;
         ctx.unread_before = read::divider_before(self, room);
         if self.message_layout == crate::ui::wrap::MessageLayout::TwoLine {
             ctx.grouping = self.grouping();

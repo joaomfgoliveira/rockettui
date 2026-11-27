@@ -12,7 +12,7 @@ use super::settings::KeymapPreset;
 use crate::action::Action;
 use crate::app::Mode;
 use crate::app::command::COMMANDS;
-use crate::input::actions::action_from_name;
+use crate::input::actions::{action_from_name, video_action_from_name};
 use crate::input::key::{Chord, format_keys, parse_keys};
 use crate::input::keymap::{Keymap, default_bindings, vim_extras_bindings};
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -26,6 +26,9 @@ const MODES: [(&str, Mode); 3] = [
     ("insert", Mode::Insert),
     ("command", Mode::Command),
 ];
+
+/// The table of the player's keys, read apart from the modes: it is not a `Mode`.
+const VIDEO_TABLE: &str = "video";
 
 /// Longest piece of user-written text echoed in a problem (T-02-01).
 const ECHO_CAP: usize = 32;
@@ -123,8 +126,13 @@ pub fn build(preset: KeymapPreset, src: Option<&str>, out: &mut Vec<Problem>) ->
             read_mode_table(&mut reader, name, mode, value, &mut rows);
         }
     }
+    let mut video_rows: Vec<VideoRow> = Vec::new();
+    if let Some(value) = table.get(VIDEO_TABLE) {
+        read_video_table(&mut reader, value, &mut video_rows);
+    }
     // D-03: any other top-level key or table is a warning only.
-    let known: Vec<&str> = MODES.iter().map(|(name, _)| *name).collect();
+    let mut known: Vec<&str> = MODES.iter().map(|(name, _)| *name).collect();
+    known.push(VIDEO_TABLE);
     reader.warn_unknown(table, &known, "");
 
     // File order, not TOML's sorted iteration order, decides which of two duplicates is "later".
@@ -148,7 +156,164 @@ pub fn build(preset: KeymapPreset, src: Option<&str>, out: &mut Vec<Problem>) ->
 
     report_clashes(&mut reader, &keymap, &rows);
     check_lockout(&mut reader, &keymap);
+
+    video_rows.sort_by_key(|row| row.offset);
+    let video_rows = reject_video_duplicates(&mut reader, video_rows);
+    for row in &video_rows {
+        if matches!(row.binding, Binding::Unbind) {
+            keymap.unbind_video(&row.chords);
+        }
+    }
+    for row in &video_rows {
+        if let Binding::Bind(action) = &row.binding {
+            keymap.bind_video(&row.chords, action.clone());
+        }
+    }
+    report_video_clashes(&mut reader, &keymap, &video_rows);
+    if !keymap
+        .video_bindings()
+        .iter()
+        .any(|(_, action)| **action == Action::VideoStop)
+    {
+        reader.out.push(Problem {
+            file: ConfigFile::Keymap,
+            pos: None,
+            key: Some(format!("[{VIDEO_TABLE}]")),
+            message: "no key stops the video; bind a key to \"video_stop\"".to_string(),
+            severity: Severity::Error,
+        });
+    }
     keymap
+}
+
+/// One valid row of the `[video]` table.
+struct VideoRow {
+    notation: String,
+    chords: Vec<Chord>,
+    binding: Binding,
+    offset: usize,
+}
+
+/// The key path of a `[video]` row in problem output: `video."<Space>"`.
+fn video_key_path(notation: &str) -> String {
+    format!("{VIDEO_TABLE}.\"{}\"", cap(notation))
+}
+
+/// Read the `[video]` table into `rows`. A value is `none` or one of the six player actions; any
+/// other action name is an error, since the player takes no other action.
+fn read_video_table(
+    reader: &mut Reader<'_>,
+    value: &Spanned<DeValue<'_>>,
+    rows: &mut Vec<VideoRow>,
+) {
+    let DeValue::Table(entries) = value.get_ref() else {
+        reader.error(
+            value.span().start,
+            VIDEO_TABLE,
+            "expected a table of key bindings",
+        );
+        return;
+    };
+    for (key, entry) in entries.iter() {
+        let notation = key.get_ref().to_string();
+        let path = video_key_path(&notation);
+        let chords = match parse_keys(&notation) {
+            Ok(chords) => chords,
+            Err(e) => {
+                reader.error(key.span().start, &path, cap_message(&e.to_string()));
+                continue;
+            }
+        };
+        let DeValue::String(text) = entry.get_ref() else {
+            reader.error(
+                entry.span().start,
+                &path,
+                format!(
+                    "expected an action name string, found {}",
+                    entry.get_ref().type_str()
+                ),
+            );
+            continue;
+        };
+        let binding = if text == "none" {
+            Binding::Unbind
+        } else if let Some(action) = video_action_from_name(text) {
+            Binding::Bind(action)
+        } else {
+            reader.error(
+                entry.span().start,
+                &path,
+                format!(
+                    "`{}` is not a video action; the [video] table takes only the video_* actions",
+                    cap(text)
+                ),
+            );
+            continue;
+        };
+        rows.push(VideoRow {
+            notation,
+            chords,
+            binding,
+            offset: key.span().start,
+        });
+    }
+}
+
+/// As [`reject_duplicates`], for the `[video]` table.
+fn reject_video_duplicates(reader: &mut Reader<'_>, rows: Vec<VideoRow>) -> Vec<VideoRow> {
+    let mut first: HashMap<Vec<Chord>, (usize, String)> = HashMap::new();
+    let mut kept = Vec::new();
+    for row in rows {
+        if let Some((earlier_offset, earlier)) = first.get(&row.chords) {
+            let line = line_col(reader.src, *earlier_offset).0;
+            let message = format!(
+                "`{}` and `{}` (line {line}) bind the same keys; keep one",
+                cap(&row.notation),
+                cap(earlier)
+            );
+            reader.error(row.offset, &video_key_path(&row.notation), message);
+        } else {
+            first.insert(row.chords.clone(), (row.offset, row.notation.clone()));
+            kept.push(row);
+        }
+    }
+    kept
+}
+
+/// As [`report_clashes`], for the `[video]` table.
+fn report_video_clashes(reader: &mut Reader<'_>, keymap: &Keymap, rows: &[VideoRow]) {
+    let mut pairs: Vec<(String, String, Vec<Chord>, Vec<Chord>)> = keymap
+        .video_clashes()
+        .into_iter()
+        .map(|(short, long)| (format_keys(&short), format_keys(&long), short, long))
+        .collect();
+    pairs.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    for (short_text, long_text, short, long) in pairs {
+        let message = format!(
+            "`{}` is a prefix of `{}`; unbind one with \"none\"",
+            cap(&short_text),
+            cap(&long_text)
+        );
+        let involved = rows
+            .iter()
+            .filter(|row| {
+                matches!(row.binding, Binding::Bind(_))
+                    && (row.chords == short || row.chords == long)
+            })
+            .max_by_key(|row| row.offset);
+        match involved {
+            Some(row) => {
+                reader.error(row.offset, &video_key_path(&row.notation), message);
+            }
+            None => reader.out.push(Problem {
+                file: ConfigFile::Keymap,
+                pos: None,
+                key: Some(VIDEO_TABLE.to_string()),
+                message,
+                severity: Severity::Error,
+            }),
+        }
+    }
 }
 
 /// Read one `[normal]` / `[insert]` / `[command]` table into `rows`.
@@ -190,6 +355,13 @@ fn read_mode_table(
         };
         let binding = if text == "none" {
             Binding::Unbind
+        } else if video_action_from_name(text).is_some() {
+            reader.error(
+                entry.span().start,
+                &path,
+                format!("`{}` belongs in the [video] table", cap(text)),
+            );
+            continue;
         } else {
             match resolve_value(text) {
                 Ok(action) => Binding::Bind(action),
@@ -748,6 +920,198 @@ mod tests {
     }
 
     #[test]
+    fn play_video_default_rebind_unbind_and_clash() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            assert!(is(&keymap, "gv", Action::PlayVideo), "{preset:?}");
+            assert!(is(&keymap, "gV", Action::PlayVideoFullscreen), "{preset:?}");
+            for (keys, want) in [
+                ("gg", Action::GotoTop),
+                ("gp", Action::ShowImage),
+                ("go", Action::OpenAttachment),
+            ] {
+                assert!(is(&keymap, keys, want), "{preset:?} {keys}");
+            }
+        }
+        let src = "[normal]\n\"V\" = \"play_video\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "V", Action::PlayVideo));
+        assert!(is(&keymap, "gv", Action::PlayVideo));
+        let keymap = built("[normal]\n\"gv\" = \"none\"\n");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gv"), "none");
+        assert!(is(&keymap, "go", Action::OpenAttachment));
+        let found = errors("[normal]\ng = \"goto_top\"\n");
+        assert!(
+            found.iter().any(|p| p.message.contains("`gv`")),
+            "{found:?}"
+        );
+        assert_eq!(
+            crate::input::actions::name_of(&Action::PlayVideo),
+            Some("play_video")
+        );
+        assert!(crate::input::actions::ACTION_NAMES.contains(&"play_video"));
+    }
+
+    #[test]
+    fn play_video_fullscreen_default_rebind_unbind() {
+        let is = |keymap: &Keymap, keys: &str, want: Action| {
+            matches!(
+                keymap.lookup(Mode::Normal, &parse_keys(keys).unwrap()),
+                Lookup::Exact(a) if *a == want
+            )
+        };
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            for (keys, want) in [
+                ("gV", Action::PlayVideoFullscreen),
+                ("gv", Action::PlayVideo),
+                ("gp", Action::ShowImage),
+                ("go", Action::OpenAttachment),
+            ] {
+                assert!(is(&keymap, keys, want), "{preset:?} {keys}");
+            }
+        }
+        let src = "[normal]\n\"F\" = \"play_video_fullscreen\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(is(&keymap, "F", Action::PlayVideoFullscreen));
+        assert!(is(&keymap, "gV", Action::PlayVideoFullscreen));
+        let keymap = built("[normal]\n\"gV\" = \"none\"\n");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gV"), "none");
+        assert!(is(&keymap, "gv", Action::PlayVideo));
+        // A key already bound clashes.
+        let found = errors("[normal]\ng = \"goto_top\"\n");
+        assert!(
+            found.iter().any(|p| p.message.contains("`gV`")),
+            "{found:?}"
+        );
+        assert_eq!(
+            crate::input::actions::name_of(&Action::PlayVideoFullscreen),
+            Some("play_video_fullscreen")
+        );
+        assert!(crate::input::actions::ACTION_NAMES.contains(&"play_video_fullscreen"));
+    }
+
+    fn video_is(keymap: &Keymap, keys: &str, want: Action) -> bool {
+        matches!(
+            keymap.lookup_video(&parse_keys(keys).unwrap()),
+            Lookup::Exact(a) if *a == want
+        )
+    }
+
+    #[test]
+    fn video_table_defaults_in_every_preset() {
+        for preset in [KeymapPreset::Vim, KeymapPreset::VimExtras] {
+            let keymap = build(preset, None, &mut Vec::new());
+            for (keys, want) in [
+                ("<Space>", Action::VideoPause),
+                ("h", Action::VideoSeekBack),
+                ("l", Action::VideoSeekForward),
+                ("H", Action::VideoSeekBackFar),
+                ("L", Action::VideoSeekForwardFar),
+                ("<Esc>", Action::VideoStop),
+                ("q", Action::VideoStop),
+                ("<C-c>", Action::VideoStop),
+            ] {
+                assert!(video_is(&keymap, keys, want), "{preset:?} {keys}");
+            }
+            assert_eq!(keymap.video_bindings().len(), 8);
+        }
+        assert!(errors("").is_empty());
+    }
+
+    #[test]
+    fn video_table_rebind_and_unbind() {
+        let src = "[video]\n\",\" = \"video_seek_back\"\n\".\" = \"video_seek_forward\"\n\"h\" = \"none\"\n\"s\" = \"video_pause\"\n";
+        assert!(errors(src).is_empty(), "{:?}", problems(src));
+        let keymap = built(src);
+        assert!(video_is(&keymap, ",", Action::VideoSeekBack));
+        assert!(video_is(&keymap, ".", Action::VideoSeekForward));
+        assert!(video_is(&keymap, "s", Action::VideoPause));
+        assert!(
+            !video_is(&keymap, "h", Action::VideoSeekBack),
+            "h was unbound"
+        );
+        assert!(
+            video_is(&keymap, "l", Action::VideoSeekForward),
+            "the others stay"
+        );
+        // A `none` for a key that is not bound is a silent no-op.
+        assert!(errors("[video]\n\"x\" = \"none\"\n").is_empty());
+    }
+
+    #[test]
+    fn video_table_leaves_normal_mode_unchanged() {
+        let keymap = built("[video]\n\"j\" = \"video_pause\"\n\"<Esc>\" = \"none\"\n");
+        // `j` and Esc are still the Normal mode's own keys.
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "j"), "exact");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "<Esc>"), "exact");
+        assert!(!keymap.bindings(Mode::Normal).iter().any(|(_, a)| {
+            crate::input::actions::name_of(a).is_some_and(|n| n.starts_with("video_"))
+        }));
+        let plain = built("");
+        assert_eq!(
+            plain.bindings(Mode::Normal).len(),
+            keymap.bindings(Mode::Normal).len()
+        );
+    }
+
+    #[test]
+    fn video_actions_belong_only_in_the_video_table() {
+        for table in ["normal", "insert", "command"] {
+            let src = format!("[{table}]\n\"x\" = \"video_pause\"\n");
+            let found = errors(&src);
+            assert_eq!(found.len(), 1, "{table}: {found:?}");
+            assert!(found[0].message.contains("[video]"), "{found:?}");
+            assert_eq!(line_of(&found[0]), Some(2));
+        }
+        // And the player takes no other action.
+        let found = errors("[video]\n\"x\" = \"move_down\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("not a video action"), "{found:?}");
+        let found = errors("[video]\n\"x\" = \"cmd:quit\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let found = errors("[video]\n\"x\" = 3\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let found = errors("video = 3\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].key.as_deref(), Some("video"));
+        // A bad row does not stop the good ones.
+        let keymap = built("[video]\n\"x\" = \"move_down\"\n\"s\" = \"video_pause\"\n");
+        assert!(video_is(&keymap, "s", Action::VideoPause));
+    }
+
+    #[test]
+    fn video_table_needs_a_way_to_stop() {
+        let none = "[video]\n\"<Esc>\" = \"none\"\nq = \"none\"\n\"<C-c>\" = \"none\"\n";
+        let found = errors(none);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("video_stop"), "{found:?}");
+        // Another key to stop satisfies it.
+        let again = format!("{none}\"x\" = \"video_stop\"\n");
+        assert!(errors(&again).is_empty(), "{:?}", problems(&again));
+    }
+
+    #[test]
+    fn video_table_reports_duplicates_and_prefix_clashes() {
+        let found = errors("[video]\n\"gg\" = \"video_pause\"\n\"g\" = \"video_seek_back\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("`g`") && found[0].message.contains("`gg`"));
+        assert_eq!(line_of(&found[0]), Some(3), "the later row");
+        // Two spellings of one key.
+        let found = errors("[video]\n\"<Space>\" = \"video_pause\"\n\" \" = \"video_seek_back\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("bind the same keys"), "{found:?}");
+    }
+
+    #[test]
     fn list_threads_default_rebind_unbind_and_unknown_spelling() {
         let is = |keymap: &Keymap, keys: &str, want: Action| {
             matches!(
@@ -980,7 +1344,7 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "prefix");
         // Unbinding all of them leaves nothing: g is no longer a prefix.
         let keymap = built(
-            "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\n",
+            "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\ngv = \"none\"\ngV = \"none\"\n",
         );
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gg"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gr"), "none");
@@ -991,13 +1355,15 @@ mod tests {
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gc"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "gp"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "go"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gv"), "none");
+        assert_eq!(lookup_kind(&keymap, Mode::Normal, "gV"), "none");
         assert_eq!(lookup_kind(&keymap, Mode::Normal, "g"), "none");
     }
 
     #[test]
     fn none_gg_then_bind_g() {
         // TOML iterates `g` before `gg`; the result must not depend on it.
-        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\ng = \"goto_top\"\n";
+        let src = "[normal]\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\ngv = \"none\"\ngV = \"none\"\ng = \"goto_top\"\n";
         assert!(errors(src).is_empty(), "{:?}", problems(src));
         let keymap = built(src);
         let g = parse_keys("g").unwrap();
@@ -1010,9 +1376,9 @@ mod tests {
 
     #[test]
     fn prefix_clash_names_both() {
-        // `g` is the prefix of nine default bindings, `gg`, `gr`, `gc`, `gp`, `go`, `gt`, `gR`, `gf` and `gT`: one error for each.
+        // `g` is the prefix of eleven default bindings, `gg`, `gr`, `gc`, `gp`, `go`, `gv`, `gV`, `gt`, `gR`, `gf` and `gT`: one error for each.
         let found = errors("[normal]\ng = \"goto_top\"\n");
-        assert_eq!(found.len(), 9, "{found:?}");
+        assert_eq!(found.len(), 11, "{found:?}");
         assert_eq!(line_of(&found[0]), Some(2));
         assert!(found.iter().all(|p| p.message.contains("`g`")), "{found:?}");
         assert!(
@@ -1029,8 +1395,8 @@ mod tests {
         );
         // Unbinding one of them is not enough; unbinding all resolves it.
         let half = "[normal]\ng = \"goto_top\"\ngg = \"none\"\n";
-        assert_eq!(errors(half).len(), 8);
-        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\n";
+        assert_eq!(errors(half).len(), 10);
+        let resolved = "[normal]\ng = \"goto_top\"\ngg = \"none\"\ngr = \"none\"\ngt = \"none\"\ngR = \"none\"\ngf = \"none\"\ngT = \"none\"\ngc = \"none\"\ngp = \"none\"\ngo = \"none\"\ngv = \"none\"\ngV = \"none\"\n";
         assert!(errors(resolved).is_empty());
     }
 

@@ -75,6 +75,7 @@ pub fn view(frame: &mut Frame, app: &App) {
     switcher::render(frame, &areas, app);
     channels::render(frame, &areas, app);
     image_view::render(frame, app);
+    image_view::render_player(frame, app);
     status::render_status(frame, areas.status, app);
     status::render_cmdline(frame, areas.cmdline, app);
 }

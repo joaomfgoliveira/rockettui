@@ -83,34 +83,75 @@ pub fn render(frame: &mut Frame, app: &App) {
                 note(frame, inner, "loading image...", app);
                 return;
             };
-            let (r, g, b) = kitty::id_color(id + image.frame_at(app.anim_ms));
-            let style = Style::default().fg(Color::Rgb(r, g, b));
-            let x0 = inner.x
-                + (inner
-                    .width
-                    .saturating_sub(u16::try_from(cols).unwrap_or(u16::MAX)))
-                    / 2;
-            let y0 = inner.y
-                + (inner
-                    .height
-                    .saturating_sub(u16::try_from(rows).unwrap_or(u16::MAX)))
-                    / 2;
-            for row in 0..rows {
-                for col in 0..cols {
-                    let (Ok(dx), Ok(dy)) = (u16::try_from(col), u16::try_from(row)) else {
-                        continue;
-                    };
-                    let (x, y) = (x0 + dx, y0 + dy);
-                    if x < inner.right() && y < inner.bottom() {
-                        frame
-                            .buffer_mut()
-                            .set_string(x, y, kitty::cell_at(row, col), style);
-                    }
-                }
-            }
+            draw_cells(frame, inner, id + image.frame_at(app.anim_ms), (cols, rows));
         }
         Body::Loading => note(frame, inner, "loading image...", app),
         Body::Failed => note(frame, inner, "the image could not be loaded", app),
+    }
+}
+
+/// The placeholder cells of the image `id`, `cols` by `rows`, centred in `inner`.
+fn draw_cells(frame: &mut Frame, inner: Rect, id: u32, (cols, rows): (usize, usize)) {
+    let (r, g, b) = kitty::id_color(id);
+    let style = Style::default().fg(Color::Rgb(r, g, b));
+    let x0 = inner.x
+        + (inner
+            .width
+            .saturating_sub(u16::try_from(cols).unwrap_or(u16::MAX)))
+            / 2;
+    let y0 = inner.y
+        + (inner
+            .height
+            .saturating_sub(u16::try_from(rows).unwrap_or(u16::MAX)))
+            / 2;
+    for row in 0..rows {
+        for col in 0..cols {
+            let (Ok(dx), Ok(dy)) = (u16::try_from(col), u16::try_from(row)) else {
+                continue;
+            };
+            let (x, y) = (x0 + dx, y0 + dy);
+            if x < inner.right() && y < inner.bottom() {
+                frame
+                    .buffer_mut()
+                    .set_string(x, y, kitty::cell_at(row, col), style);
+            }
+        }
+    }
+}
+
+/// Draw the fullscreen video player when it is open: the same overlay as the image view, with
+/// the player's current frame, a title and the status row of the inline player (position, length
+/// and keys) at the width of the overlay's border. Before the first frame it says it is loading.
+pub fn render_player(frame: &mut Frame, app: &App) {
+    let Some(player) = app.video.as_ref().filter(|p| p.fullscreen) else {
+        return;
+    };
+    let area = area(app);
+    if area.width < 4 || area.height < 3 {
+        return;
+    }
+    let theme = &app.theme;
+    frame.render_widget(Clear, area);
+    let status = crate::ui::attachment::status_text(
+        player,
+        Some(&app.keymap),
+        usize::from(area.width).saturating_sub(4),
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme.border_type_focused)
+        .border_style(theme.border_focused)
+        .title_style(theme.border_focused)
+        .title(" video ")
+        .title_bottom(Line::from(Span::styled(
+            format!(" {} ", status.trim_end()),
+            theme.messages_notice,
+        )));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    match (player.shown, placement(app, player.frame_size)) {
+        (Some(shown), Some(cells)) => draw_cells(frame, inner, player.ids[shown], cells),
+        _ => note(frame, inner, "loading...", app),
     }
 }
 

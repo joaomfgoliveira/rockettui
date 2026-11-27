@@ -14,12 +14,12 @@ expression: out
 ┃  ▾ People (1)            ┃│a                  type a message (: for emoji)   │
 ┃  Recent                  ┃│i                  type a message (: for emoji)   │
 ┃    #random               ┃│o                  type a message (: for emoji)   │
-┃    &secrets [e2e]        ┃│                                                  │
-┃    #quiet                ┃│Insert mode                                       │
+┃    &secrets [e2e]        ┃│gV                 watch the video of the message │
+┃    #quiet                ┃│                                                  │
+┃                          ┃│Insert mode                                       │
 ┃                          ┃│<C-b>              also show the thread reply in t│
 ┃                          ┃│<C-c>              cancel, or leave the mode      │
 ┃                          ┃│<Esc>              cancel, or leave the mode      │
-┃                          ┃│<Down>             cursor down                    │
 ┃                          ┃└──────────────────────────────────────────────────┘
 ┃                          ┃┌ Input ───────────────────────────────────────────┐
 ┃                          ┃│press i to write                                  │

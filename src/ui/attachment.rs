@@ -48,7 +48,7 @@ fn cell_from(window_pixels: (u16, u16), columns: u16, rows: u16) -> Option<(u32,
 }
 
 /// The pixel size (width, height) of one cell.
-fn cell_px() -> (u32, u32) {
+pub(crate) fn cell_px() -> (u32, u32) {
     let v = CELL_PX.load(std::sync::atomic::Ordering::Relaxed);
     ((v >> 32) as u32, v as u32)
 }
@@ -57,6 +57,10 @@ const DEFAULT_COLS: usize = 40;
 const DEFAULT_ROWS: usize = 15;
 /// What the box says while its image is on its way.
 const LOADING: &str = "loading image...";
+
+/// What the box of a video says before its poster is there, with the video's size when the server
+/// reports one and the key that loads it when one is bound.
+const VIDEO_LOADING: &str = "loading video...";
 
 /// Everything the drawing of attachment images reads, in one `Copy` value. `App::row_ctx` is the
 /// one place it is built for the app.
@@ -68,6 +72,12 @@ pub struct AttachView<'a> {
     pub enabled: bool,
     /// The `image_max_rows` setting.
     pub max_rows: u16,
+    /// The `inline_video` setting, where video boxes are drawn at all (the open room's pane).
+    pub video_enabled: bool,
+    /// The live keymap, which names the key a video placeholder tells to press.
+    pub keymap: Option<&'a crate::input::keymap::Keymap>,
+    /// The video that plays or is paused: its frames and its status row.
+    pub player: Option<&'a crate::app::video::Player>,
     /// Milliseconds since the program started, which picks the frame of an animated image. Rows
     /// never depend on it.
     pub now_ms: u64,
@@ -85,6 +95,9 @@ impl AttachView<'static> {
             graphics: Graphics::Unsupported,
             enabled: false,
             max_rows: crate::config::settings::DEFAULT_IMAGE_MAX_ROWS,
+            video_enabled: false,
+            keymap: None,
+            player: None,
             now_ms: 0,
         }
     }
@@ -95,6 +108,23 @@ impl AttachView<'_> {
     /// not turn them off.
     pub fn active(&self) -> bool {
         self.graphics == Graphics::Supported && self.enabled
+    }
+}
+
+impl AttachView<'_> {
+    /// True when video boxes are drawn: the terminal can show images and `inline_video` is on.
+    pub fn video_active(&self) -> bool {
+        self.graphics == Graphics::Supported && self.video_enabled
+    }
+}
+
+/// The box of `attachment`: an image from the size the server reports, a video from the fixed
+/// 16:9 shape (the server reports no video size).
+pub fn box_of(attachment: &crate::data::Attachment, width: usize, max_rows: u16) -> (usize, usize) {
+    if attachment.kind == crate::data::AttachmentKind::Video {
+        box_size(Some(crate::app::video::BOX_DIMS), width, max_rows)
+    } else {
+        box_size(attachment.dims, width, max_rows)
     }
 }
 
@@ -219,6 +249,227 @@ pub fn image_rows(
         }
     }
     rows
+}
+
+/// The rows, without any prefix, that draw the video boxes of `msg` in `width` columns: one box
+/// per fetchable video, each followed by one row for its status line (blank unless the video is
+/// active), so a box never changes its row count. Empty unless video boxes are drawn at all
+/// (`view.video_active`). A box waiting for its poster says so (and, when nothing was asked for
+/// yet, which key loads it); a failed one is not drawn; a ready one is its poster's cells.
+pub fn video_rows(
+    msg: &Message,
+    width: usize,
+    view: &AttachView<'_>,
+    notice: Style,
+) -> Vec<Vec<Span<'static>>> {
+    use crate::app::video::is_fetchable_video;
+    if !view.video_active() || msg.kind != MessageKind::Normal {
+        return Vec::new();
+    }
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    for attachment in msg.attachments.iter().filter(|a| is_fetchable_video(a)) {
+        let Some(path) = attachment.path.as_deref() else {
+            continue;
+        };
+        let state = view.images.state(path);
+        if matches!(state, Some(ImageState::Failed)) {
+            continue;
+        }
+        let boxed = box_of(attachment, width, view.max_rows);
+        if boxed.0 == 0 {
+            continue;
+        }
+        match state {
+            Some(ImageState::Ready {
+                image,
+                id,
+                uploaded: true,
+                ..
+            }) => {
+                // A playing video's cells carry the id of the frame the terminal shows now; the
+                // poster's id shows until the first frame is sent and again once it stops.
+                // While the overlay plays it, the box keeps its poster.
+                let playing = view
+                    .player
+                    .filter(|p| p.video.path == path && !p.fullscreen);
+                let frame = playing.and_then(|p| Some((p, p.shown?)));
+                let (size, id) = match frame {
+                    Some((player, shown)) => (player.frame_size, player.ids[shown]),
+                    None => ((image.width, image.height), *id),
+                };
+                let (cols, used_rows) = fitted(boxed, size);
+                let (r, g, b) = kitty::id_color(id);
+                let style = Style::default().fg(Color::Rgb(r, g, b));
+                for row in 0..boxed.1 {
+                    if row < used_rows {
+                        let cells: String = (0..cols).map(|col| kitty::cell_at(row, col)).collect();
+                        rows.push(vec![Span::styled(cells, style)]);
+                    } else {
+                        rows.push(Vec::new());
+                    }
+                }
+            }
+            _ => {
+                let poster_here = matches!(state, Some(ImageState::Ready { .. }));
+                let text = video_placeholder(
+                    attachment.size,
+                    view.images.is_requested(path) || poster_here,
+                    view.keymap.and_then(crate::app::video::play_key).as_deref(),
+                );
+                // Without a poster the placeholder is one line: an empty box of a video that
+                // may never be loaded would only be a gap. A poster that is in memory but not
+                // in the terminal yet already has its full box, so the rows move once.
+                let box_rows = if poster_here { boxed.1 } else { 1 };
+                for row in 0..box_rows {
+                    if row == 0 {
+                        rows.push(vec![Span::styled(fit_text(&text, boxed.0), notice)]);
+                    } else {
+                        rows.push(Vec::new());
+                    }
+                }
+                if !poster_here {
+                    continue;
+                }
+            }
+        }
+        // The status row: blank until the video is active, so activating it moves no row.
+        match view
+            .player
+            .filter(|p| p.video.path == path && !p.fullscreen)
+        {
+            Some(player) => {
+                let text = status_text(player, view.keymap, boxed.0);
+                rows.push(vec![Span::styled(text, notice)]);
+            }
+            // A poster that is showing says what a press does; a placeholder says it in the box.
+            None if matches!(state, Some(ImageState::Ready { uploaded: true, .. })) => {
+                let key = view.keymap.and_then(crate::app::video::play_key);
+                let text = match key {
+                    Some(key) => format!("video \u{b7} {key} to play"),
+                    None => "video".to_string(),
+                };
+                rows.push(vec![Span::styled(fit_text_width(&text, boxed.0), notice)]);
+            }
+            None => rows.push(Vec::new()),
+        }
+    }
+    rows
+}
+
+/// A length as `m:ss`, or `h:mm:ss` from an hour on.
+fn clock(at: std::time::Duration) -> String {
+    let secs = at.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// `text` cut to at most `width` columns, not padded.
+fn fit_text_width(text: &str, width: usize) -> String {
+    fixed_width(text, width).trim_end().to_string()
+}
+
+/// `text` cut to at most `width` columns and padded with spaces to exactly that, so the row has
+/// the same width whatever the digits are.
+fn fixed_width(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.extend(std::iter::repeat_n(' ', width - used));
+    out
+}
+
+/// The status row of the active video: its position and length (`0:12 / 0:48`, `--:--` when the
+/// length is unknown) and the keys that pause or resume it and stop it. The key names come from
+/// the user's keymap, so they pass through the sanitizer; the row is exactly `width` columns.
+pub fn status_text(
+    player: &crate::app::video::Player,
+    keymap: Option<&crate::input::keymap::Keymap>,
+    width: usize,
+) -> String {
+    use crate::action::Action;
+    let position = clock(player.position());
+    let length = player.duration.map_or_else(|| "--:--".to_string(), clock);
+    let key = |action: Action| {
+        keymap
+            .and_then(|keymap| crate::app::video::video_key(keymap, &action))
+            .map(|key| format!("  {key}"))
+    };
+    let mut text = format!("{position} / {length}");
+    if player.ended {
+        text.push_str(" ended");
+    }
+    if let Some(key) = key(Action::VideoPause) {
+        text.push_str(&format!(
+            "{key} {}",
+            if player.paused {
+                "\u{25b6}"
+            } else {
+                "\u{25ae}\u{25ae}"
+            }
+        ));
+    }
+    if let Some(key) = key(Action::VideoStop) {
+        text.push_str(&format!("{key} \u{25a0}"));
+    }
+    // The rest of the player's keys: the seeks (the short and the far one) and the fullscreen key.
+    let pair = |a: Action, b: Action, label: String| {
+        let keys: Vec<String> = [a, b]
+            .into_iter()
+            .filter_map(|action| {
+                keymap.and_then(|keymap| crate::app::video::video_key(keymap, &action))
+            })
+            .collect();
+        (!keys.is_empty()).then(|| format!("  {} {label}", keys.join("/")))
+    };
+    // Short labels (the seconds each seeks), so the row fits a narrow box.
+    if let Some(seek) = pair(
+        Action::VideoSeekBack,
+        Action::VideoSeekForward,
+        format!("{}s", crate::video::SEEK_SECS),
+    ) {
+        text.push_str(&seek);
+    }
+    if let Some(seek) = pair(
+        Action::VideoSeekBackFar,
+        Action::VideoSeekForwardFar,
+        format!("{}s", crate::video::SEEK_FAR_SECS),
+    ) {
+        text.push_str(&seek);
+    }
+    if let Some(key) = keymap.and_then(crate::app::video::fullscreen_key) {
+        text.push_str(&format!(
+            "  {key} {}",
+            if player.fullscreen { "close" } else { "full" }
+        ));
+    }
+    let text = crate::ui::sanitize::sanitize_line(&text);
+    fixed_width(&text, width)
+}
+
+/// The text of a video placeholder: `[video 40 MB: gv to load]` before anything was asked for,
+/// `loading video...` while the poster is on its way. Plain ASCII built from the size and the
+/// bound key, never from server text.
+fn video_placeholder(size: Option<u64>, asked: bool, key: Option<&str>) -> String {
+    if asked {
+        return VIDEO_LOADING.to_string();
+    }
+    let size = size.map(|n| format!(" {}", crate::api::map::human_size(n)));
+    let size = size.as_deref().unwrap_or("");
+    match key {
+        Some(key) => format!("[video{size}: {key} to load]"),
+        None => format!("[video{size}]"),
+    }
 }
 
 /// `text` cut to at most `width` columns (it is plain ASCII).
@@ -750,5 +1001,595 @@ mod tests {
                 [kitty::IMAGE_ID_FIRST + 4].into_iter().collect()
             );
         }
+    }
+    // ---- video boxes -----------------------------------------------------------------------
+
+    const VIDEO_A: &str = "/file-upload/v/one.mp4";
+
+    fn video_att(path: &str, size: Option<u64>) -> Attachment {
+        crate::app::video::tests::video_attachment(path, size)
+    }
+
+    fn two_videos(size: Option<u64>) -> App {
+        app_with(vec![vec![video_att(VIDEO_A, size)], Vec::new()])
+    }
+
+    fn poster_ready(app: &mut App, path: &str, id: u32, w: u32, h: u32) {
+        ready(app, path, id, w, h);
+    }
+
+    /// The box of the first video in the room, from the width the pane really draws in.
+    fn pane_video_box(app: &App) -> (usize, usize) {
+        let room = app.rooms[0].id.clone();
+        let msgs = app.messages[&room].clone();
+        let message = msgs
+            .iter()
+            .find(|m| {
+                m.attachments
+                    .iter()
+                    .any(|a| a.kind == AttachmentKind::Video)
+            })
+            .expect("a message with a video");
+        let ctx = app.pane_row_ctx(&room, &msgs);
+        let body = crate::ui::wrap::body_width(
+            message,
+            usize::from(crate::app::messages::viewport(app).0),
+            &ctx,
+        );
+        box_of(&message.attachments[0], body, app.settings.image_max_rows)
+    }
+
+    /// The rows a video box takes in this pane: the box and its status row.
+    fn video_rows_in_pane(app: &App) -> usize {
+        pane_video_box(app).1 + 1
+    }
+
+    #[test]
+    fn a_video_box_has_a_fixed_shape_from_the_pane_and_the_row_cap_only() {
+        let wide = box_of(&video_att(VIDEO_A, Some(1000)), 80, 12);
+        assert_eq!(wide, box_size(Some((1280, 720)), 80, 12));
+        // Whatever the server says about a video's pixels, the shape is 16:9.
+        let mut odd = video_att(VIDEO_A, Some(1000));
+        odd.dims = Some((100, 5000));
+        assert_eq!(box_of(&odd, 80, 12), wide);
+        // And an image keeps its own.
+        assert_eq!(
+            box_of(&image_att(PATH_A, Some((800, 600))), 80, 12),
+            box_size(Some((800, 600)), 80, 12)
+        );
+        assert!(wide.0 > wide.1, "wider than tall: {wide:?}");
+        assert_eq!(box_of(&video_att(VIDEO_A, None), 0, 12), (0, 0));
+    }
+
+    #[test]
+    fn a_large_video_shows_a_one_line_placeholder_with_size_and_key() {
+        let app = two_videos(Some(40 * 1024 * 1024));
+        let lines = screen(&app);
+        let caption = row_of(&app, "see 0 [attachment: photo.png]");
+        assert!(
+            lines[caption + 1].contains("[video 40.0 MB: gv to load]"),
+            "{lines:#?}"
+        );
+        // No empty box: the next message follows the one line.
+        assert_eq!(row_of(&app, "see 1"), caption + 2);
+        assert_eq!(placeholder_cells(&app), 0);
+        // The notice is dim.
+        let buffer = render_buffer(&app, 80, 24);
+        let x = lines[caption + 1]
+            .find("[video")
+            .map(|b| lines[caption + 1][..b].chars().count())
+            .unwrap();
+        let cell = &buffer[(x as u16, (caption + 1) as u16)];
+        assert_eq!(
+            cell.fg,
+            app.theme.messages_notice.fg.unwrap_or(Color::Reset)
+        );
+    }
+
+    #[test]
+    fn the_placeholder_follows_the_live_key_and_the_reported_size() {
+        let text = |size, asked, key| video_placeholder(size, asked, key);
+        assert_eq!(
+            text(Some(1536), false, Some("gv")),
+            "[video 1.5 KB: gv to load]"
+        );
+        assert_eq!(text(None, false, Some("gv")), "[video: gv to load]");
+        assert_eq!(
+            text(Some(1536), false, None),
+            "[video 1.5 KB]",
+            "unbound: no hint"
+        );
+        assert_eq!(text(Some(1536), true, Some("gv")), "loading video...");
+        // A rebound key is the one named.
+        let mut app = two_videos(Some(40 * 1024 * 1024));
+        app.keymap = crate::test_util::app_with_config(
+            crate::test_util::config_from_keymap(
+                "[normal]\n\"gv\" = \"none\"\n\"V\" = \"play_video\"\n",
+            ),
+            80,
+            24,
+        )
+        .keymap;
+        assert!(
+            screen(&app)
+                .join("\n")
+                .contains("[video 40.0 MB: V to load]")
+        );
+        app.keymap = crate::test_util::app_with_config(
+            crate::test_util::config_from_keymap("[normal]\n\"gv\" = \"none\"\n"),
+            80,
+            24,
+        )
+        .keymap;
+        let text = screen(&app).join("\n");
+        assert!(
+            text.contains("[video 40.0 MB]") && !text.contains("to load"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_video_whose_poster_is_on_its_way_says_so() {
+        let mut app = two_videos(Some(1000));
+        app.attachment_images.queue_video(
+            crate::app::video::reference(&video_att(VIDEO_A, Some(1000)), "ffmpeg").unwrap(),
+            false,
+        );
+        assert!(screen(&app).join("\n").contains("loading video..."));
+    }
+
+    #[test]
+    fn a_ready_poster_fills_the_same_rows_and_nothing_moves() {
+        let mut app = two_videos(Some(1000));
+        let caption = row_of(&app, "see 0");
+        poster_ready(&mut app, VIDEO_A, kitty::IMAGE_ID_FIRST + 5, 480, 270);
+        let next = caption + 1 + video_rows_in_pane(&app);
+        assert_eq!(row_of(&app, "see 1"), next, "the box and its status row");
+        assert_eq!(row_of(&app, "see 0"), caption);
+        let boxed = pane_video_box(&app);
+        assert_eq!(placeholder_cells(&app), boxed.0 * boxed.1);
+        assert!(!screen(&app).join("\n").contains("[video"));
+        let buffer = render_buffer(&app, 80, 24);
+        let (r, g, b) = kitty::id_color(kitty::IMAGE_ID_FIRST + 5);
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .filter(|c| c.symbol().starts_with(kitty::PLACEHOLDER))
+                .all(|c| c.fg == Color::Rgb(r, g, b))
+        );
+        // A poster of another shape is fitted inside the same rows.
+        let mut tall = two_videos(Some(1000));
+        poster_ready(&mut tall, VIDEO_A, kitty::IMAGE_ID_FIRST, 100, 400);
+        assert_eq!(row_of(&tall, "see 1"), next);
+        let (c, r) = fitted(boxed, (100, 400));
+        assert_eq!(placeholder_cells(&tall), c * r);
+    }
+
+    #[test]
+    fn a_failed_poster_leaves_the_caption_only() {
+        let mut app = two_videos(Some(1000));
+        app.attachment_images.set_state(VIDEO_A, ImageState::Failed);
+        let caption = row_of(&app, "see 0");
+        assert_eq!(row_of(&app, "see 1"), caption + 1);
+        assert!(!screen(&app).join("\n").contains("[video"));
+        assert_eq!(placeholder_cells(&app), 0);
+    }
+
+    #[test]
+    fn the_rows_move_once_when_the_poster_arrives_and_not_again_when_it_is_uploaded() {
+        let size = Some(40 * 1024 * 1024);
+        let one_line = row_of(&two_videos(size), "see 1");
+        let mut loading = two_videos(size);
+        loading.attachment_images.queue_video(
+            crate::app::video::reference(&video_att(VIDEO_A, size), "ffmpeg").unwrap(),
+            true,
+        );
+        assert_eq!(
+            row_of(&loading, "see 1"),
+            one_line,
+            "loading is one line too"
+        );
+        // The poster is in memory but not yet in the terminal: the full box is already there.
+        let mut in_memory = two_videos(size);
+        in_memory.attachment_images.set_state(
+            VIDEO_A,
+            ImageState::Ready {
+                image: Rgba {
+                    width: 480,
+                    height: 270,
+                    pixels: vec![0u8; 480 * 270 * 4].into(),
+                    ..Default::default()
+                },
+                dims: None,
+                id: kitty::IMAGE_ID_FIRST,
+                uploaded: false,
+                placed: None,
+            },
+        );
+        let full = row_of(&in_memory, "see 1");
+        assert!(full > one_line + 1);
+        let mut shown = two_videos(size);
+        poster_ready(&mut shown, VIDEO_A, kitty::IMAGE_ID_FIRST, 480, 270);
+        assert_eq!(row_of(&shown, "see 1"), full, "uploading moves nothing");
+        // Playing moves nothing either.
+        let (playing, _dir, _pid) = crate::app::video::tests::playing("rows-once");
+        let idle = crate::app::video::tests::ready_app();
+        let next = |app: &App| row_of(app, "see 1");
+        assert_eq!(next(&playing), next(&idle));
+    }
+
+    #[test]
+    fn a_terminal_without_images_or_the_setting_off_shows_the_video_caption_only() {
+        let plain = screen(&{
+            let mut app = app_with(vec![Vec::new(), Vec::new()]);
+            app.graphics = Graphics::Unsupported;
+            app
+        });
+        let plain_next = plain.iter().position(|l| l.contains("see 1")).unwrap();
+        for tweak in [0, 1] {
+            let mut app = two_videos(Some(1000));
+            if tweak == 0 {
+                app.graphics = Graphics::Unsupported;
+            } else {
+                app.settings.inline_video = false;
+            }
+            poster_ready(&mut app, VIDEO_A, kitty::IMAGE_ID_FIRST, 480, 270);
+            let text = screen(&app).join("\n");
+            assert_eq!(placeholder_cells(&app), 0);
+            assert!(!text.contains("[video") && !text.contains("loading video"));
+            assert_eq!(row_of(&app, "see 1"), plain_next);
+        }
+        // `inline_images` is the images' setting only.
+        let mut app = two_videos(Some(40 * 1024 * 1024));
+        app.settings.inline_images = false;
+        assert!(screen(&app).join("\n").contains("[video 40.0 MB"));
+    }
+
+    #[test]
+    fn only_the_room_pane_draws_video_boxes() {
+        let app = two_videos(Some(1000));
+        let msgs = app.messages[&app.rooms[0].id].clone();
+        assert!(
+            !app.row_ctx(&msgs).attach.video_active(),
+            "results, thread pane"
+        );
+        assert!(
+            app.pane_row_ctx(&app.rooms[0].id, &msgs)
+                .attach
+                .video_active()
+        );
+        // And the thread, results and the rows of the model agree: no video rows outside the pane.
+        let ctx = app.row_ctx(&msgs);
+        assert!(video_rows(&msgs[0], 36, &ctx.attach, Style::default()).is_empty());
+    }
+
+    #[test]
+    fn a_video_that_cannot_be_fetched_has_no_box() {
+        let mut no_path = video_att(VIDEO_A, Some(1000));
+        no_path.path = None;
+        let mut odd = video_att(VIDEO_A, Some(1000));
+        odd.mime = Some("application/x-unknown".to_string());
+        for attachment in [no_path, odd] {
+            let app = app_with(vec![vec![attachment], Vec::new()]);
+            let caption = row_of(&app, "see 0");
+            assert_eq!(row_of(&app, "see 1"), caption + 1);
+        }
+    }
+
+    #[test]
+    fn server_text_cannot_draw_a_video_box() {
+        let mut attachment = video_att(VIDEO_A, Some(1000));
+        let cell = format!("{}\u{305}\u{30d}", kitty::PLACEHOLDER);
+        attachment.name = format!("{cell}\u{1b}_Ga=T;AAAA\u{1b}\\{cell}.mp4");
+        attachment.mime = Some(format!("video/mp4; {cell}"));
+        let app = app_with(vec![vec![attachment]]);
+        assert_eq!(placeholder_cells(&app), 0);
+        assert!(!screen(&app).join("\n").contains('\u{1b}'));
+    }
+    // ---- the status row --------------------------------------------------------------------
+
+    /// The row under the box of the playing video on the 80 by 24 screen.
+    fn status_row(app: &App) -> String {
+        let lines = screen(app);
+        let caption = lines
+            .iter()
+            .position(|l| l.contains("see 1"))
+            .expect("the video message");
+        let boxed = pane_video_box(app);
+        // The pane's columns, without the sidebar and the borders.
+        let row = &lines[caption + 1 + boxed.1];
+        row.chars().skip(28 + 1 + 13).take(boxed.0).collect()
+    }
+
+    fn set_position(app: &mut App, start_secs: u64) {
+        let player = app.video.as_mut().unwrap();
+        player.start_secs = start_secs;
+        player.index = 0;
+    }
+
+    #[test]
+    fn the_status_row_shows_position_length_and_the_keys() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-playing");
+        set_position(&mut app, 12);
+        let row = status_row(&app);
+        assert!(row.starts_with("0:12 / 0:48  Space ▮▮  q ■"), "{row:?}");
+        // Fixed width: the row is as wide as the box whatever the digits.
+        assert_eq!(row.chars().count(), pane_video_box(&app).0);
+        set_position(&mut app, 3);
+        assert_eq!(status_row(&app).chars().count(), row.chars().count());
+        assert!(status_row(&app).starts_with("0:03 / 0:48"));
+    }
+
+    #[test]
+    fn a_paused_video_offers_to_resume() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-paused");
+        set_position(&mut app, 12);
+        app.video.as_mut().unwrap().paused = true;
+        let row = status_row(&app);
+        assert!(row.starts_with("0:12 / 0:48  Space ▶  q ■"), "{row:?}");
+    }
+
+    #[test]
+    fn an_unknown_length_shows_dashes() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-unknown");
+        app.video.as_mut().unwrap().duration = None;
+        set_position(&mut app, 75);
+        let row = status_row(&app);
+        assert!(row.starts_with("1:15 / --:--  Space ▮▮"), "{row:?}");
+        // An hour or more reads h:mm:ss.
+        assert_eq!(clock(std::time::Duration::from_secs(3725)), "1:02:05");
+        assert_eq!(clock(std::time::Duration::from_secs(59)), "0:59");
+    }
+
+    #[test]
+    fn the_status_row_names_the_live_keys_and_leaves_out_an_unbound_action() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-keys");
+        app.keymap = crate::test_util::app_with_config(
+            crate::test_util::config_from_keymap(
+                "[video]\n\"s\" = \"video_pause\"\n\"<Space>\" = \"none\"\n\"<Esc>\" = \"none\"\nq = \"none\"\n\"x\" = \"video_stop\"\n",
+            ),
+            80,
+            24,
+        )
+        .keymap;
+        let row = status_row(&app);
+        assert!(row.contains("s ▮▮") && row.contains("x ■"), "{row:?}");
+        assert!(!row.contains("Space"), "{row:?}");
+    }
+
+    #[test]
+    fn a_narrow_pane_cuts_the_status_row_to_the_box() {
+        assert_eq!(fixed_width("0:12 / 0:48  Space ▮▮  q ■", 10), "0:12 / 0:4");
+        assert_eq!(fixed_width("ab", 5), "ab   ");
+        assert_eq!(fixed_width("", 0), "");
+        // A wide character is not cut in half.
+        assert_eq!(fixed_width("a\u{3042}b", 2), "a ");
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-narrow");
+        app.size = ratatui::layout::Size::new(50, 24);
+        let lines: Vec<String> = {
+            let buffer = render_buffer(&app, 50, 24);
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        // The box is only 10 columns here, and the status row is cut to it.
+        assert!(lines.iter().any(|l| l.contains("0:00 / 0:4")), "{lines:#?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("0:00 / 0:48")),
+            "{lines:#?}"
+        );
+        for line in &lines {
+            assert!(
+                line.chars().count() <= 50 + 60,
+                "no row grows wider than the screen"
+            );
+        }
+    }
+
+    #[test]
+    fn the_status_row_is_blank_until_the_video_is_active_and_moves_no_row() {
+        let idle = crate::app::video::tests::ready_app();
+        let next = |app: &App| {
+            screen(app)
+                .iter()
+                .position(|l| l.contains("see 1"))
+                .unwrap()
+        };
+        let before = next(&idle);
+        assert!(status_row(&idle).trim().is_empty());
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-moves");
+        assert_eq!(next(&app), before, "starting moves no row");
+        set_position(&mut app, 12);
+        assert_eq!(next(&app), before);
+        app.video.as_mut().unwrap().paused = true;
+        assert_eq!(next(&app), before, "pausing moves no row");
+        crate::app::video::stop(&mut app);
+        assert_eq!(next(&app), before, "stopping moves no row");
+        assert!(status_row(&app).trim().is_empty());
+    }
+
+    #[test]
+    fn key_names_from_the_keymap_cannot_draw_an_image_or_an_escape() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-hostile");
+        let cell = kitty::PLACEHOLDER;
+        app.keymap = crate::test_util::app_with_config(
+            crate::test_util::config_from_keymap(&format!(
+                "[video]\n\"{cell}\" = \"video_pause\"\n\"<Space>\" = \"none\"\n"
+            )),
+            80,
+            24,
+        )
+        .keymap;
+        // A key spelled as a placeholder character is not drawn as one on the status row.
+        let row = status_row(&app);
+        assert!(!row.contains(cell), "{row:?}");
+        assert!(!row.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn an_idle_poster_says_how_to_play_in_the_row_under_it() {
+        let mut app = crate::app::video::tests::ready_app();
+        // The poster is uploaded once the terminal has it.
+        crate::app::attachments::prepare_frame(&mut app);
+        let row = status_row(&app);
+        assert!(row.starts_with("video \u{b7} gv to play"), "{row:?}");
+    }
+
+    // ---- the fullscreen overlay ------------------------------------------------------------
+
+    fn fs_screen(app: &App, w: u16, h: u16) -> Vec<String> {
+        let buffer = crate::test_util::render_buffer(app, w, h);
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The ids of the image cells drawn on a `w` by `h` screen, with how many cells each has.
+    fn fs_ids(app: &App, w: u16, h: u16) -> std::collections::HashMap<u32, usize> {
+        let buffer = crate::test_util::render_buffer(app, w, h);
+        let mut ids = std::collections::HashMap::new();
+        for cell in buffer.content() {
+            if !cell.symbol().starts_with(kitty::PLACEHOLDER) {
+                continue;
+            }
+            if let Color::Rgb(r, g, b) = cell.fg {
+                *ids.entry(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b))
+                    .or_insert(0) += 1;
+            }
+        }
+        ids
+    }
+
+    fn fs_frame(app: &mut App, index: u64) {
+        let generation = app.video.as_ref().unwrap().generation;
+        crate::app::update::update(
+            app,
+            crate::action::Action::VideoFrame {
+                generation,
+                index,
+                pixels: vec![1u8; 568 * 320 * 4].into(),
+            },
+        );
+        crate::app::attachments::prepare_frame(app);
+    }
+
+    #[test]
+    fn the_overlay_says_it_is_loading_before_the_first_frame() {
+        let (app, _dir, _pid) = crate::app::video::tests::playing_fullscreen("ui-fs-loading");
+        let lines = fs_screen(&app, 80, 24);
+        let text = lines.join("\n");
+        assert!(text.contains("loading..."), "{text}");
+        assert!(lines[0].contains(" video "), "{}", lines[0]);
+        // The overlay is over the whole screen above the status row: the room is not visible.
+        assert!(!text.contains("see 1"), "{text}");
+        // The status row is in the bottom border, as wide as the overlay's border allows.
+        assert!(
+            lines[21].contains("0:00 / 0:48  Space ▮▮  q ■"),
+            "{}",
+            lines[21]
+        );
+        // No image cell yet: the player has not shown a frame.
+        assert!(fs_ids(&app, 80, 24).is_empty());
+    }
+
+    #[test]
+    fn the_overlay_draws_the_frame_in_the_players_id_and_the_status_follows_the_state() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing_fullscreen("ui-fs-playing");
+        crate::app::attachments::prepare_frame(&mut app);
+        fs_frame(&mut app, 0);
+        let player = app.video.as_ref().unwrap();
+        let id = player.ids[player.shown.unwrap()];
+        let ids = fs_ids(&app, 80, 24);
+        assert_eq!(ids.keys().copied().collect::<Vec<_>>(), [id]);
+        let cells = crate::ui::image_view::placement(&app, player.frame_size).unwrap();
+        assert_eq!(ids[&id], cells.0 * cells.1, "{cells:?}");
+        assert!(!fs_screen(&app, 80, 24).join("\n").contains("loading..."));
+        // Paused: the row offers to resume.
+        app.video.as_mut().unwrap().paused = true;
+        let lines = fs_screen(&app, 80, 24);
+        assert!(lines[21].contains("Space ▶  q ■"), "{}", lines[21]);
+    }
+
+    #[test]
+    fn a_narrow_screen_still_draws_a_fitted_overlay() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing_fullscreen("ui-fs-narrow");
+        app.size = ratatui::layout::Size::new(40, 10);
+        crate::app::attachments::prepare_frame(&mut app);
+        fs_frame(&mut app, 0);
+        let lines = fs_screen(&app, 40, 10);
+        assert_eq!(lines.len(), 10);
+        let player = app.video.as_ref().unwrap();
+        let id = player.ids[player.shown.unwrap()];
+        let ids = fs_ids(&app, 40, 10);
+        let cells = crate::ui::image_view::placement(&app, player.frame_size).unwrap();
+        assert!(cells.0 <= 38 && cells.1 <= 6, "{cells:?}");
+        assert_eq!(ids.get(&id), Some(&(cells.0 * cells.1)));
+    }
+
+    #[test]
+    fn the_box_keeps_its_poster_and_no_row_moves_while_the_overlay_is_open() {
+        let (mut full, _dir, _pid) = crate::app::video::tests::playing_fullscreen("ui-fs-rows");
+        let mut idle = crate::app::video::tests::ready_app();
+        let (mut inline, _dir2, _pid2) = crate::app::video::tests::playing("ui-fs-rows-inline");
+        // The posters are in the terminal, so the boxes are drawn in full.
+        for app in [&mut full, &mut idle, &mut inline] {
+            crate::app::attachments::prepare_frame(app);
+        }
+        let rows_of = |app: &App| {
+            let room = app.rooms[0].id.clone();
+            let msgs = app.messages[&room].clone();
+            let ctx = app.pane_row_ctx(&room, &msgs);
+            video_rows(&msgs[1], 36, &ctx.attach, Style::default())
+        };
+        let (a, b, c) = (rows_of(&idle), rows_of(&inline), rows_of(&full));
+        assert_eq!((a.len(), b.len()), (c.len(), c.len()), "no row moves");
+        // The box draws the poster's id (not a frame of the player) while the overlay plays.
+        let id_of = |rows: &[Vec<Span<'static>>]| {
+            rows.iter()
+                .flatten()
+                .find(|span| span.content.starts_with(kitty::PLACEHOLDER))
+                .map(|span| span.style.fg)
+        };
+        assert_eq!(id_of(&a), id_of(&c));
+        // And its row under it still says how to play, not the player's position.
+        let last = c.last().unwrap();
+        let text: String = last.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("to play"), "{text:?}");
+    }
+
+    #[test]
+    fn the_status_row_lists_the_seek_and_fullscreen_keys() {
+        let (mut app, _dir, _pid) = crate::app::video::tests::playing("status-all-keys");
+        set_position(&mut app, 12);
+        let width = pane_video_box(&app).0;
+        let text = status_text(app.video.as_ref().unwrap(), Some(&app.keymap), 200);
+        assert!(
+            text.trim_end()
+                .ends_with("Space ▮▮  q ■  h/l 5s  H/L 30s  gV full"),
+            "{text:?}"
+        );
+        // Cut to the box on a narrow one, never wider.
+        let cut = status_text(
+            app.video.as_ref().unwrap(),
+            Some(&app.keymap),
+            width.min(30),
+        );
+        assert_eq!(cut.chars().count(), width.min(30));
+        // In the overlay the same key closes it, and an ended video says so.
+        let player = app.video.as_mut().unwrap();
+        player.fullscreen = true;
+        player.ended = true;
+        let text = status_text(app.video.as_ref().unwrap(), Some(&app.keymap), 200);
+        assert!(text.contains("0:12 / 0:48 ended"), "{text:?}");
+        assert!(text.trim_end().ends_with("gV close"), "{text:?}");
     }
 }
