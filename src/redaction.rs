@@ -409,6 +409,46 @@ fn sentinel_sweep() {
         "Action::AttachmentViewFailed",
         &format!("{:?}", Action::AttachmentViewFailed(attachment)),
     );
+    let download = crate::effect::DownloadRef {
+        path: BODY.to_string(),
+        mime: BODY.to_string(),
+        size: Some(4_242_424),
+    };
+    no_sentinel(
+        "Effect::DownloadAttachment",
+        &format!(
+            "{:?} {:#?}",
+            Effect::DownloadAttachment(download.clone()),
+            Effect::DownloadAttachment(download.clone())
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentDownloaded",
+        &format!(
+            "{:?}",
+            Action::AttachmentDownloaded {
+                download: download.clone(),
+                file: std::path::PathBuf::from("/cache/0123.mp4"),
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentDownloadFailed",
+        &format!(
+            "{:?}",
+            Action::AttachmentDownloadFailed {
+                download,
+                error: crate::api::DownloadError::Failed,
+            }
+        ),
+    );
+    no_sentinel(
+        "Action::AttachmentOpened",
+        &format!(
+            "{:?}",
+            Action::AttachmentOpened(Err(crate::effect::OpenError::CannotStart))
+        ),
+    );
     no_sentinel(
         "Action::CustomEmojisFailed",
         &format!("{:?}", Action::CustomEmojisFailed),

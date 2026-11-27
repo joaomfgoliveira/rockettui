@@ -71,6 +71,10 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "open the image of the message under the cursor",
     ),
     (
+        "open_attachment",
+        "open the attachment of the message under the cursor in your own program",
+    ),
+    (
         "react_message",
         "add or remove your reaction on the message under the cursor",
     ),

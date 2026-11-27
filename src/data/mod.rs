@@ -418,15 +418,20 @@ mod tests {
     #[test]
     fn debug_hides_attachment_names_and_paths() {
         let mut message = crate::test_util::sample_message("m1");
-        message.attachments = vec![Attachment {
-            kind: AttachmentKind::Image,
-            name: "SENTINEL-NAME-7b2f.png".to_string(),
-            path: Some("/file-upload/SENTINEL-PATH-3d8c/x.png".to_string()),
-            full_path: None,
-            mime: Some("image/SENTINEL-MIME".to_string()),
+        let sentinel = |kind: AttachmentKind, tag: &str, mime: &str| Attachment {
+            kind,
+            name: format!("SENTINEL-NAME-{tag}.bin"),
+            path: Some(format!("/file-upload/SENTINEL-PATH-{tag}/x")),
+            full_path: Some(format!("/file-upload/SENTINEL-FULL-{tag}/x")),
+            mime: Some(format!("{mime}/SENTINEL-MIME-{tag}")),
             size: Some(1234),
             dims: Some((777, 888)),
-        }];
+        };
+        message.attachments = vec![
+            sentinel(AttachmentKind::Image, "7b2f", "image"),
+            sentinel(AttachmentKind::Video, "3d8c", "video"),
+            sentinel(AttachmentKind::Audio, "9e41", "audio"),
+        ];
         for shown in [
             format!("{message:?}"),
             format!("{message:#?}"),
@@ -435,6 +440,7 @@ mod tests {
             for secret in [
                 "SENTINEL-NAME",
                 "SENTINEL-PATH",
+                "SENTINEL-FULL",
                 "SENTINEL-MIME",
                 "1234",
                 "777",
@@ -442,7 +448,7 @@ mod tests {
                 assert!(!shown.contains(secret), "{secret} in {shown}");
             }
         }
-        assert!(format!("{message:?}").contains("attachments: 1"));
+        assert!(format!("{message:?}").contains("attachments: 3"));
     }
 
     #[test]

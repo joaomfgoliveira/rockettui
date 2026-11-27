@@ -82,6 +82,10 @@ pub enum Action {
     /// open its first image at the largest size the terminal allows. A message with no image, an
     /// image that is not ready or a terminal without images gets a status notice.
     ShowImage,
+    /// Normal mode, messages pane focused, cursor on a message with an image, video or audio
+    /// attachment (`go`): download the first one to the cache and open it with the configured
+    /// external program. A message with none gets a status notice.
+    OpenAttachment,
     /// Normal mode, messages pane focused (`gt`): open the thread of the message under the cursor
     /// in the thread pane. A message with no thread says so on the status line.
     OpenThread,
@@ -309,6 +313,19 @@ pub enum Action {
     /// The full-size image could not be read from the cache or decoded; the view keeps the
     /// smaller image it already has.
     AttachmentViewFailed(crate::effect::AttachmentRef),
+    /// An attachment is on disk, downloaded or already there (`Effect::DownloadAttachment`).
+    AttachmentDownloaded {
+        download: crate::effect::DownloadRef,
+        file: std::path::PathBuf,
+    },
+    /// An attachment could not be downloaded.
+    AttachmentDownloadFailed {
+        download: crate::effect::DownloadRef,
+        error: crate::api::DownloadError,
+    },
+    /// The external program was started (`Ok`), could not be, or failed at once
+    /// (`Effect::OpenFile`).
+    AttachmentOpened(Result<(), crate::effect::OpenError>),
     /// The realtime connection is live (logged in and subscribed). Produced only by the realtime
     /// task. The reducer decides from `App.rt_seen_live` whether it is a reconnect.
     RtConnected,
@@ -397,6 +414,7 @@ impl std::fmt::Debug for Action {
             Action::ShowReactions => write!(f, "ShowReactions"),
             Action::OpenChannel => write!(f, "OpenChannel"),
             Action::ShowImage => write!(f, "ShowImage"),
+            Action::OpenAttachment => write!(f, "OpenAttachment"),
             Action::ReactMessage => write!(f, "ReactMessage"),
             Action::SwitchRoom => write!(f, "SwitchRoom"),
             Action::OpenThread => write!(f, "OpenThread"),
@@ -560,6 +578,17 @@ impl std::fmt::Debug for Action {
                 write!(f, "AttachmentViewReady({image:?}, {decoded:?})")
             }
             Action::AttachmentViewFailed(image) => write!(f, "AttachmentViewFailed({image:?})"),
+            // The file is a path built from a hash, and the outcome is fixed text; the download
+            // reference prints lengths only.
+            Action::AttachmentDownloaded { download, file } => write!(
+                f,
+                "AttachmentDownloaded({download:?}, <{}> bytes)",
+                file.as_os_str().len()
+            ),
+            Action::AttachmentDownloadFailed { download, error } => {
+                write!(f, "AttachmentDownloadFailed({download:?}, {error:?})")
+            }
+            Action::AttachmentOpened(result) => write!(f, "AttachmentOpened({result:?})"),
             Action::RtConnected => write!(f, "RtConnected"),
             Action::RtDisconnected => write!(f, "RtDisconnected"),
             Action::RtRejected => write!(f, "RtRejected"),

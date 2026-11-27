@@ -85,7 +85,7 @@ pub fn images_of(message: &Message) -> Vec<&Attachment> {
 /// The room and the message under the cursor when the messages pane is focused: what `show_image`
 /// acts on, and what the context popup checks before it lists the action. `None` for any other
 /// pane or no open room.
-fn message_under_cursor(app: &App) -> Option<(RoomId, &Message)> {
+pub(crate) fn message_under_cursor(app: &App) -> Option<(RoomId, &Message)> {
     if app.mode != Mode::Normal || app.focus != Focus::Messages {
         return None;
     }

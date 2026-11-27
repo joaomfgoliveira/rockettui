@@ -182,6 +182,11 @@ const CHANNEL_ACTION: (&str, &str) = ("open_channel", "open the channel it names
 /// action and before the jumps (`lines` places it). A test checks the name is a real action.
 const IMAGE_ACTION: (&str, &str) = ("show_image", "show its image full size");
 
+/// The open-attachment action: listed on a message that has an image, video or audio attachment,
+/// after the show-image action and before the jumps (`lines` places it). A test checks the name is
+/// a real action.
+const OPEN_ACTION: (&str, &str) = ("open_attachment", "open its attachment in your program");
+
 /// The thread list action: listed with the thread actions, on a message that has a thread and in
 /// the thread pane. It is about the room, not the message, but the popup has no room for it on
 /// every message. A test checks the name is a real action.
@@ -293,6 +298,9 @@ pub fn lines(app: &App) -> Context {
     }
     if is_message && image_view::has_image_under_cursor(app) {
         message_actions.push(IMAGE_ACTION);
+    }
+    if is_message && crate::app::open::has_attachment_under_cursor(app) {
+        message_actions.push(OPEN_ACTION);
     }
     let mut message_actions_pending = !message_actions.is_empty();
     for (name, desc) in kind.actions() {
@@ -692,7 +700,9 @@ mod tests {
             .iter()
             .position(|d| *d == "jump to the oldest message")
             .unwrap();
-        assert_eq!(at + 1, jump);
+        // An image can be opened outside too, so that row follows before the jumps.
+        assert_eq!(descs(&ctx)[at + 1], "open its attachment in your program");
+        assert_eq!(at + 2, jump);
         // The same for the user's own message.
         let mut own = messages_app("me", SendState::Sent);
         with_image(&mut own);
@@ -749,6 +759,99 @@ mod tests {
         assert!(
             !descs(&lines(&app)).contains(&"show its image full size"),
             "an action with no key bound is left out"
+        );
+    }
+
+    fn with_attachment(app: &mut App, kind: crate::data::AttachmentKind, mime: &str) {
+        let room = app.current_room.clone().unwrap();
+        app.messages.get_mut(&room).unwrap()[0]
+            .attachments
+            .push(crate::data::Attachment {
+                kind,
+                name: "clip".to_string(),
+                path: Some("/file-upload/v/clip".to_string()),
+                full_path: None,
+                mime: Some(mime.to_string()),
+                size: None,
+                dims: None,
+            });
+    }
+
+    #[test]
+    fn open_row_on_a_message_with_a_video_audio_or_image() {
+        use crate::data::AttachmentKind::*;
+        for (kind, mime) in [
+            (Video, "video/mp4"),
+            (Audio, "audio/ogg"),
+            (Image, "image/png"),
+        ] {
+            let mut app = messages_app("someone-else", SendState::Sent);
+            with_attachment(&mut app, kind, mime);
+            let ctx = lines(&app);
+            let at = descs(&ctx)
+                .iter()
+                .position(|d| *d == "open its attachment in your program")
+                .unwrap_or_else(|| panic!("a row for {mime}"));
+            assert_eq!(ctx.rows[at].keys, "go");
+            // Before the jumps.
+            let jump = descs(&ctx)
+                .iter()
+                .position(|d| *d == "jump to the oldest message")
+                .unwrap();
+            assert!(at < jump);
+        }
+    }
+
+    #[test]
+    fn no_open_row_without_a_supported_attachment_or_off_a_message() {
+        use crate::data::AttachmentKind::*;
+        let has = |app: &App| descs(&lines(app)).contains(&"open its attachment in your program");
+        let mut app = messages_app("someone-else", SendState::Sent);
+        assert!(!has(&app), "no attachment at all");
+        with_attachment(&mut app, Other, "application/pdf");
+        assert!(!has(&app), "a document is not opened");
+        with_attachment(&mut app, Video, "video/mp4");
+        assert!(has(&app));
+        app.focus = Focus::Input;
+        assert!(!has(&app));
+        app.focus = Focus::Sidebar;
+        assert!(!has(&app));
+    }
+
+    #[test]
+    fn open_row_follows_the_live_keymap() {
+        let row_keys = |src: &str| {
+            let configured = app_with_config(config_from_keymap(src), 80, 24);
+            let mut app = messages_app_in(configured, "someone-else", SendState::Sent);
+            with_attachment(&mut app, crate::data::AttachmentKind::Video, "video/mp4");
+            lines(&app)
+                .rows
+                .iter()
+                .find(|r| r.desc == "open its attachment in your program")
+                .map(|r| r.keys.clone())
+        };
+        assert_eq!(
+            row_keys("[normal]\n\"O\" = \"open_attachment\"\n").as_deref(),
+            Some("O go"),
+            "every key, sorted"
+        );
+        assert_eq!(
+            row_keys("[normal]\n\"go\" = \"none\"\n"),
+            None,
+            "an action with no key bound is left out"
+        );
+    }
+
+    #[test]
+    fn the_open_attachment_action_is_a_real_described_action() {
+        let (name, desc) = OPEN_ACTION;
+        assert!(ACTION_NAMES.contains(&name));
+        assert!(!desc.is_empty());
+        assert!(
+            crate::app::help::DESCRIPTIONS
+                .iter()
+                .any(|(n, _)| *n == name),
+            "{name} has no help description"
         );
     }
 

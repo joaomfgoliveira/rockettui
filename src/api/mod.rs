@@ -31,6 +31,11 @@ pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// Largest custom emoji image accepted. Real ones are a few kilobytes; the server's own limit for
 /// an upload is far above what a message-sized image needs.
 pub const MAX_EMOJI_BYTES: usize = 512 * 1024;
+/// Largest attachment downloaded to be opened with an external program.
+pub const MAX_DOWNLOAD_BYTES: usize = 200 * 1024 * 1024;
+/// How long a download may go without receiving a byte before it is given up. The whole download
+/// has no short deadline, so a large video on a slow link can finish.
+const DOWNLOAD_STALL: Duration = Duration::from_secs(30);
 /// Largest original image downloaded for the full-size view.
 pub const MAX_VIEW_BYTES: usize = 32 * 1024 * 1024;
 /// Largest attachment image downloaded. A reported size over it is skipped without a request.
@@ -167,6 +172,20 @@ async fn read_json<T: DeserializeOwned>(
 ) -> Result<T, ApiError> {
     let body = read_capped(request, client_error, MAX_BODY_BYTES).await?;
     serde_json::from_slice(&body).map_err(|_| ApiError::BadResponse)
+}
+
+/// Why an attachment could not be downloaded. No payload: nothing of the server's text or the file
+/// name is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadError {
+    /// The address is not a `/file-upload/` path of this server: nothing was requested.
+    Refused,
+    /// The file is larger than the limit (announced or received); the partial file was removed.
+    TooLarge,
+    /// The request failed or the connection broke.
+    Failed,
+    /// The directory or the file could not be written.
+    Save,
 }
 
 /// Send `request`, check the status (a redirect is an error, never followed) and read the body,
@@ -1012,6 +1031,75 @@ impl Client {
         let prefix = url.path().trim_end_matches('/').to_string();
         url.set_path(&format!("{prefix}{path}"));
         read_capped(self.http.get(url), ApiError::BadResponse, limit).await
+    }
+
+    /// Download the file at the `/file-upload/` path `path` into `dir` as `file_name` (a name the
+    /// caller built, never the server's): a `GET` of the base URL plus the path with the user's
+    /// headers, streamed to a temporary file in `dir` and renamed on success, so a partial file is
+    /// never left under the final name. A path that is not a plain `/file-upload/` path is
+    /// `Refused` without a request, a body over `limit` bytes (announced or received) is
+    /// `TooLarge` with the temporary file removed, and a redirect is never followed. Returns the
+    /// final path.
+    pub async fn download_attachment(
+        &self,
+        path: &str,
+        dir: &std::path::Path,
+        file_name: &str,
+        limit: usize,
+    ) -> Result<std::path::PathBuf, DownloadError> {
+        use std::io::Write;
+        if !map::fetchable_path(path) {
+            return Err(DownloadError::Refused);
+        }
+        let mut url = self.base.clone();
+        let prefix = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{prefix}{path}"));
+        let failed = |e: ApiError| match e {
+            ApiError::TooLarge => DownloadError::TooLarge,
+            _ => DownloadError::Failed,
+        };
+        let mut response = self
+            .http
+            .get(url)
+            .timeout(Duration::from_secs(24 * 60 * 60))
+            .send()
+            .await
+            .map_err(|e| failed(send_error(&e)))?;
+        if status_error(response.status()).is_some() {
+            return Err(DownloadError::Failed);
+        }
+        if response.content_length().is_some_and(|n| n > limit as u64) {
+            return Err(DownloadError::TooLarge);
+        }
+        std::fs::create_dir_all(dir).map_err(|_| DownloadError::Save)?;
+        let target = dir.join(file_name);
+        let temp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+        let mut file = std::fs::File::create(&temp).map_err(|_| DownloadError::Save)?;
+        let mut received = 0usize;
+        let outcome = loop {
+            let chunk = match tokio::time::timeout(DOWNLOAD_STALL, response.chunk()).await {
+                Ok(Ok(Some(chunk))) => chunk,
+                Ok(Ok(None)) => break Ok(()),
+                Ok(Err(e)) => break Err(failed(send_error(&e))),
+                Err(_) => break Err(DownloadError::Failed),
+            };
+            received += chunk.len();
+            if received > limit {
+                break Err(DownloadError::TooLarge);
+            }
+            if file.write_all(&chunk).is_err() {
+                break Err(DownloadError::Save);
+            }
+        };
+        let done = outcome.and_then(|()| {
+            file.flush().map_err(|_| DownloadError::Save)?;
+            drop(file);
+            std::fs::rename(&temp, &target).map_err(|_| DownloadError::Save)
+        });
+        if done.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        done.map(|()| target)
     }
 
     /// Add (`add`) or take back the user's reaction `emoji` to message `id` with `POST chat.react`.
@@ -2043,6 +2131,134 @@ mod tests {
         }
         assert!(server.received_requests().await.unwrap().is_empty());
         assert!(elsewhere.received_requests().await.unwrap().is_empty());
+    }
+
+    fn download_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rockettui-dl-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn files_in(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_download_is_an_authenticated_get_saved_under_the_given_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/file-upload/v1/clip.mp4"))
+            .and(header("X-User-Id", USER))
+            .and(header("X-Auth-Token", TOKEN))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = download_dir("ok");
+        let saved = client_for(&server)
+            .download_attachment("/file-upload/v1/clip.mp4", &dir, "abc.mp4", 1024)
+            .await
+            .expect("downloads");
+        assert_eq!(saved, dir.join("abc.mp4"));
+        assert_eq!(std::fs::read(&saved).unwrap(), FAKE_IMAGE);
+        assert_eq!(files_in(&dir), ["abc.mp4"], "no temporary file is left");
+        // The token travels as a header only: not in the URL, not in a body.
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.query(), None);
+        assert!(!requests[0].url.as_str().contains(TOKEN));
+        assert!(requests[0].body.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_download_over_the_limit_is_refused_and_leaves_no_file() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![7u8; 2048]))
+            .mount(&server)
+            .await;
+        let dir = download_dir("big");
+        let err = client_for(&server)
+            .download_attachment("/file-upload/v1/big.mp4", &dir, "big.mp4", 1024)
+            .await;
+        assert_eq!(err, Err(DownloadError::TooLarge));
+        assert!(files_in(&dir).is_empty(), "{:?}", files_in(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_download_that_fails_leaves_no_file() {
+        let server = MockServer::start().await;
+        for (status, name) in [(404u16, "gone"), (500, "broken"), (302, "moved")] {
+            Mock::given(method("GET"))
+                .and(path(format!("/file-upload/v1/{name}.mp4")))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let dir = download_dir(name);
+            let err = client_for(&server)
+                .download_attachment(&format!("/file-upload/v1/{name}.mp4"), &dir, "x.mp4", 1024)
+                .await;
+            assert_eq!(err, Err(DownloadError::Failed), "{status}");
+            assert!(files_in(&dir).is_empty());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_download_refuses_an_address_that_is_not_a_file_upload_path() {
+        let server = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        for any in [&server, &elsewhere] {
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+                .mount(any)
+                .await;
+        }
+        let dir = download_dir("refused");
+        let client = client_for(&server);
+        let absolute = format!("{}/file-upload/a/b.mp4", elsewhere.uri());
+        for bad in [
+            absolute.as_str(),
+            "//evil.example/file-upload/a/b.mp4",
+            "/api/v1/me",
+            "/file-upload/../api/v1/me",
+            "/file-upload/a/b.mp4?x=1",
+            "",
+        ] {
+            assert_eq!(
+                client.download_attachment(bad, &dir, "x.mp4", 1024).await,
+                Err(DownloadError::Refused),
+                "{bad:?}"
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(elsewhere.received_requests().await.unwrap().is_empty());
+        assert!(!dir.exists(), "nothing was created");
+    }
+
+    #[tokio::test]
+    async fn a_download_into_a_directory_that_cannot_be_made_is_a_save_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(FAKE_IMAGE))
+            .mount(&server)
+            .await;
+        // A directory that would have to be made under a regular file.
+        let file = download_dir("blocker");
+        std::fs::write(&file, b"x").unwrap();
+        let err = client_for(&server)
+            .download_attachment("/file-upload/v1/a.mp4", &file.join("sub"), "x.mp4", 1024)
+            .await;
+        assert_eq!(err, Err(DownloadError::Save));
+        let _ = std::fs::remove_file(&file);
     }
 
     #[tokio::test]
